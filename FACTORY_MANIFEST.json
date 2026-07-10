@@ -1,0 +1,22 @@
+{
+  "schema_version": "1.0",
+  "factory_id": "HARNESS_FOUNDRY_V2_8_CHAT_FACTORY_V0_1",
+  "version": "0.1.0",
+  "specification_dependency": {
+    "package_id": "HARNESS_FOUNDRY_V2_8_START_PACKAGE",
+    "version": "2.8.0",
+    "binding": "READ_ONLY_PATH_VERSION_AND_CONTENT_HASH"
+  },
+  "interaction_surface": "CODEX_CHAT_WITH_REPO_LOCAL_SKILL",
+  "output": "TARGET_START_PACKAGE_AUTHORING_CANDIDATE",
+  "permitted_terminal_state": "START_PACKAGE_CANDIDATE_READY_FOR_HUMAN_REVIEW",
+  "authoring_stop_required": true,
+  "not_provided": [
+    "PROGRAM_DRIVER_RUNTIME",
+    "WORKPACK_EXECUTION",
+    "THREE_PROJECT_IMPLEMENTATION",
+    "HARNESS_BUILD_OR_INSTALL",
+    "CONFORMANCE_CERTIFICATION",
+    "REAL_TARGET_INSTALL"
+  ]
+}

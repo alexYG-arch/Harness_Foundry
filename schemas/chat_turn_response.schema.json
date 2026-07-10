@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:harness-foundry:chat-turn-response:1.0",
+  "type": "object",
+  "required": [
+    "status",
+    "program_id",
+    "factory_state",
+    "questions",
+    "blockers",
+    "artifact_refs",
+    "next_allowed_intents"
+  ],
+  "properties": {
+    "status": {"enum": ["OK", "WAITING_USER", "BLOCKED", "CONFLICT", "FAILED", "ERROR"]},
+    "program_id": {"type": "string"},
+    "old_state_hash": {"type": ["string", "null"]},
+    "new_state_hash": {"type": ["string", "null"]},
+    "factory_state": {"type": "string"},
+    "response_type": {"type": "string"},
+    "questions": {"type": "array"},
+    "blockers": {"type": "array"},
+    "artifact_refs": {"type": "array"},
+    "next_allowed_intents": {"type": "array", "items": {"type": "string"}},
+    "human_summary": {"type": "string"}
+  },
+  "additionalProperties": true
+}

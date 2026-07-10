@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:harness-foundry:chat-turn-request:1.0",
+  "type": "object",
+  "required": [
+    "request_id",
+    "idempotency_key",
+    "program_id",
+    "expected_state_hash",
+    "actor",
+    "intent",
+    "payload"
+  ],
+  "properties": {
+    "request_id": {"type": "string", "minLength": 1},
+    "idempotency_key": {"type": "string", "minLength": 1},
+    "program_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "expected_state_hash": {"type": ["string", "null"]},
+    "actor": {
+      "type": "object",
+      "required": ["type", "chat_thread_id", "turn_id"],
+      "properties": {
+        "type": {"const": "HUMAN_VIA_CODEX_CHAT"},
+        "chat_thread_id": {"type": "string", "minLength": 1},
+        "turn_id": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "intent": {
+      "enum": [
+        "CREATE",
+        "ADD_SOURCES",
+        "UPDATE_REQUIREMENTS",
+        "ANSWER",
+        "PREPARE_READBACK",
+        "REQUEST_FREEZE",
+        "CONFIRM_FREEZE",
+        "GENERATE",
+        "REOPEN"
+      ]
+    },
+    "payload": {"type": "object"}
+  },
+  "additionalProperties": false
+}
