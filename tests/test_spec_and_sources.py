@@ -8,7 +8,9 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
+from harness_foundry_factory.models import SpecVerificationError
 from harness_foundry_factory.service import FactoryService
 from harness_foundry_factory.spec_lock import build_spec_lock, verify_spec_lock
 from harness_foundry_factory.store import SQLiteEventStore
@@ -56,6 +58,29 @@ class SpecAndSourceTests(unittest.TestCase):
         self.assertEqual(verify_spec_lock(changed_aggregate, SPEC)["status"], "FAIL")
         after = {path: (path.stat().st_mtime_ns, hashlib.sha256(path.read_bytes()).hexdigest()) for path in before}
         self.assertEqual(after, before)
+
+    def test_service_verify_spec_consumes_committed_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            lock = json.loads((ROOT / "spec_lock" / "HF28_SPEC_LOCK.json").read_text())
+            lock["files"]["README.md"] = "0" * 64
+            lock_path = root / "HF28_SPEC_LOCK.json"
+            lock_path.write_text(json.dumps(lock))
+            service = FactoryService(
+                SQLiteEventStore(root / "factory.sqlite3"),
+                spec_root=SPEC,
+                runs_root=root / "runs",
+            )
+            with patch(
+                "harness_foundry_factory.spec_lock.default_spec_lock_path",
+                return_value=lock_path,
+            ):
+                with self.assertRaises(SpecVerificationError) as raised:
+                    service.verify_spec()
+            self.assertIn(
+                "committed v2.8 spec lock does not verify",
+                raised.exception.details["error"],
+            )
 
     def test_prompt_injection_source_is_hashed_as_data_not_executed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

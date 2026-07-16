@@ -11,6 +11,8 @@ AUTHORING_STOP
 
 它不批准 Start Package，不注册或启动 Program Driver，不执行 Workpack，不搭建三工程，不构建或安装 Harness，也不签发 Linkage/Conformance 结论。三工程、Driver、P3 防跳、Release、Authorization、Loop、Repair、Invalidation 与 Reentry 必须完整出现在候选包中，但保持 `PLANNED_NOT_STARTED`。
 
+候选发布后，`validate-candidate` 仅在外部 execution root 存在与候选内容 Hash、Driver 可执行文件 Hash、授权和外部运行时证明一致的验证回执时，允许合同声明的 Build Program Driver 入口已经物化；这不会把候选校验提升为运行时验证，也不会允许其他计划工具或目标程序预先存在。
+
 ## 在 Codex Chat 中使用
 
 1. 将本目录作为 Codex 工程打开。
@@ -56,6 +58,7 @@ SQLite 是权威 Event Store；JSON/JSONL 是可再生成的只读视图。每�
 
 ```bash
 python3 tools/hffactory.py verify-spec --json
+python3 tools/validate_skill.py
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py' -v
 ```
 

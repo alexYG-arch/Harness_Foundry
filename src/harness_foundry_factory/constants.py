@@ -402,5 +402,9 @@ def default_spec_root() -> Path:
     return project_root().parent / "Harness_Foundry_v2_8_Start_Package"
 
 
+def default_spec_lock_path() -> Path:
+    return project_root() / "spec_lock" / "HF28_SPEC_LOCK.json"
+
+
 def default_runs_root() -> Path:
     return project_root() / "runs"

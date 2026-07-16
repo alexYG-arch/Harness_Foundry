@@ -69,6 +69,9 @@ def compile_start_package(
     spec = Path(spec_root or default_spec_root()).expanduser().resolve()
     staging = Path(staging_root).expanduser().resolve()
     candidate = Path(candidate_root).expanduser().resolve()
+    execution = Path(
+        str(target.get("execution_root") or candidate)
+    ).expanduser().resolve()
     if not spec.is_dir():
         raise ValueError(f"v2.8 spec root does not exist: {spec}")
     target_id = str(target["id"])
@@ -79,9 +82,9 @@ def compile_start_package(
     package_id = f"{target_id}-START-PACKAGE"
     ir_hash = _json_hash(ir)
     if spec_lock is None:
-        from .spec_lock import build_spec_lock
+        from .spec_lock import load_verified_spec_lock
 
-        spec_lock = build_spec_lock(spec)
+        spec_lock = load_verified_spec_lock(spec)
     spec_files = spec_lock.get("files") if isinstance(spec_lock, Mapping) else None
     if not isinstance(spec_files, Mapping) or not spec_lock.get("content_sha256"):
         raise ValueError("a complete verified v2.8 spec lock is required")
@@ -117,6 +120,12 @@ def compile_start_package(
         "profile": profile,
         "package_id": package_id,
         "candidate_root": str(candidate),
+        "execution_root": str(execution),
+        "candidate_root_access": (
+            "READ_ONLY_AFTER_ATOMIC_PUBLICATION"
+            if execution != candidate
+            else "LEGACY_COMBINED_CANDIDATE_AND_EXECUTION_ROOT"
+        ),
         "created_at": created_at,
         "ir_hash": ir_hash,
         "first_workpack_id": first_workpack_id,
@@ -336,8 +345,29 @@ def _validate_ir(ir: Mapping[str, Any]) -> dict[str, Any]:
     for label, value in (("target.id", target_id), ("program_id", program_id)):
         if not SAFE_ID_RE.fullmatch(value) or ".." in value:
             raise ValueError(f"{label} must be a path-safe identifier")
-    if not Path(str(target["output_root"])).expanduser().is_absolute():
+    output_root = Path(str(target["output_root"])).expanduser()
+    if not output_root.is_absolute():
         raise ValueError("target.output_root must be absolute")
+    execution_root_value = target.get("execution_root")
+    if execution_root_value not in (None, ""):
+        execution_root = Path(str(execution_root_value)).expanduser()
+        if not execution_root.is_absolute():
+            raise ValueError("target.execution_root must be absolute")
+        output_root = output_root.resolve()
+        execution_root = execution_root.resolve()
+        if output_root.is_relative_to(execution_root) or execution_root.is_relative_to(
+            output_root
+        ):
+            raise ValueError(
+                "target.output_root and target.execution_root must not overlap"
+            )
+    immutability = target.get("start_package_immutability_policy") or ir.get(
+        "start_package_immutability_policy"
+    )
+    if isinstance(immutability, Mapping) and execution_root_value in (None, ""):
+        raise ValueError(
+            "target.execution_root is required by start_package_immutability_policy"
+        )
     for key in ("sources", "atoms", "acceptance_cases", "negative_cases"):
         if not isinstance(ir.get(key), list) or not ir[key]:
             raise ValueError(f"requirement_ir.{key} must be a non-empty array")
@@ -400,18 +430,26 @@ def _source_manifest(ir: Mapping[str, Any], context: Mapping[str, str]) -> dict[
         source_id = str(item.get("source_id") or f"SRC-{index:03d}")
         path_or_uri = str(item.get("path_or_uri") or item.get("path") or f"chat://{context['program_id']}/source/{index}")
         sha = str(item.get("sha256") or _stable_hash({"path_or_uri": path_or_uri, "item": item}))
-        sources.append(
-            {
-                "source_id": source_id,
-                "path_or_uri": path_or_uri,
-                "sha256": sha,
-                "authority_level": str(item.get("authority_level") or "HUMAN_APPROVED"),
-                "scope": str(item.get("scope") or "Target requirements"),
-                "loaded_completely": bool(item.get("loaded_completely", True)),
-                "copy_policy": str(item.get("copy_policy") or "REFERENCE_ONLY"),
-                "snapshot_path": item.get("snapshot_path"),
-            }
-        )
+        declared_authority = str(item.get("authority_level") or "HUMAN_APPROVED")
+        authority_aliases = {
+            "NORMATIVE_USER_SELECTED": "HUMAN_APPROVED",
+            "HUMAN_PROVIDED_SUPPLEMENT": "HUMAN_PROVIDED",
+        }
+        source = {
+            "source_id": source_id,
+            "path_or_uri": path_or_uri,
+            "sha256": sha,
+            "authority_level": authority_aliases.get(
+                declared_authority, declared_authority
+            ),
+            "scope": str(item.get("scope") or "Target requirements"),
+            "loaded_completely": bool(item.get("loaded_completely", True)),
+            "copy_policy": str(item.get("copy_policy") or "REFERENCE_ONLY"),
+            "snapshot_path": item.get("snapshot_path"),
+        }
+        if source["authority_level"] != declared_authority:
+            source["declared_authority_level"] = declared_authority
+        sources.append(source)
     return {
         "schema_version": "2.8",
         "target_id": context["target_id"],
@@ -612,6 +650,7 @@ def _patch_critical_documents(
     candidate: Path,
 ) -> None:
     target = ir["target"]
+    execution = Path(context["execution_root"])
     manifest = docs["PACKAGE_MANIFEST.json"]
     manifest.update(
         {
@@ -644,6 +683,11 @@ def _patch_critical_documents(
             "traceability_graph_ref": "canonical_sources/TRACEABILITY_GRAPH.json",
             "requirement_decisions_ref": "canonical_sources/REQUIREMENT_DECISIONS.json",
             "target_root": str(candidate),
+            "candidate_root": str(candidate),
+            "candidate_root_access": context["candidate_root_access"],
+            "execution_root": str(execution),
+            "execution_root_status": "PLANNED_NOT_CREATED",
+            "candidate_execution_root_overlap": execution == candidate,
             "package_status": "DRAFT_AUTHORING_CANDIDATE",
             "current_state": TARGET_CANDIDATE_STATE,
             "selected_profile": context["profile"],
@@ -718,7 +762,10 @@ def _patch_critical_documents(
 
     three = docs["THREE_PROJECT_PROGRAM_MANIFEST.json"]
     three.update({"program_id": context["program_id"], "target_id": context["target_id"]})
-    roots = {name: str(candidate / "project_start_packages" / directory) for name, directory in PROJECTS}
+    roots = {
+        name: str(execution / "project_start_packages" / directory)
+        for name, directory in PROJECTS
+    }
     for project in three["projects"]:
         project_id = project["project_id"]
         project["root_abs"] = roots[project_id]
@@ -730,7 +777,7 @@ def _patch_critical_documents(
         project["repository_root_abs"] = f"{roots[project_id]}/repository"
         project["repository_status"] = "PLANNED_NOT_CREATED"
         project["self_validation_ref"] = str(
-            candidate
+            execution
             / "evidence/project_self_validation"
             / f"{project_id}.result.json"
         )
@@ -827,7 +874,9 @@ def _patch_critical_documents(
     docs["PROGRAM_DRIVER_CONTRACT.json"].update(
         {
             "program_id": context["program_id"],
-            "driver_entrypoint_abs": str(candidate / "control_plane/.venv/bin/program-driver"),
+            "driver_entrypoint_abs": str(
+                execution / "control_plane/.venv/bin/program-driver"
+            ),
             "driver_started_by_authoring": False,
             "runtime_verification_ref": None,
             "transaction_contract": {
@@ -963,16 +1012,22 @@ def _patch_critical_documents(
             "canonical_source_hashes": [source_hash],
             "intent_atom_ids": [str(item.get("atom_id")) for item in ir["atoms"]],
             "workspace_root_abs": str(
-                candidate / "project_start_packages/main_build/repository"
+                execution / "project_start_packages/main_build/repository"
             ),
             "workspace_root_status": "PLANNED_NOT_CREATED",
             "allowed_write_paths": [
-                str(candidate / "project_start_packages/main_build/repository")
+                str(execution / "project_start_packages/main_build/repository")
             ],
             "forbidden_write_paths": [
-                str(candidate / "project_start_packages/external_lab"),
-                str(candidate / "project_start_packages/linkage_review"),
-                str(candidate / "real_target"),
+                *(
+                    [str(candidate)]
+                    if execution != candidate
+                    else [
+                        str(candidate / "project_start_packages/external_lab"),
+                        str(candidate / "project_start_packages/linkage_review"),
+                    ]
+                ),
+                str(execution / "real_target"),
                 *[
                     str(Path(str(source.get("path_or_uri") or source.get("path"))).expanduser().resolve())
                     for source in ir.get("sources", [])
@@ -1048,8 +1103,9 @@ def _patch_critical_documents(
 
 
 def _patch_command_manifest(document: dict[str, Any], context: Mapping[str, str], candidate: Path) -> None:
-    python_path = candidate / "project_start_packages/main_build/.venv/bin/python"
-    workspace_root = candidate / "project_start_packages/main_build/repository"
+    execution = Path(context["execution_root"])
+    python_path = execution / "project_start_packages/main_build/.venv/bin/python"
+    workspace_root = execution / "project_start_packages/main_build/repository"
     workpack_id = context["first_workpack_id"]
     document.update(
         {
@@ -1076,12 +1132,15 @@ def _patch_command_manifest(document: dict[str, Any], context: Mapping[str, str]
                 "argv": argv,
                 "command_sha256": _stable_hash({"argv": argv, "cwd": str(workspace_root)}),
                 "cwd_abs": str(workspace_root),
+                "allowed_write_roots": [
+                    str(workspace_root / ".test-artifacts")
+                ],
                 "authorization_ref": None,
                 "auto_execute": False,
                 "shell": False,
             }
         )
-    codex_path = candidate / "planned_executors/bin/codex"
+    codex_path = execution / "planned_executors/bin/codex"
     codex_command = {
         "command_id": "ROOT-CODEX-CODING",
         "command_kind": "PLANNED_EXECUTOR_INTERFACE",
@@ -1115,6 +1174,7 @@ def _patch_command_manifest(document: dict[str, Any], context: Mapping[str, str]
 def _runtime_ownership(
     context: Mapping[str, str], candidate: Path
 ) -> dict[str, Any]:
+    execution = Path(context["execution_root"])
     runtime = str(context["primary_runtime"])
     runtime_slug = _slug(runtime).lower() or "target-runtime"
     if "codex" in runtime.lower():
@@ -1129,10 +1189,10 @@ def _runtime_ownership(
     else:
         runtime_family = "OTHER_EXPLICIT"
     final_runtime_slug = _slug(context["target_id"]).lower()
-    final_entrypoint = candidate / "planned_runtime/bin" / final_runtime_slug
-    required_executor = candidate / "planned_executors/bin" / runtime_slug
-    coding_agent_executor = candidate / "planned_executors/bin/codex"
-    driver_entrypoint = candidate / "control_plane/.venv/bin/program-driver"
+    final_entrypoint = execution / "planned_runtime/bin" / final_runtime_slug
+    required_executor = execution / "planned_executors/bin" / runtime_slug
+    coding_agent_executor = execution / "planned_executors/bin/codex"
+    driver_entrypoint = execution / "control_plane/.venv/bin/program-driver"
     return {
         "schema_version": "2.8",
         "target_id": context["target_id"],
@@ -1181,6 +1241,7 @@ def _engineering_nodes(
     profile_hash: str,
     charter_hash: str,
 ) -> list[dict[str, Any]]:
+    execution = Path(context["execution_root"])
     project_for_node = {
         "LAB_": "EXTERNAL_CONFORMANCE_LAB",
         "LINKAGE_": "CONFORMANCE_LINKAGE_REVIEW",
@@ -1259,13 +1320,13 @@ def _engineering_nodes(
             owner_role = "MAIN_DRIVER_AND_GATE_OWNER"
         project_dir = dict(PROJECTS).get(project_id)
         project_root = (
-            candidate / "project_start_packages" / project_dir
+            execution / "project_start_packages" / project_dir
             if project_dir
-            else candidate / "control_plane"
+            else execution / "control_plane"
         )
         write_paths = []
         if index > 1:
-            write_paths = [str(candidate / "evidence/engineering_dag" / node_id)]
+            write_paths = [str(execution / "evidence/engineering_dag" / node_id)]
             if (
                 node_id in DAG_WORKPACK_SEQUENCE_BINDINGS
                 or node_id == "MAIN_EXECUTION_PACKAGE_MATERIALIZED"
@@ -1294,7 +1355,7 @@ def _engineering_nodes(
                     "pipeline_action_id": "P3_NOT_APPLICABLE_LOCK",
                     "human_decision_required": True,
                     "allowed_write_paths": [
-                        str(candidate / "evidence/engineering_dag" / node_id)
+                        str(execution / "evidence/engineering_dag" / node_id)
                     ],
                     "completion_gate": "P3_NOT_APPLICABLE_LOCK_AND_C3_PASS",
                 },
@@ -1424,7 +1485,7 @@ def _engineering_nodes(
                 "environment_id": f"ENV-{_slug(node_id)}-PLANNED",
                 "success_gate": success_gate,
                 "success_output_refs": [
-                    str(candidate / "evidence/engineering_dag" / f"{node_id}.result.json")
+                    str(execution / "evidence/engineering_dag" / f"{node_id}.result.json")
                 ],
                 "failure_return_node": predecessor or "AUTHORING_REOPEN_REQUIRED",
                 "invalidates_on": [
@@ -1458,6 +1519,7 @@ def _release_pipeline_steps(
     profile_hash: str,
     charter_hash: str,
 ) -> list[dict[str, Any]]:
+    execution = Path(context["execution_root"])
     output_by_step = {
         "P4_BUILD_INPUT_LOCK": "P4_BUILD_INPUT_LOCK_VALID",
         "PACK_DRAFT": "CONFORMANCE_PACK_DRAFT_READY",
@@ -1636,11 +1698,11 @@ def _release_pipeline_steps(
                 },
                 "allowed_read_paths": [str(candidate)],
                 "allowed_write_paths": [
-                    str(candidate / "evidence/release_pipeline" / step_id)
+                    str(execution / "evidence/release_pipeline" / step_id)
                 ],
                 "environment_id": environment_id,
                 "success_output_refs": [
-                    str(candidate / "evidence/release_pipeline" / f"{step_id}.result.json")
+                    str(execution / "evidence/release_pipeline" / f"{step_id}.result.json")
                 ],
                 "failure_return_step_id": previous_step or "MAIN_P4_LOCAL_CLOSURE",
                 "invalidates_on": [
@@ -1692,7 +1754,16 @@ def _mandatory_negative_cases(ir: Mapping[str, Any]) -> list[dict[str, Any]]:
         ("NEG-HF28-B0-B1-ORDER", "B0 cannot prefill Artifact Hash and B1 cannot precede immutable Artifact build.", "RELEASE_PREDECESSOR_MISSING"),
         ("NEG-HF28-LINKAGE-AUTHORITY", "Linkage must not modify reviewed assets or issue a Certificate.", "AUTHORITY_MISMATCH"),
     )
-    cases = [deepcopy(dict(item)) for item in ir.get("negative_cases", []) if isinstance(item, Mapping)]
+    cases = [
+        deepcopy(dict(item))
+        for item in ir.get("negative_cases", [])
+        if isinstance(item, Mapping)
+    ]
+    for case in cases:
+        if not case.get("expected_failure"):
+            case["expected_failure"] = "EXPECTED_REJECTION"
+        if not case.get("origin"):
+            case["origin"] = "FROZEN_REQUIREMENT_IR"
     existing = {str(item.get("case_id")) for item in cases}
     for case_id, description, expected_failure in mandatory:
         if case_id not in existing:
@@ -1725,7 +1796,8 @@ Materialize the Main execution package and its G0 control foundation for {contex
 - Program DAG node: `MAIN_EXECUTION_PACKAGE_MATERIALIZED`
 - Project: `MAIN_HARNESS_BUILD`
 - Required atoms: {', '.join(atom_ids)}
-- Planned workspace root: `{context['candidate_root']}/project_start_packages/main_build/repository`
+- Read-only Start Package root: `{context['candidate_root']}`
+- Planned execution workspace root: `{context['execution_root']}/project_start_packages/main_build/repository`
 - Workspace status: `PLANNED_NOT_CREATED`
 - Forbidden: source materials, sibling v2.8, Lab/Linkage implementation, install targets
 - Execution mode: `WORKPACK_EXECUTION`
@@ -1793,9 +1865,11 @@ This planned Workpack has not been executed and proves no Harness, install, link
 def _project_planned_interface_commands(
     directory: str,
     candidate: Path,
+    execution: Path | None = None,
 ) -> list[dict[str, Any]]:
-    repository = candidate / "project_start_packages" / directory / "repository"
-    codex = candidate / "planned_executors/bin/codex"
+    execution_root = execution or candidate
+    repository = execution_root / "project_start_packages" / directory / "repository"
+    codex = execution_root / "planned_executors/bin/codex"
     coding_id = {
         "external_lab": "LAB-CODEX-CODING",
         "linkage_review": "LINK-CODEX-CODING",
@@ -1825,7 +1899,7 @@ def _project_planned_interface_commands(
     ]
     if directory == "linkage_review":
         linkage_cli = (
-            candidate
+            execution_root
             / "project_start_packages/linkage_review/.venv/bin/linkage-review"
         )
         commands.append(
@@ -1846,14 +1920,14 @@ def _project_planned_interface_commands(
                 "expected_exit_codes": [],
                 "stdout_stderr_evidence_required": True,
                 "allowed_write_roots": [
-                    str(candidate / "evidence/linkage_review")
+                    str(execution_root / "evidence/linkage_review")
                 ],
                 "auto_execute": False,
                 "shell": False,
             }
         )
     if directory == "main_build":
-        driver = candidate / "control_plane/.venv/bin/program-driver"
+        driver = execution_root / "control_plane/.venv/bin/program-driver"
         commands.append(
             {
                 "command_id": "MB-RELEASE-CANDIDATE-PREPARE",
@@ -1872,7 +1946,7 @@ def _project_planned_interface_commands(
                 "expected_exit_codes": [],
                 "stdout_stderr_evidence_required": True,
                 "allowed_write_roots": [
-                    str(candidate / "evidence/release_pipeline")
+                    str(execution_root / "evidence/release_pipeline")
                 ],
                 "auto_execute": False,
                 "shell": False,
@@ -1894,6 +1968,7 @@ def _materialize_project_workpack_contracts(
     context: Mapping[str, str],
     candidate: Path,
 ) -> None:
+    execution = Path(context["execution_root"])
     index_path = output / "WORKPACK_INDEX.json"
     global_command_path = output / "COMMAND_MANIFEST.json"
     index = json.loads(index_path.read_text(encoding="utf-8"))
@@ -1904,8 +1979,8 @@ def _materialize_project_workpack_contracts(
         if isinstance(command, dict) and command.get("command_id")
     }
     global_command_sha256 = _file_hash(global_command_path)
-    repository = candidate / "project_start_packages" / directory / "repository"
-    evidence_root = candidate / "evidence/project_workpacks" / project_id
+    repository = execution / "project_start_packages" / directory / "repository"
+    evidence_root = execution / "evidence/project_workpacks" / project_id
     for workpack in index.get("workpacks", []):
         workpack_id = str(workpack["workpack_id"])
         contract = PROJECT_WORKPACK_CONTRACTS[workpack_id]
@@ -2085,6 +2160,7 @@ def _materialize_project_packages(
     context: Mapping[str, str],
     candidate: Path,
 ) -> None:
+    execution = Path(context["execution_root"])
     template_root = spec / "templates/project_start_packages"
     role_map = {
         "external_lab": "EXTERNAL_CONFORMANCE_LAB",
@@ -2180,7 +2256,7 @@ def _materialize_project_packages(
                             }
                         )
                 elif destination_name == "COMMAND_MANIFEST.json":
-                    planned_python = candidate / "project_start_packages" / directory / ".venv/bin/python"
+                    planned_python = execution / "project_start_packages" / directory / ".venv/bin/python"
                     document.update(
                         {
                             "project_id": project_id,
@@ -2197,7 +2273,7 @@ def _materialize_project_packages(
                                 "executable": str(planned_python),
                                 "executable_abs": str(planned_python),
                                 "cwd_absolute": str(
-                                    candidate
+                                    execution
                                     / "project_start_packages"
                                     / directory
                                     / "repository"
@@ -2214,9 +2290,13 @@ def _materialize_project_packages(
                             }
                         )
                         if "allowed_write_roots" in command:
-                            command["allowed_write_roots"] = [str(candidate / "evidence" / directory)]
+                            command["allowed_write_roots"] = [
+                                str(execution / "evidence" / directory)
+                            ]
                     document["commands"].extend(
-                        _project_planned_interface_commands(directory, candidate)
+                        _project_planned_interface_commands(
+                            directory, candidate, execution
+                        )
                     )
                     for command in document["commands"]:
                         command["command_sha256"] = _hash_without_field(
@@ -2534,9 +2614,17 @@ def _repair_structural_hashes(staging: Path) -> None:
     command = json.loads(command_path.read_text(encoding="utf-8"))
     for command_item in command.get("commands", []):
         if isinstance(command_item, dict):
-            command_item["command_sha256"] = _stable_hash(
-                {"argv": command_item.get("argv"), "cwd": command_item.get("cwd_abs")}
-            )
+            if command_item.get("command_kind") == "PLANNED_EXECUTOR_INTERFACE":
+                command_item["command_sha256"] = _hash_without_field(
+                    command_item, "command_sha256"
+                )
+            else:
+                command_item["command_sha256"] = _stable_hash(
+                    {
+                        "argv": command_item.get("argv"),
+                        "cwd": command_item.get("cwd_abs"),
+                    }
+                )
     command_without_hash = dict(command)
     command_without_hash.pop("manifest_sha256", None)
     command["manifest_sha256"] = _stable_hash(command_without_hash)
@@ -2610,7 +2698,7 @@ def _token_value(token: str, context: Mapping[str, str], path: str) -> Any:
         return None
     if "ABSOLUTE" in upper and "PATH" in upper or "ROOT" in upper:
         slug = _slug(token)
-        return str(Path(context["candidate_root"]) / "planned" / slug)
+        return str(Path(context["execution_root"]) / "planned" / slug)
     if upper.endswith("-REF") or "REF-OR" in upper:
         return None
     if upper.endswith("-ID") or "-ID-" in upper:

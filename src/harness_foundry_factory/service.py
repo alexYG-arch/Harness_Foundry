@@ -173,24 +173,22 @@ class FactoryService:
     def verify_spec(self) -> dict[str, Any]:
         if self.spec_root == default_spec_root().resolve():
             try:
-                from .spec_lock import SpecLockError, build_spec_lock
+                from .spec_lock import SpecLockError, load_verified_spec_lock
 
-                spec_lock = build_spec_lock(self.spec_root)
+                spec_lock = load_verified_spec_lock(self.spec_root)
             except (ImportError, SpecLockError) as exc:
                 raise SpecVerificationError(
                     "Harness Foundry v2.8 exact spec lock failed",
                     details={"spec_root": str(self.spec_root), "error": str(exc)},
                 ) from exc
             spec_lock = dict(spec_lock)
-            aggregate = content_sha256(spec_lock["files"])
-            spec_lock["content_sha256"] = aggregate
             return {
                 "schema_version": SCHEMA_VERSION,
                 "status": "PASS",
                 "spec_root": str(self.spec_root),
                 "package_id": spec_lock["package_id"],
                 "package_version": spec_lock["package_version"],
-                "content_sha256": aggregate,
+                "content_sha256": spec_lock["content_sha256"],
                 "file_count": spec_lock["file_count"],
                 "spec_lock": spec_lock,
                 "writes_performed": False,

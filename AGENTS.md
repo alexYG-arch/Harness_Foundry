@@ -10,4 +10,4 @@
 - Do not execute generated Workpacks, start a Program Driver, install target tools, or claim Harness/Conformance completion.
 - A successful candidate must contain no `.template.*`, unresolved placeholder, fake Hash, `PLANNED-REF`, granted authorization, active Workpack, or started Driver.
 - Run `PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py' -v` after implementation changes.
-- Run `python3 tools/hffactory.py verify-spec --json` and validate the repo Skill after workflow changes.
+- Run `python3 tools/hffactory.py verify-spec --json` and `python3 tools/validate_skill.py` after workflow changes.

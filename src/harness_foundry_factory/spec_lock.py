@@ -10,7 +10,12 @@ import sys
 from pathlib import Path
 from typing import Any, Mapping
 
-from .constants import HF28_PACKAGE_ID, HF28_SCHEMA_VERSION, default_spec_root
+from .constants import (
+    HF28_PACKAGE_ID,
+    HF28_SCHEMA_VERSION,
+    default_spec_lock_path,
+    default_spec_root,
+)
 
 
 SPEC_PACKAGE_VERSION = "2.8.0"
@@ -102,6 +107,19 @@ def _require_sibling_path(spec_root: Path) -> Path:
     if actual != expected:
         raise SpecLockError(f"spec root must be the sibling path {expected}")
     return actual
+
+
+def load_spec_lock(lock_path: Path | None = None) -> dict[str, Any]:
+    """Load the committed v2.8 lock without rebuilding trusted state."""
+
+    path = lock_path or default_spec_lock_path()
+    try:
+        lock = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise SpecLockError(f"invalid committed spec lock {path}: {exc}") from exc
+    if not isinstance(lock, dict):
+        raise SpecLockError(f"committed spec lock {path} must contain one object")
+    return lock
 
 
 def build_spec_lock(spec_root: Path | None = None) -> dict[str, Any]:
@@ -215,6 +233,25 @@ def verify_spec_lock(
         "checked_files": len(current),
         "findings": findings,
     }
+
+
+def load_verified_spec_lock(
+    spec_root: Path | None = None,
+    lock_path: Path | None = None,
+) -> dict[str, Any]:
+    """Load the committed lock and verify the current sibling against it."""
+
+    lock = load_spec_lock(lock_path)
+    report = verify_spec_lock(lock, spec_root)
+    if report.get("status") != "PASS":
+        findings = json.dumps(
+            report.get("findings", []),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        raise SpecLockError(f"committed v2.8 spec lock does not verify: {findings}")
+    return lock
 
 
 create_spec_lock = build_spec_lock
