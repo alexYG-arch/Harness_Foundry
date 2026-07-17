@@ -2093,7 +2093,10 @@ def _check_authoring_boundary(root: Path) -> list[dict[str, Any]]:
             authorized_materialization = (
                 executable_path.exists()
                 and (
-                    _authorized_driver_materialization(
+                    _authorized_driver_materialization_precondition(
+                        root, execution_root, executable_path, command
+                    )
+                    or _authorized_driver_materialization(
                         root, execution_root, executable_path, command
                     )
                     or _authorized_codex_executor_materialization(
@@ -2228,6 +2231,189 @@ def _check_authoring_boundary(root: Path) -> list[dict[str, Any]]:
             if command.get("auto_execute") is True or command.get("authorization_ref") is not None:
                 findings.append(_finding("COMMAND_AUTO_EXECUTION_FORBIDDEN", f"{path.name}:{command.get('command_id')}"))
     return findings
+
+
+def _authorized_driver_materialization_precondition(
+    candidate_root: Path,
+    execution_root: Path,
+    executable_path: Path,
+    command: Mapping[str, Any],
+) -> bool:
+    """Accept only the consumed zero-transition Driver materialization scope."""
+
+    if (
+        command.get("executor_role") != "BUILD_PROGRAM_DRIVER"
+        or command.get("command_kind") != "PLANNED_EXECUTOR_INTERFACE"
+        or command.get("executable_status") != "PLANNED_NOT_INSTALLED"
+        or command.get("auto_execute") is not False
+        or command.get("authorization_ref") is not None
+    ):
+        return False
+    try:
+        contract = json.loads(
+            (candidate_root / "PROGRAM_DRIVER_CONTRACT.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        charter_lock = json.loads(
+            (candidate_root / "CHARTER_LOCK.json").read_text(encoding="utf-8")
+        )
+        expected_entrypoint = Path(
+            str(contract.get("driver_entrypoint_abs", ""))
+        ).resolve()
+        if executable_path.resolve() != expected_entrypoint:
+            return False
+
+        control_root = execution_root / "control_plane"
+        evidence_root = (
+            execution_root
+            / "evidence/control_plane_bootstrap/PROGRAM_DRIVER_MATERIALIZATION"
+        )
+        run_roots = sorted(
+            path for path in evidence_root.glob("RUN_*") if path.is_dir()
+        )
+        if len(run_roots) != 1:
+            return False
+        receipt_path = run_roots[0] / "MATERIALIZATION_RECEIPT.json"
+        consumption_path = run_roots[0] / "AUTHORIZATION_CONSUMPTION.json"
+        authorization_path = (
+            control_root
+            / "authorizations/PROGRAM_DRIVER_MATERIALIZATION_AUTHORIZATION.json"
+        )
+        state_path = control_root / "state/CONTROL_STATE.json"
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        consumption = json.loads(consumption_path.read_text(encoding="utf-8"))
+        authorization = json.loads(authorization_path.read_text(encoding="utf-8"))
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+
+        def resolve_ref(ref: Any) -> Path:
+            path = Path(str(ref))
+            return (path if path.is_absolute() else execution_root / path).resolve()
+
+        scope = authorization.get("scope", {})
+        payload_hashes = receipt.get("runtime_payload_hashes", {})
+        if not isinstance(scope, dict) or not isinstance(payload_hashes, dict):
+            return False
+        required_payloads = {
+            "pyproject.toml",
+            "src/dag_execution_control/cli.py",
+            "src/dag_execution_control/driver.py",
+            "tools/program_driver_materialization_runner.py",
+        }
+        if not required_payloads.issubset(payload_hashes):
+            return False
+        for relative_name in required_payloads:
+            payload_path = (control_root / relative_name).resolve()
+            if (
+                not payload_path.is_relative_to(control_root.resolve())
+                or not payload_path.is_file()
+                or payload_hashes.get(relative_name) != _file_hash(payload_path)
+            ):
+                return False
+
+        expected_write_roots = [str(control_root), str(evidence_root)]
+        program_id = contract.get("program_id")
+        return bool(
+            program_id
+            and receipt.get("program_id") == program_id
+            and receipt.get("status") == "MATERIALIZED_NOT_RUNTIME_VERIFIED"
+            and receipt.get("authorization_id")
+            == authorization.get("authorization_id")
+            and receipt.get("scope_sha256") == authorization.get("scope_sha256")
+            and receipt.get("source_bundle_sha256")
+            == authorization.get("source_bundle_sha256")
+            and receipt.get("operation_manifest_sha256")
+            == authorization.get("operation_manifest_sha256")
+            and receipt.get("runtime_control_root") == str(control_root)
+            and receipt.get("driver_entrypoint_abs") == str(expected_entrypoint)
+            and receipt.get("driver_entrypoint_sha256")
+            == _file_hash(executable_path)
+            and receipt.get("runtime_payload_file_count") == len(payload_hashes)
+            and receipt.get("driver_invoked") is False
+            and receipt.get("driver_runtime_verified") is False
+            and receipt.get("dag_transition_performed") is False
+            and receipt.get("candidate_write_performed") is False
+            and receipt.get("workpack_executed") is False
+            and receipt.get("target_code_modified") is False
+            and receipt.get("real_target_install_performed") is False
+            and authorization.get("program_id") == program_id
+            and authorization.get("authorization_class")
+            == "PROJECT_BOOTSTRAP_AUTHORIZATION"
+            and authorization.get("status") == "CONSUMED"
+            and authorization.get("consumption_status")
+            == "CONSUMED_VALID_MATERIALIZATION"
+            and authorization.get("max_transitions") == 0
+            and authorization.get("max_materializations") == 1
+            and authorization.get("materializations_consumed") == 1
+            and authorization.get("materializations_remaining") == 0
+            and authorization.get("may_auto_advance") is False
+            and authorization.get("may_promote_validated_results") is False
+            and authorization.get("may_materialize_program_driver") is True
+            and authorization.get("may_start_program_driver") is False
+            and authorization.get("may_modify_target_code") is False
+            and authorization.get("real_target_install_allowed") is False
+            and authorization.get("scope_expansion_allowed") is False
+            and authorization.get("delegation_allowed") is False
+            and authorization.get("charter_hash")
+            == charter_lock.get("charter_sha256")
+            and authorization.get("profile_lock_hash")
+            == charter_lock.get("profile_lock_sha256")
+            and authorization.get("source_snapshot_hash")
+            == state.get("approved_candidate_snapshot_hash")
+            and scope.get("action_ids")
+            == ["PROGRAM_DRIVER_MATERIALIZATION_PRECONDITION_V2"]
+            and scope.get("allowed_write_roots") == expected_write_roots
+            and scope.get("dag_node_ids") == []
+            and scope.get("execution_modes") == ["PROGRAM_CONTROL_BOOTSTRAP"]
+            and resolve_ref(authorization.get("materialization_receipt_ref"))
+            == receipt_path.resolve()
+            and authorization.get("materialization_receipt_sha256")
+            == _file_hash(receipt_path)
+            and resolve_ref(authorization.get("consumption_ref"))
+            == consumption_path.resolve()
+            and authorization.get("consumption_sha256")
+            == _file_hash(consumption_path)
+            and consumption.get("program_id") == program_id
+            and consumption.get("authorization_id")
+            == authorization.get("authorization_id")
+            and consumption.get("scope_sha256")
+            == authorization.get("scope_sha256")
+            and consumption.get("consumption_status")
+            == "CONSUMED_VALID_MATERIALIZATION"
+            and consumption.get("consumed_by_action_id")
+            == "PROGRAM_DRIVER_MATERIALIZATION_PRECONDITION_V2"
+            and consumption.get("materializations_authorized") == 1
+            and consumption.get("materializations_consumed") == 1
+            and consumption.get("materializations_remaining") == 0
+            and consumption.get("max_transitions") == 0
+            and consumption.get("dag_transition_performed") is False
+            and resolve_ref(consumption.get("materialization_receipt_ref"))
+            == receipt_path.resolve()
+            and consumption.get("materialization_receipt_sha256")
+            == _file_hash(receipt_path)
+            and consumption.get("driver_invoked") is False
+            and consumption.get("driver_runtime_verified") is False
+            and consumption.get("successor_execution_authorized") is False
+            and consumption.get("replay_forbidden") is True
+            and state.get("program_id") == program_id
+            and state.get("control_status")
+            == "PROGRAM_DRIVER_MATERIALIZED_PROJECT_VALIDATION_AUTHORIZATION_REQUIRED"
+            and state.get("driver_materialized") is True
+            and state.get("driver_started") is False
+            and state.get("driver_runtime_verified") is False
+            and state.get("next_eligible_node") == "PROGRAM_DRIVER_RUNTIME_VERIFIED"
+            and state.get("program_execution_started") is False
+            and state.get("side_effects_allowed") is False
+            and not (
+                control_root / "DRIVER_RUNTIME_VERIFICATION_RECEIPT.json"
+            ).exists()
+            and not (
+                execution_root
+                / "evidence/engineering_dag/PROGRAM_DRIVER_RUNTIME_VERIFIED.result.json"
+            ).exists()
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
+        return False
 
 
 def _authorized_driver_materialization(

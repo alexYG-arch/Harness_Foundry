@@ -14,6 +14,7 @@ from harness_foundry_factory.compiler import (
     compile_candidate,
 )
 from harness_foundry_factory.validator import (
+    _authorized_driver_materialization_precondition,
     _authorized_lab_bootstrap_materialization,
     _authorized_lab_self_conformance_materialization,
     _authorized_lab_tool_release_materialization,
@@ -234,6 +235,192 @@ class CompilerValidatorTests(unittest.TestCase):
         )
 
         self.assertEqual(validate_candidate(candidate)["status"], "PASS")
+
+    def test_materialization_precondition_requires_consumed_uninvoked_receipt(
+        self,
+    ) -> None:
+        candidate = self.root / "materialization-candidate"
+        execution = self.root / "materialization-runtime"
+        control = execution / "control_plane"
+        evidence = (
+            execution
+            / "evidence/control_plane_bootstrap/PROGRAM_DRIVER_MATERIALIZATION/RUN_TEST"
+        )
+        entrypoint = control / ".venv/bin/program-driver"
+        program_id = "PROGRAM-MATERIALIZATION-TEST"
+        snapshot_hash = "1" * 64
+        source_bundle_hash = "2" * 64
+        operation_manifest_hash = "3" * 64
+        scope_hash = "4" * 64
+
+        def write_json(path: Path, value: dict) -> str:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps(value, sort_keys=True) + "\n", encoding="utf-8"
+            )
+            return hashlib.sha256(path.read_bytes()).hexdigest()
+
+        candidate.mkdir()
+        write_json(
+            candidate / "PROGRAM_DRIVER_CONTRACT.json",
+            {
+                "driver_entrypoint_abs": str(entrypoint),
+                "program_id": program_id,
+            },
+        )
+        write_json(
+            candidate / "CHARTER_LOCK.json",
+            {
+                "charter_sha256": "5" * 64,
+                "profile_lock_sha256": "6" * 64,
+            },
+        )
+        entrypoint.parent.mkdir(parents=True)
+        entrypoint.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        entrypoint.chmod(0o755)
+
+        payload_hashes: dict[str, str] = {}
+        for relative_name in (
+            "pyproject.toml",
+            "src/dag_execution_control/cli.py",
+            "src/dag_execution_control/driver.py",
+            "tools/program_driver_materialization_runner.py",
+        ):
+            payload_path = control / relative_name
+            payload_path.parent.mkdir(parents=True, exist_ok=True)
+            payload_path.write_text(f"payload:{relative_name}\n", encoding="utf-8")
+            payload_hashes[relative_name] = hashlib.sha256(
+                payload_path.read_bytes()
+            ).hexdigest()
+
+        receipt_path = evidence / "MATERIALIZATION_RECEIPT.json"
+        receipt = {
+            "authorization_id": "AUTH-MATERIALIZATION-TEST",
+            "candidate_write_performed": False,
+            "dag_transition_performed": False,
+            "driver_entrypoint_abs": str(entrypoint),
+            "driver_entrypoint_sha256": hashlib.sha256(
+                entrypoint.read_bytes()
+            ).hexdigest(),
+            "driver_invoked": False,
+            "driver_runtime_verified": False,
+            "operation_manifest_sha256": operation_manifest_hash,
+            "program_id": program_id,
+            "real_target_install_performed": False,
+            "runtime_control_root": str(control),
+            "runtime_payload_file_count": len(payload_hashes),
+            "runtime_payload_hashes": payload_hashes,
+            "scope_sha256": scope_hash,
+            "source_bundle_sha256": source_bundle_hash,
+            "status": "MATERIALIZED_NOT_RUNTIME_VERIFIED",
+            "target_code_modified": False,
+            "workpack_executed": False,
+        }
+        receipt_hash = write_json(receipt_path, receipt)
+        consumption_path = evidence / "AUTHORIZATION_CONSUMPTION.json"
+        consumption = {
+            "authorization_id": "AUTH-MATERIALIZATION-TEST",
+            "consumed_by_action_id": "PROGRAM_DRIVER_MATERIALIZATION_PRECONDITION_V2",
+            "consumption_status": "CONSUMED_VALID_MATERIALIZATION",
+            "dag_transition_performed": False,
+            "driver_invoked": False,
+            "driver_runtime_verified": False,
+            "materialization_receipt_ref": str(receipt_path),
+            "materialization_receipt_sha256": receipt_hash,
+            "materializations_authorized": 1,
+            "materializations_consumed": 1,
+            "materializations_remaining": 0,
+            "max_transitions": 0,
+            "program_id": program_id,
+            "replay_forbidden": True,
+            "scope_sha256": scope_hash,
+            "successor_execution_authorized": False,
+        }
+        consumption_hash = write_json(consumption_path, consumption)
+        authorization_path = (
+            control
+            / "authorizations/PROGRAM_DRIVER_MATERIALIZATION_AUTHORIZATION.json"
+        )
+        authorization = {
+            "authorization_class": "PROJECT_BOOTSTRAP_AUTHORIZATION",
+            "authorization_id": "AUTH-MATERIALIZATION-TEST",
+            "charter_hash": "5" * 64,
+            "consumption_ref": str(consumption_path),
+            "consumption_sha256": consumption_hash,
+            "consumption_status": "CONSUMED_VALID_MATERIALIZATION",
+            "delegation_allowed": False,
+            "materialization_receipt_ref": str(receipt_path),
+            "materialization_receipt_sha256": receipt_hash,
+            "materializations_consumed": 1,
+            "materializations_remaining": 0,
+            "max_materializations": 1,
+            "max_transitions": 0,
+            "may_auto_advance": False,
+            "may_materialize_program_driver": True,
+            "may_modify_target_code": False,
+            "may_promote_validated_results": False,
+            "may_start_program_driver": False,
+            "operation_manifest_sha256": operation_manifest_hash,
+            "profile_lock_hash": "6" * 64,
+            "program_id": program_id,
+            "real_target_install_allowed": False,
+            "scope": {
+                "action_ids": ["PROGRAM_DRIVER_MATERIALIZATION_PRECONDITION_V2"],
+                "allowed_write_roots": [
+                    str(control),
+                    str(evidence.parent),
+                ],
+                "dag_node_ids": [],
+                "execution_modes": ["PROGRAM_CONTROL_BOOTSTRAP"],
+            },
+            "scope_expansion_allowed": False,
+            "scope_sha256": scope_hash,
+            "source_bundle_sha256": source_bundle_hash,
+            "source_snapshot_hash": snapshot_hash,
+            "status": "CONSUMED",
+        }
+        write_json(authorization_path, authorization)
+        write_json(
+            control / "state/CONTROL_STATE.json",
+            {
+                "approved_candidate_snapshot_hash": snapshot_hash,
+                "control_status": "PROGRAM_DRIVER_MATERIALIZED_PROJECT_VALIDATION_AUTHORIZATION_REQUIRED",
+                "driver_materialized": True,
+                "driver_runtime_verified": False,
+                "driver_started": False,
+                "next_eligible_node": "PROGRAM_DRIVER_RUNTIME_VERIFIED",
+                "program_execution_started": False,
+                "program_id": program_id,
+                "side_effects_allowed": False,
+            },
+        )
+        command = {
+            "authorization_ref": None,
+            "auto_execute": False,
+            "command_kind": "PLANNED_EXECUTOR_INTERFACE",
+            "executable_status": "PLANNED_NOT_INSTALLED",
+            "executor_role": "BUILD_PROGRAM_DRIVER",
+        }
+
+        self.assertTrue(
+            _authorized_driver_materialization_precondition(
+                candidate, execution, entrypoint, command
+            )
+        )
+
+        receipt["driver_invoked"] = True
+        receipt_hash = write_json(receipt_path, receipt)
+        consumption["materialization_receipt_sha256"] = receipt_hash
+        consumption_hash = write_json(consumption_path, consumption)
+        authorization["materialization_receipt_sha256"] = receipt_hash
+        authorization["consumption_sha256"] = consumption_hash
+        write_json(authorization_path, authorization)
+
+        self.assertFalse(
+            _authorized_driver_materialization_precondition(
+                candidate, execution, entrypoint, command
+            )
+        )
 
     def test_authorized_materialized_codex_executor_preserves_candidate_validity(
         self,
