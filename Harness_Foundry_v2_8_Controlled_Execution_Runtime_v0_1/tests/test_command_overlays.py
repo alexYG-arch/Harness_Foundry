@@ -145,3 +145,48 @@ class CommandOverlayTests(unittest.TestCase):
                 state["runtime_revision"],
                 status(fixture.execution)["runtime_revision"],
             )
+
+    def test_registration_requires_distinct_reviewer_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = SyntheticRuntime(Path(temporary))
+            fixture.bootstrap()
+            source = fixture.make_manifest("NODE_A")
+            manifest = json.loads(source.read_text(encoding="utf-8"))
+            review = next(
+                command
+                for command in manifest["commands"]
+                if command["stage"] == "review"
+            )
+            review["executor_identity"] = "WORKPACK_EXECUTOR"
+            state = status(fixture.execution)
+            handoff = json.loads(
+                fixture.handoff_path.read_text(encoding="utf-8")
+            )
+            bundle_path = fixture.root / "INVALID_REVIEWER_BUNDLE.json"
+            write_json(
+                bundle_path,
+                {
+                    "schema_version": "1.0",
+                    "overlay_kind": "RESOLVED_COMMAND_OVERLAY_BUNDLE",
+                    "program_id": fixture.program_id,
+                    "epoch_id": state["epoch_id"],
+                    "candidate_content_sha256": (
+                        handoff["candidate_content_sha256"]
+                    ),
+                    "manifests": {"NODE_A": manifest},
+                },
+            )
+
+            result = register_command_overlays(
+                fixture.execution, bundle_path
+            )
+
+            self.assertEqual(result["status"], "FAIL")
+            self.assertEqual(
+                result["blocking_findings"][0]["code"],
+                "REVIEWER_IDENTITY_NOT_INDEPENDENT",
+            )
+            self.assertEqual(
+                state["runtime_revision"],
+                status(fixture.execution)["runtime_revision"],
+            )

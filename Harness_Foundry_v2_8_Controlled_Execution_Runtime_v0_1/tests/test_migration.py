@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from pathlib import Path
 import tempfile
 import unittest
@@ -21,6 +22,81 @@ from support import SyntheticRuntime
 
 
 class MigrationTests(unittest.TestCase):
+    def test_migration_rebinds_execution_paths_to_the_new_epoch(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = SyntheticRuntime(root)
+            fixture.bootstrap()
+            new_root = root / "new-execution"
+            plan = migration_plan(
+                fixture.candidate,
+                fixture.execution,
+                new_root,
+            )
+            plan_path = root / "MIGRATION_PLAN.json"
+            write_json(plan_path, plan)
+
+            migration_apply(plan_path, plan["confirmation_text"])
+
+            state = RuntimeStore(new_root).load_state()
+            node = next(
+                row
+                for row in state["control_plan"]["nodes"]
+                if row["node_id"] == "NODE_A"
+            )
+            self.assertEqual(
+                node["allowed_write_paths"],
+                [str(new_root / "workspace")],
+            )
+            self.assertNotIn(
+                str(fixture.execution),
+                "\n".join(node["allowed_write_paths"]),
+            )
+
+    def test_current_runtime_epoch_uses_authoritative_sqlite_state(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = SyntheticRuntime(root)
+            fixture.bootstrap()
+            legacy_before = tree_sha256(fixture.execution)
+
+            plan = migration_plan(
+                fixture.candidate,
+                fixture.execution,
+                root / "new-execution",
+            )
+
+            self.assertEqual(plan["program_id"], fixture.program_id)
+            self.assertEqual(
+                plan["source"]["legacy_state_source"],
+                "SQLITE_EVENT_STORE",
+            )
+            self.assertEqual(
+                plan["source"]["legacy_runtime_verification"]["status"],
+                "PASS",
+            )
+            classifications = Counter(
+                row["classification"]
+                for row in plan["node_classifications"]
+            )
+            self.assertEqual(
+                classifications["REVERIFY_REQUIRED"],
+                5,
+            )
+            self.assertEqual(
+                classifications["NOT_STARTED"],
+                len(fixture.node_ids) + 1,
+            )
+            self.assertEqual(
+                tree_sha256(fixture.execution),
+                legacy_before,
+            )
+            self.assertFalse((root / "new-execution").exists())
+
     def test_migration_preserves_sources_and_restores_no_pass_or_authority(
         self,
     ) -> None:

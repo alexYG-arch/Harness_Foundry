@@ -6,6 +6,7 @@ from copy import deepcopy
 import json
 from pathlib import Path
 import shutil
+import sqlite3
 from typing import Any, Mapping
 import uuid
 
@@ -52,10 +53,63 @@ def migration_plan(
             "writes_performed": False,
         }
     candidate_hash = tree_sha256(candidate)
-    legacy_hash = tree_sha256(legacy)
-    legacy_state_path = legacy / "control_plane/state/CONTROL_STATE.json"
     legacy_state: dict[str, Any] = {}
-    if legacy_state_path.is_file():
+    legacy_state_path = legacy / "control_plane/state/CONTROL_STATE.json"
+    legacy_state_source = "LEGACY_CONTROL_STATE_JSON"
+    legacy_runtime_verification: dict[str, Any] | None = None
+    runtime_database = legacy / "control_plane/factory.sqlite3"
+    if runtime_database.is_file():
+        legacy_state_source = "SQLITE_EVENT_STORE"
+        legacy_state_path = (
+            legacy / "control_plane/state/PROGRAM_DRIVER_STATE.json"
+        )
+        try:
+            store = RuntimeStore(legacy)
+            legacy_runtime_verification = store.verify()
+            legacy_state = store.load_state()
+        except (OSError, RuntimeError, sqlite3.Error, ValueError) as exc:
+            findings.append(
+                {
+                    "code": "LEGACY_RUNTIME_STORE_UNTRUSTED",
+                    "message": str(exc),
+                }
+            )
+        else:
+            if legacy_runtime_verification.get("status") != "PASS":
+                findings.append(
+                    {
+                        "code": "LEGACY_RUNTIME_VERIFICATION_FAILED",
+                        "message": json.dumps(
+                            legacy_runtime_verification.get(
+                                "blocking_findings", []
+                            ),
+                            ensure_ascii=False,
+                            sort_keys=True,
+                        ),
+                    }
+                )
+            state_candidate = legacy_state.get("candidate_root")
+            if (
+                not isinstance(state_candidate, str)
+                or Path(state_candidate).expanduser().resolve() != candidate
+            ):
+                findings.append(
+                    {
+                        "code": "LEGACY_CANDIDATE_BINDING_MISMATCH",
+                        "message": str(state_candidate),
+                    }
+                )
+            if (
+                legacy_state.get("candidate_content_sha256")
+                != candidate_hash
+            ):
+                findings.append(
+                    {
+                        "code": "LEGACY_CANDIDATE_HASH_MISMATCH",
+                        "message": str(candidate),
+                    }
+                )
+    elif legacy_state_path.is_file():
         try:
             legacy_state = read_json(legacy_state_path)
         except (OSError, ValueError, json.JSONDecodeError):
@@ -65,12 +119,33 @@ def migration_plan(
                     "message": str(legacy_state_path),
                 }
             )
+    if findings:
+        return {
+            "schema_version": "1.0",
+            "status": "FAIL",
+            "blocking_findings": findings,
+            "writes_performed": False,
+        }
+    legacy_hash = tree_sha256(legacy)
     candidate_context_path = candidate / "START_CONTEXT.json"
     candidate_context = (
         read_json(candidate_context_path)
         if candidate_context_path.is_file()
         else {}
     )
+    declared_execution_root = (
+        candidate_context.get("execution_root")
+        or legacy_state.get("execution_root")
+    )
+    if (
+        not isinstance(declared_execution_root, str)
+        or not Path(declared_execution_root).is_absolute()
+    ):
+        declared_execution_root = str(legacy)
+    else:
+        declared_execution_root = str(
+            lexical_path(declared_execution_root)
+        )
     plan = _load_control_plan(candidate)
     legacy_completed = set(legacy_state.get("completed_nodes", []))
     classifications = []
@@ -118,6 +193,9 @@ def migration_plan(
         "legacy_candidate_tree_sha256": candidate_hash,
         "legacy_execution_root": str(legacy),
         "legacy_execution_tree_sha256": legacy_hash,
+        "candidate_declared_execution_root": declared_execution_root,
+        "legacy_state_source": legacy_state_source,
+        "legacy_runtime_verification": legacy_runtime_verification,
         "legacy_control_state_sha256": (
             file_sha256(legacy_state_path)
             if legacy_state_path.is_file()
@@ -218,7 +296,11 @@ def migration_apply(
             ],
             "real_target_install_excluded": True,
         }
-    control_plan = _load_control_plan(candidate)
+    control_plan = _rebind_control_plan_execution_paths(
+        _load_control_plan(candidate),
+        source["candidate_declared_execution_root"],
+        new_root,
+    )
     new_root.mkdir(parents=True, exist_ok=True)
     state = {
         "schema_version": "1.0",
@@ -252,6 +334,7 @@ def migration_apply(
         "authorization_history": [],
         "control_plan": control_plan,
         "completed_nodes": [],
+        "completed_workpacks": [],
         "touched_nodes": [],
         "locally_closed_nodes": [],
         "active_workpack": None,
@@ -265,6 +348,7 @@ def migration_apply(
         "next_required_action": "BOOTSTRAP_PLAN",
         "evidence_index": {},
         "command_overlay_history": [],
+        "resolver_history": [],
         "migration": {
             "migration_id": plan["migration_id"],
             "migration_plan_sha256": plan_hash,
@@ -318,3 +402,36 @@ def migration_apply(
         "target_code_executed": False,
         "next_gate": "MIGRATION_BOOTSTRAP_REVERIFICATION_REQUIRED",
     }
+
+
+def _rebind_control_plan_execution_paths(
+    control_plan: Mapping[str, Any],
+    declared_execution_root: str | Path,
+    new_execution_root: str | Path,
+) -> dict[str, Any]:
+    source_root = lexical_path(declared_execution_root)
+    target_root = lexical_path(new_execution_root)
+    rebound = deepcopy(dict(control_plan))
+    for node in rebound.get("nodes", []):
+        for field in (
+            "allowed_read_paths",
+            "allowed_write_paths",
+            "success_output_refs",
+        ):
+            values = node.get(field)
+            if not isinstance(values, list):
+                continue
+            replacements = []
+            for value in values:
+                if not isinstance(value, str) or not Path(value).is_absolute():
+                    replacements.append(value)
+                    continue
+                path = lexical_path(value)
+                try:
+                    relative = path.relative_to(source_root)
+                except ValueError:
+                    replacements.append(value)
+                else:
+                    replacements.append(str(target_root / relative))
+            node[field] = replacements
+    return rebound

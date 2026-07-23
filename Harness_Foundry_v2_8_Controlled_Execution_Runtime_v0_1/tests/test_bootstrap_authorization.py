@@ -220,7 +220,7 @@ class BootstrapAuthorizationTests(unittest.TestCase):
             )
             self.assertEqual(
                 report["next_required_action"],
-                "REGISTER_COMMAND_OVERLAYS",
+                "RESOLVE_OR_REGISTER_COMMAND_OVERLAYS",
             )
 
     def test_authorization_rejects_path_and_manifest_hash_mismatch(self) -> None:

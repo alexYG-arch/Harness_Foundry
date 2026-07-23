@@ -7,7 +7,9 @@ from pathlib import Path
 import tempfile
 import unittest
 
+import harness_foundry_runtime
 from harness_foundry_runtime.engine import plan_next, status, verify_run
+from harness_foundry_runtime.engine import RUNTIME_VERSION
 from harness_foundry_runtime.util import tree_sha256
 
 from support import SyntheticRuntime
@@ -23,7 +25,11 @@ class ContractTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        self.assertEqual(manifest["version"], "0.1.1")
+        self.assertEqual(manifest["version"], "0.1.4")
+        self.assertEqual(
+            harness_foundry_runtime.__version__, manifest["version"]
+        )
+        self.assertEqual(RUNTIME_VERSION, manifest["version"])
         self.assertEqual(manifest["default_mode"], "A1_PLAN_ONLY")
         self.assertTrue(manifest["real_target_install_excluded"])
         for path in sorted((REPOSITORY_ROOT / "schemas").glob("*.json")):

@@ -24,6 +24,7 @@ from .engine import (
     verify_run,
 )
 from .migration import migration_apply, migration_plan
+from .resolver import resolve_command_overlays
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -75,6 +76,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     overlay_parser.add_argument("--execution-root", required=True)
     overlay_parser.add_argument("--bundle", required=True)
+
+    resolver_parser = commands.add_parser(
+        "resolve-overlays",
+        help=(
+            "Resolve one provider profile across selected Workpacks and "
+            "Hash-register the generated overlays"
+        ),
+    )
+    resolver_parser.add_argument("--execution-root", required=True)
+    resolver_parser.add_argument("--bundle", required=True)
 
     authorization_apply_parser = commands.add_parser(
         "authorization-apply",
@@ -139,6 +150,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         elif args.command == "register-overlays":
             result = register_command_overlays(
+                args.execution_root, args.bundle
+            )
+        elif args.command == "resolve-overlays":
+            result = resolve_command_overlays(
                 args.execution_root, args.bundle
             )
         elif args.command == "authorization-apply":

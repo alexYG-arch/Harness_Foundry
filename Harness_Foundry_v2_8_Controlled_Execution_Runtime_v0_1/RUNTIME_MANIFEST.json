@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
   "runtime_id": "HARNESS_FOUNDRY_V2_8_CONTROLLED_EXECUTION_RUNTIME_V0_1",
-  "version": "0.1.1",
+  "version": "0.1.4",
   "python_requires": ">=3.11",
   "authoritative_store": "SQLITE_EVENT_STORE",
   "derived_views": [
@@ -20,6 +20,7 @@
     "verify-run",
     "bootstrap-plan",
     "bootstrap-apply",
+    "resolve-overlays",
     "register-overlays",
     "authorization-plan",
     "authorization-apply",
@@ -30,5 +31,5 @@
     "migration-plan",
     "migration-apply"
   ],
-  "release_state": "LOCAL_RELEASE_GATES_PASSED_NOT_EXTERNALLY_PUBLISHED"
+  "release_state": "GITHUB_DRAFT_PR_RELEASE_CANDIDATE"
 }

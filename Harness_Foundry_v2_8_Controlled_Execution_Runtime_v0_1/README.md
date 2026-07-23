@@ -65,10 +65,22 @@ python3 tools/hfdriver.py bootstrap-apply \
   --confirmation-text 'APPROVE_BOOTSTRAP_BUNDLE::...'
 ```
 
-在申请 A3 前，外部 Resolver 必须提供解析完成的 Command Manifest
-overlay bundle。Runtime 会校验 Program/epoch/candidate 绑定、节点、环境、
-绝对 executable 和 Hash、argv、cwd、写根、postflight 和独立 review，
-再把不可变 Manifest 登记到 SQLite 和 Evidence Index：
+在申请 A3 前，Runtime 内置的通用 Resolver 可以把一个 provider profile
+展开为所选 DAG 节点中每个 Workpack 的 Hash 绑定 Command Manifest。
+profile 使用 `{{HF_EXECUTION_ROOT}}`、`{{HF_CANDIDATE_ROOT}}`、
+`{{HF_NODE_ID}}`、`{{HF_WORKPACK_ID}}` 和 `{{HF_WORKPACK_REF}}` 占位符，
+不需要逐 Workpack 手工登记：
+
+```bash
+python3 tools/hfdriver.py resolve-overlays \
+  --execution-root /absolute/runtime \
+  --bundle /absolute/WORKPACK_AUTOMATION_RESOLVER_BUNDLE.json
+```
+
+Runtime 会校验 Program/epoch/candidate 绑定、Workpack 顺序、环境、绝对
+executable 和最终 Hash、argv、cwd、写根、postflight 和独立 review，再把
+不可变 Manifest 登记到 SQLite 和 Evidence Index。已有外部 Resolver
+也可以直接登记解析完成的 overlay：
 
 ```bash
 python3 tools/hfdriver.py register-overlays \
@@ -76,7 +88,8 @@ python3 tools/hfdriver.py register-overlays \
   --bundle /absolute/RESOLVED_COMMAND_OVERLAY_BUNDLE.json
 ```
 
-Overlay 注册不运行命令、不激活 Workpack，也不授予执行权限。后续
+Resolver 和 Overlay 注册都不运行命令、不激活 Workpack，也不授予执行权限。
+后续
 `authorization-plan` 只能引用已登记的精确路径和 Hash；修改 overlay
 需要在没有 Active Authorization 时产生新的登记事件。
 
@@ -96,7 +109,7 @@ started 后缺少 receipt 时会硬停为 `UNKNOWN_NON_IDEMPOTENT_OUTCOME`。
 
 ## Workpack 循环与停机
 
-每次转换依次执行：
+每个 DAG 节点严格按声明顺序逐个推进 Workpack；每个 Workpack 依次执行：
 
 ```text
 validate old state
@@ -109,11 +122,23 @@ validate old state
 → independent review
 → bounded fix/revalidate when needed
 → Evidence Hash
-→ promote or hard stop
+→ promote Workpack
 ```
 
 只有 Automation Profile allowlist 中、且确认副作用已清理的临时错误可
 自动 retry。Acceptance 失败必须形成 Finding；它不会按普通 retry 处理。
+Fix 命令必须同时声明 `{{HF_FINDING_REF}}` 与
+`{{HF_FINDING_SHA256}}`，Runtime 在执行前绑定本轮 Finding，修复后重新
+postflight 和 Review。Review 必须使用与 execute/fix 不同的
+`executor_identity`、声明 `READ_ONLY` 和空写根；Runtime 还会比较 Review
+前后的目标写范围 Hash，防止“声明只读、实际写入”。
+
+Workpack 成功后 Runtime 自动推进下一个 Workpack 和下一个已授权 DAG
+节点，不再逐节点请求确认。正常人工门禁只保留预算/修复次数耗尽、授权
+范围变化、P3 N/A、范围扩展/waiver 和真实目标安装；Hash drift、旧
+fencing token、状态歧义、无进展、A→B→A 振荡及未知非幂等结果仍作为
+安全 hard stop。
+
 预算耗尽、Hash drift、旧 fencing token、状态歧义、无进展、A→B→A 振荡、
 P3 N/A、真实安装、范围扩展、waiver 和未知非幂等结果都会停在一个结构化
 hard stop 或 Human Gate，并给出唯一 Return Path。

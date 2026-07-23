@@ -34,7 +34,13 @@ BOOTSTRAP_NODES = [
 
 
 class SyntheticRuntime:
-    def __init__(self, root: Path, *, include_p3: bool = False):
+    def __init__(
+        self,
+        root: Path,
+        *,
+        include_p3: bool = False,
+        multi_workpack: bool = False,
+    ):
         self.root = root
         self.candidate = root / "candidate"
         self.execution = root / "execution"
@@ -44,6 +50,7 @@ class SyntheticRuntime:
         self.handoff_path = root / "EXECUTION_HANDOFF.json"
         self.program_id = "PROGRAM-GENERIC-RUNTIME-TEST"
         self.include_p3 = include_p3
+        self.multi_workpack = multi_workpack
         self.node_ids = ["NODE_A", "NODE_B"]
         if include_p3:
             self.node_ids = ["MAIN_P3_C3_OR_APPROVED_NA"]
@@ -92,12 +99,19 @@ class SyntheticRuntime:
             )
             predecessor = node_id
         for node_id in self.node_ids:
+            is_multi = self.multi_workpack and node_id == "NODE_A"
             nodes.append(
                 {
                     "node_id": node_id,
                     "required_predecessor_nodes": [predecessor],
-                    "workpack_id": f"WP-{node_id}",
-                    "project_workpack_sequence": [],
+                    "workpack_id": (
+                        None if is_multi else f"WP-{node_id}"
+                    ),
+                    "project_workpack_sequence": (
+                        ["WP-NODE_A-1", "WP-NODE_A-2"]
+                        if is_multi
+                        else []
+                    ),
                     "allowed_write_paths": [str(self.workspace)],
                     "environment_id": "TEST-ENV",
                     "human_gate": False,
@@ -201,6 +215,7 @@ class SyntheticRuntime:
         idempotent: bool = True,
     ) -> dict[str, Any]:
         executable = Path(sys.executable)
+        is_review = stage == "review"
         return {
             "command_id": command_id,
             "stage": stage,
@@ -208,13 +223,23 @@ class SyntheticRuntime:
             "executable_sha256": file_sha256(executable),
             "argv": [str(executable), "-c", code],
             "cwd_abs": str(self.workspace),
-            "allowed_write_roots": [str(self.workspace)],
+            "allowed_write_roots": (
+                [] if is_review else [str(self.workspace)]
+            ),
             "environment": {},
             "expected_exit_codes": [0],
             "timeout_seconds": 5,
             "shell": False,
             "idempotent": idempotent,
             "independent_review": independent_review,
+            "executor_identity": (
+                "INDEPENDENT_REVIEWER"
+                if is_review
+                else "WORKPACK_EXECUTOR"
+            ),
+            "review_target_mode": (
+                "READ_ONLY" if is_review else "NOT_APPLICABLE"
+            ),
             "failure_error_code": failure_error_code,
             "side_effect_cleanup_confirmed": cleanup_confirmed,
         }
@@ -290,6 +315,17 @@ class SyntheticRuntime:
                 ),
                 independent_review=True,
             )
+        elif mode == "review_mutates":
+            review_output = self.workspace / f"{node_id}.review-write"
+            commands[2] = self.command(
+                f"{node_id}-REVIEW",
+                "review",
+                (
+                    "from pathlib import Path;"
+                    f"Path({str(review_output)!r}).write_text('forbidden')"
+                ),
+                independent_review=True,
+            )
         elif mode in {"repair", "no_progress"}:
             needs_repair = (
                 "from pathlib import Path;"
@@ -305,13 +341,23 @@ class SyntheticRuntime:
                 independent_review=True,
             )
             fix_code = (
-                f"from pathlib import Path;Path({str(repaired)!r}).write_text('fixed')"
+                "import hashlib,os;"
+                "from pathlib import Path;"
+                "p=Path(os.environ['HF_FINDING_REF']);"
+                "assert p.is_file();"
+                "assert hashlib.sha256(p.read_bytes()).hexdigest()=="
+                "os.environ['HF_FINDING_SHA256'];"
+                f"Path({str(repaired)!r}).write_text('fixed')"
                 if mode == "repair"
                 else "raise SystemExit(0)"
             )
             commands.append(
                 self.command(f"{node_id}-FIX", "fix", fix_code)
             )
+            commands[-1]["environment"] = {
+                "HF_FINDING_REF": "{{HF_FINDING_REF}}",
+                "HF_FINDING_SHA256": "{{HF_FINDING_SHA256}}",
+            }
         manifest = {
             "schema_version": "1.0",
             "node_id": node_id,
@@ -339,10 +385,40 @@ class SyntheticRuntime:
         manifests = self.register_overlays(
             node_ids=selected, modes=modes
         )
+        return self.apply_authorization(
+            manifests,
+            node_ids=selected,
+            max_transitions=max_transitions,
+            max_loop_rounds=max_loop_rounds,
+        )
+
+    def apply_authorization(
+        self,
+        manifests: dict[str, dict[str, str]],
+        *,
+        node_ids: list[str],
+        max_transitions: int = 8,
+        max_loop_rounds: int = 3,
+    ) -> dict[str, Any]:
+        selected = node_ids
+        state = read_json(
+            self.execution
+            / "control_plane/state/PROGRAM_DRIVER_STATE.json"
+        )
+        nodes = {
+            node["node_id"]: node
+            for node in state["control_plan"]["nodes"]
+        }
+        workpack_ids = []
+        for node_id in selected:
+            node = nodes[node_id]
+            if node.get("workpack_id"):
+                workpack_ids.append(node["workpack_id"])
+            workpack_ids.extend(node.get("project_workpack_sequence", []))
         request = {
             "level": "A3_PROGRAM_BOUNDED",
             "dag_node_ids": selected,
-            "workpack_ids": [f"WP-{node}" for node in selected],
+            "workpack_ids": workpack_ids,
             "command_manifests": manifests,
             "allowed_write_roots": [str(self.workspace)],
             "environment_ids": ["TEST-ENV"],

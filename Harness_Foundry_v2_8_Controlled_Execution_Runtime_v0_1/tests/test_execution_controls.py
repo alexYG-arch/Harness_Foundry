@@ -11,6 +11,7 @@ import unittest
 from harness_foundry_runtime.engine import (
     _execute_attempt,
     _load_authorized_manifest,
+    _write_scope_fingerprint,
     advance_one,
     advance_until_gate,
     authorization_revoke,
@@ -92,6 +93,81 @@ class ExecutionControlTests(unittest.TestCase):
             ]
             self.assertEqual(len(finding_events), 1)
             self.assertEqual(state["loop_rounds_used"], 1)
+
+    def test_review_identity_is_read_only_at_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = SyntheticRuntime(Path(temporary))
+            fixture.bootstrap()
+            fixture.authorize(
+                node_ids=["NODE_A"],
+                modes={"NODE_A": "review_mutates"},
+            )
+
+            result = advance_one(fixture.execution)
+
+            self.assertEqual(result["status"], "HARD_STOP")
+            self.assertEqual(
+                result["hard_stop"]["code"], "REVIEW_MUTATED_TARGET"
+            )
+            self.assertEqual(
+                result["unique_return_path"], "HUMAN_REVIEW_REQUIRED"
+            )
+
+    def test_resume_preserves_pre_review_mutation_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = SyntheticRuntime(Path(temporary))
+            fixture.bootstrap()
+            fixture.authorize(node_ids=["NODE_A"])
+            store = RuntimeStore(fixture.execution)
+            state = store.load_state()
+            node = next(
+                item
+                for item in state["control_plan"]["nodes"]
+                if item["node_id"] == "NODE_A"
+            )
+            store.reserve(
+                "NODE_A",
+                "ATTEMPT-REVIEW-CRASH",
+                expected_revision=state["revision"],
+            )
+            before = _write_scope_fingerprint(
+                store.load_state(), node
+            )
+
+            def seed_crashed_review(current):
+                attempt = current["active_attempt"]
+                attempt["loop_round"] = 0
+                attempt["review_scope_snapshots"] = {
+                    "WP-NODE_A": {
+                        "loop_round": 0,
+                        "fingerprint": before,
+                    }
+                }
+                attempt["receipts"] = [
+                    {
+                        "command_id": f"NODE_A-{stage}",
+                        "workpack_id": "WP-NODE_A",
+                        "stage": stage.lower(),
+                        "status": "PASS",
+                    }
+                    for stage in ("EXECUTE", "POSTFLIGHT", "REVIEW")
+                ]
+
+            store.append(
+                "TEST_CRASH_AFTER_REVIEW_RECEIPT",
+                {},
+                mutate=seed_crashed_review,
+            )
+            (fixture.workspace / "review-mutated").write_text(
+                "forbidden", encoding="utf-8"
+            )
+
+            result = resume(fixture.execution)
+
+            self.assertEqual(result["status"], "HARD_STOP")
+            self.assertEqual(
+                result["hard_stop"]["code"], "REVIEW_MUTATED_TARGET"
+            )
 
     def test_no_progress_fix_hard_stops_with_one_return_path(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

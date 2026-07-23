@@ -36,11 +36,10 @@
       "minProperties": 1,
       "additionalProperties": {
         "type": "object",
-        "required": [
-          "schema_version",
-          "node_id",
-          "environment_id",
-          "commands"
+        "required": ["schema_version", "node_id", "environment_id"],
+        "oneOf": [
+          {"required": ["commands"]},
+          {"required": ["workpack_steps"]}
         ]
       }
     }

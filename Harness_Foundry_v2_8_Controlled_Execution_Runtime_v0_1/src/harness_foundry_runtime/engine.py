@@ -29,7 +29,7 @@ from .util import (
 )
 
 
-RUNTIME_VERSION = "0.1.1"
+RUNTIME_VERSION = "0.1.4"
 BOOTSTRAP_COMPLETED_NODES = (
     "START_PACKAGE_CANDIDATE_READY_FOR_HUMAN_REVIEW",
     "START_PACKAGE_HUMAN_APPROVAL",
@@ -391,6 +391,7 @@ def bootstrap_apply(
             "authorization_history": [],
             "control_plan": control_plan,
             "completed_nodes": [],
+            "completed_workpacks": [],
             "touched_nodes": [],
             "locally_closed_nodes": [],
             "active_workpack": None,
@@ -404,6 +405,7 @@ def bootstrap_apply(
             "next_required_action": None,
             "evidence_index": {},
             "command_overlay_history": [],
+            "resolver_history": [],
             "legacy_authorizations_imported": False,
             "real_target_install_allowed": False,
         }
@@ -593,7 +595,9 @@ def bootstrap_apply(
             state["locally_closed_nodes"], "PROGRAM_DRIVER_RUNTIME_VERIFIED"
         )
         state["next_human_gate"] = None
-        state["next_required_action"] = "REGISTER_COMMAND_OVERLAYS"
+        state["next_required_action"] = (
+            "RESOLVE_OR_REGISTER_COMMAND_OVERLAYS"
+        )
 
     state = store.append(
         "RUNTIME_VERIFICATION_CONSUMED",
@@ -614,7 +618,7 @@ def bootstrap_apply(
         "effective_mode": "A1_PLAN_ONLY",
         "execution_authorization": "NOT_GRANTED",
         "next_human_gate": None,
-        "next_required_action": "REGISTER_COMMAND_OVERLAYS",
+        "next_required_action": "RESOLVE_OR_REGISTER_COMMAND_OVERLAYS",
         "commands_executed": False,
         "workpacks_executed": False,
     }
@@ -1225,6 +1229,7 @@ def status(execution_root: str | Path) -> dict[str, Any]:
         ),
         "touched_nodes": state["touched_nodes"],
         "locally_closed_nodes": state["locally_closed_nodes"],
+        "completed_workpacks": state.get("completed_workpacks", []),
         "active_workpack": state["active_workpack"],
         "active_attempt": state["active_attempt"],
         "authorization": {
@@ -1323,7 +1328,7 @@ def plan_next(execution_root: str | Path) -> dict[str, Any]:
         return {
             "decision": "PREPARATION_REQUIRED",
             "node_id": node_id,
-            "required_action": "REGISTER_COMMAND_OVERLAYS",
+            "required_action": "RESOLVE_OR_REGISTER_COMMAND_OVERLAYS",
             "reason": {
                 "code": "COMMAND_OVERLAY_REQUIRED",
                 "message": node_id,
@@ -1557,10 +1562,8 @@ def _execute_attempt(
         return _record_hard_stop(
             store, "CANDIDATE_HASH_DRIFT", str(candidate)
         )
-    workpacks = _node_workpacks(node)
-    active_workpack = (
-        workpacks[0] if workpacks else f"PIPELINE:{node['node_id']}"
-    )
+    workpack_steps = _manifest_workpack_steps(node, manifest)
+    workpacks = [step["workpack_id"] for step in workpack_steps]
 
     def hydrated(current: dict[str, Any]) -> None:
         attempt = _require_active_attempt(
@@ -1576,7 +1579,6 @@ def _execute_attempt(
                 ]["path"]
             )
         )
-        current["active_workpack"] = active_workpack
         _append_unique(current["touched_nodes"], node["node_id"])
 
     store.append(
@@ -1590,9 +1592,70 @@ def _execute_attempt(
         mutate=hydrated,
         fencing_token=fencing_token,
     )
+
+    for step in workpack_steps:
+        workpack_id = str(step["workpack_id"])
+        if workpack_id in store.load_state().get(
+            "completed_workpacks", []
+        ):
+            continue
+
+        def activated(current: dict[str, Any]) -> None:
+            attempt = _require_active_attempt(
+                current, attempt_id, fencing_token
+            )
+            current["active_workpack"] = workpack_id
+            attempt["workpack_id"] = workpack_id
+            attempt["phase"] = "WORKPACK_ACTIVE"
+
+        store.append(
+            "WORKPACK_ACTIVATED",
+            {
+                "attempt_id": attempt_id,
+                "node_id": node["node_id"],
+                "workpack_id": workpack_id,
+            },
+            mutate=activated,
+            fencing_token=fencing_token,
+        )
+        stop = _execute_workpack_step(
+            store,
+            node,
+            workpack_id,
+            step["commands"],
+            attempt_id,
+            fencing_token,
+        )
+        if stop is not None:
+            return stop
+        _promote_workpack(
+            store,
+            node,
+            workpack_id,
+            attempt_id,
+            fencing_token,
+        )
+
+    return _promote_node(
+        store,
+        node,
+        manifest,
+        attempt_id,
+        fencing_token,
+    )
+
+
+def _execute_workpack_step(
+    store: RuntimeStore,
+    node: Mapping[str, Any],
+    workpack_id: str,
+    command_definitions: list[dict[str, Any]],
+    attempt_id: str,
+    fencing_token: int,
+) -> dict[str, Any] | None:
     commands = [
         deepcopy(command)
-        for command in manifest.get("commands", [])
+        for command in command_definitions
         if isinstance(command, Mapping)
     ]
     execute_commands = [
@@ -1612,18 +1675,29 @@ def _execute_attempt(
     cleanup_commands = [
         command for command in commands if command.get("stage") == "cleanup"
     ]
-    successful = {
+    attempt = store.load_state()["active_attempt"]
+    current_loop_round = int(attempt.get("loop_round", 0))
+    successful_execute = {
         receipt["command_id"]
-        for receipt in store.load_state()["active_attempt"].get("receipts", [])
+        for receipt in attempt.get("receipts", [])
         if receipt.get("status") == "PASS"
+        and receipt.get("workpack_id") == workpack_id
+    }
+    successful_current_round = {
+        receipt["command_id"]
+        for receipt in attempt.get("receipts", [])
+        if receipt.get("status") == "PASS"
+        and receipt.get("workpack_id") == workpack_id
+        and int(receipt.get("loop_round", 0)) == current_loop_round
     }
     failure = _run_command_group(
         store,
         node,
+        workpack_id,
         execute_commands,
         attempt_id,
         fencing_token,
-        skip_ids=successful,
+        skip_ids=successful_execute,
     )
     while failure is not None:
         current = store.load_state()
@@ -1655,6 +1729,7 @@ def _execute_attempt(
         cleanup_failure = _run_command_group(
             store,
             node,
+            workpack_id,
             cleanup_commands,
             attempt_id,
             fencing_token,
@@ -1669,6 +1744,7 @@ def _execute_attempt(
         failure = _run_command_group(
             store,
             node,
+            workpack_id,
             execute_commands,
             attempt_id,
             fencing_token,
@@ -1678,24 +1754,34 @@ def _execute_attempt(
     failure = _run_command_group(
         store,
         node,
+        workpack_id,
         postflight_commands,
         attempt_id,
         fencing_token,
-        skip_ids=successful,
+        skip_ids=successful_current_round,
     )
     if failure is None:
-        failure = _run_command_group(
+        failure = _run_read_only_review(
             store,
             node,
+            workpack_id,
             review_commands,
             attempt_id,
             fencing_token,
-            skip_ids=successful,
+            skip_ids=successful_current_round,
         )
     while failure is not None:
+        if failure.get("requires_immediate_hard_stop") is True:
+            return _record_hard_stop(
+                store,
+                str(failure["error_code"]),
+                str(failure["message"]),
+                return_path="HUMAN_REVIEW_REQUIRED",
+            )
         finding = _write_finding(
             store,
             node,
+            workpack_id,
             attempt_id,
             fencing_token,
             failure,
@@ -1720,10 +1806,15 @@ def _execute_attempt(
                 return_path="RETURN_TO_FINDING_REPAIR_GATE",
             )
         before = _write_scope_fingerprint(store.load_state(), node)
+        bound_fix_commands = [
+            _bind_finding_context(command, store, finding)
+            for command in fix_commands
+        ]
         fix_failure = _run_command_group(
             store,
             node,
-            fix_commands,
+            workpack_id,
+            bound_fix_commands,
             attempt_id,
             fencing_token,
             skip_ids=set(),
@@ -1746,33 +1837,131 @@ def _execute_attempt(
         failure = _run_command_group(
             store,
             node,
+            workpack_id,
             postflight_commands,
             attempt_id,
             fencing_token,
             skip_ids=set(),
         )
         if failure is None:
-            failure = _run_command_group(
+            failure = _run_read_only_review(
                 store,
                 node,
+                workpack_id,
                 review_commands,
                 attempt_id,
                 fencing_token,
                 skip_ids=set(),
             )
 
-    return _promote_node(
+    return None
+
+
+def _run_read_only_review(
+    store: RuntimeStore,
+    node: Mapping[str, Any],
+    workpack_id: str,
+    commands: list[dict[str, Any]],
+    attempt_id: str,
+    fencing_token: int,
+    *,
+    skip_ids: set[str],
+) -> dict[str, Any] | None:
+    state = store.load_state()
+    attempt = _require_active_attempt(
+        state, attempt_id, fencing_token
+    )
+    loop_round = int(attempt.get("loop_round", 0))
+    snapshots = attempt.get("review_scope_snapshots", {})
+    snapshot = (
+        snapshots.get(workpack_id)
+        if isinstance(snapshots, Mapping)
+        else None
+    )
+    if (
+        not isinstance(snapshot, Mapping)
+        or snapshot.get("loop_round") != loop_round
+    ):
+        before = _write_scope_fingerprint(state, node)
+
+        def captured(current: dict[str, Any]) -> None:
+            current_attempt = _require_active_attempt(
+                current, attempt_id, fencing_token
+            )
+            current_attempt.setdefault(
+                "review_scope_snapshots", {}
+            )[workpack_id] = {
+                "loop_round": loop_round,
+                "fingerprint": before,
+            }
+
+        store.append(
+            "REVIEW_SCOPE_SNAPSHOT_CAPTURED",
+            {
+                "attempt_id": attempt_id,
+                "node_id": node["node_id"],
+                "workpack_id": workpack_id,
+                "loop_round": loop_round,
+                "scope_fingerprint": before,
+            },
+            mutate=captured,
+            fencing_token=fencing_token,
+        )
+    else:
+        before = str(snapshot["fingerprint"])
+    failure = _run_command_group(
         store,
         node,
-        manifest,
+        workpack_id,
+        commands,
         attempt_id,
         fencing_token,
+        skip_ids=skip_ids,
     )
+    after = _write_scope_fingerprint(store.load_state(), node)
+    if before != after:
+        return {
+            "error_code": "REVIEW_MUTATED_TARGET",
+            "message": f"{node['node_id']}:{workpack_id}",
+            "side_effect_cleanup_confirmed": False,
+            "requires_immediate_hard_stop": True,
+        }
+    return failure
+
+
+def _bind_finding_context(
+    command: Mapping[str, Any],
+    store: RuntimeStore,
+    finding: Mapping[str, Any],
+) -> dict[str, Any]:
+    context = {
+        "{{HF_FINDING_REF}}": str(
+            store.execution_root / str(finding["finding_ref"])
+        ),
+        "{{HF_FINDING_SHA256}}": str(finding["finding_sha256"]),
+    }
+    return _replace_tokens(deepcopy(dict(command)), context)
+
+
+def _replace_tokens(value: Any, context: Mapping[str, str]) -> Any:
+    if isinstance(value, str):
+        for token, replacement in context.items():
+            value = value.replace(token, replacement)
+        return value
+    if isinstance(value, list):
+        return [_replace_tokens(item, context) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _replace_tokens(item, context)
+            for key, item in value.items()
+        }
+    return value
 
 
 def _run_command_group(
     store: RuntimeStore,
     node: Mapping[str, Any],
+    workpack_id: str,
     commands: list[dict[str, Any]],
     attempt_id: str,
     fencing_token: int,
@@ -1783,6 +1972,9 @@ def _run_command_group(
         command_id = str(command["command_id"])
         if command_id in skip_ids:
             continue
+        loop_round = int(
+            store.load_state()["active_attempt"].get("loop_round", 0)
+        )
 
         def started(state: dict[str, Any]) -> None:
             attempt = _require_active_attempt(
@@ -1791,6 +1983,8 @@ def _run_command_group(
             attempt["phase"] = str(command["stage"]).upper()
             attempt["current_command"] = {
                 "command_id": command_id,
+                "workpack_id": workpack_id,
+                "loop_round": loop_round,
                 "idempotent": command.get("idempotent") is True,
                 "started_at": utc_now(),
             }
@@ -1800,8 +1994,10 @@ def _run_command_group(
             {
                 "attempt_id": attempt_id,
                 "node_id": node["node_id"],
+                "workpack_id": workpack_id,
                 "command_id": command_id,
                 "stage": command["stage"],
+                "loop_round": loop_round,
             },
             mutate=started,
             fencing_token=fencing_token,
@@ -1811,8 +2007,10 @@ def _run_command_group(
             "schema_version": "1.0",
             "attempt_id": attempt_id,
             "node_id": node["node_id"],
+            "workpack_id": workpack_id,
             "command_id": command_id,
             "stage": command["stage"],
+            "loop_round": loop_round,
             "status": "PASS" if result["passed"] else "FAIL",
             "started_at": result["started_at"],
             "completed_at": utc_now(),
@@ -1855,7 +2053,9 @@ def _run_command_group(
             attempt["receipts"].append(
                 {
                     "command_id": command_id,
+                    "workpack_id": workpack_id,
                     "stage": command["stage"],
+                    "loop_round": loop_round,
                     "status": receipt["status"],
                     "receipt_ref": relative,
                     "receipt_sha256": receipt_hash,
@@ -1868,8 +2068,10 @@ def _run_command_group(
             {
                 "attempt_id": attempt_id,
                 "node_id": node["node_id"],
+                "workpack_id": workpack_id,
                 "command_id": command_id,
                 "status": receipt["status"],
+                "loop_round": loop_round,
                 "receipt_sha256": receipt_hash,
             },
             mutate=recorded,
@@ -1990,11 +2192,12 @@ def _validate_resolved_manifest(
         raise RuntimeViolation(
             "COMMAND_MANIFEST_NODE_MISMATCH", node_id
         )
-    commands = manifest.get("commands")
-    if not isinstance(commands, list) or not commands:
-        raise RuntimeViolation(
-            "COMMAND_MANIFEST_EMPTY", node_id
-        )
+    steps = _manifest_workpack_steps(node, manifest)
+    commands = [
+        command
+        for step in steps
+        for command in step["commands"]
+    ]
     command_ids = [
         command.get("command_id")
         for command in commands
@@ -2011,28 +2214,61 @@ def _validate_resolved_manifest(
         raise RuntimeViolation(
             "COMMAND_IDS_INVALID", node_id
         )
-    stages = {
-        command.get("stage")
-        for command in commands
-        if isinstance(command, Mapping)
-    }
-    if not {"execute", "postflight", "review"}.issubset(stages):
-        raise RuntimeViolation(
-            "WORKPACK_LOOP_STAGES_MISSING", str(sorted(stages))
-        )
-    review_commands = [
-        command
-        for command in commands
-        if isinstance(command, Mapping)
-        and command.get("stage") == "review"
-    ]
-    if not review_commands or not all(
-        command.get("independent_review") is True
-        for command in review_commands
-    ):
-        raise RuntimeViolation(
-            "INDEPENDENT_REVIEW_REQUIRED", node_id
-        )
+    for step in steps:
+        step_commands = step["commands"]
+        stages = {
+            command.get("stage")
+            for command in step_commands
+            if isinstance(command, Mapping)
+        }
+        if not {"execute", "postflight", "review"}.issubset(stages):
+            raise RuntimeViolation(
+                "WORKPACK_LOOP_STAGES_MISSING",
+                f"{step['workpack_id']}:{sorted(stages)}",
+            )
+        review_commands = [
+            command
+            for command in step_commands
+            if isinstance(command, Mapping)
+            and command.get("stage") == "review"
+        ]
+        if not review_commands or not all(
+            command.get("independent_review") is True
+            and command.get("review_target_mode") == "READ_ONLY"
+            and command.get("allowed_write_roots") == []
+            for command in review_commands
+        ):
+            raise RuntimeViolation(
+                "INDEPENDENT_REVIEW_REQUIRED",
+                str(step["workpack_id"]),
+            )
+        reviewer_identities = {
+            command.get("executor_identity")
+            for command in review_commands
+        }
+        mutating_identities = {
+            command.get("executor_identity")
+            for command in step_commands
+            if command.get("stage") in {"execute", "fix"}
+        }
+        if (
+            None in reviewer_identities
+            or None in mutating_identities
+            or reviewer_identities & mutating_identities
+        ):
+            raise RuntimeViolation(
+                "REVIEWER_IDENTITY_NOT_INDEPENDENT",
+                str(step["workpack_id"]),
+            )
+        for command in step_commands:
+            if command.get("stage") == "fix" and not (
+                _contains_token(command, "{{HF_FINDING_REF}}")
+                and _contains_token(command, "{{HF_FINDING_SHA256}}")
+            ):
+                raise RuntimeViolation(
+                    "FIX_FINDING_BINDING_REQUIRED",
+                    str(command.get("command_id")),
+                )
     authorized_writes = (
         [
             lexical_path(path)
@@ -2147,6 +2383,82 @@ def _load_authorized_manifest(
     return read_json(path)
 
 
+def _promote_workpack(
+    store: RuntimeStore,
+    node: Mapping[str, Any],
+    workpack_id: str,
+    attempt_id: str,
+    fencing_token: int,
+) -> dict[str, Any]:
+    state = store.load_state()
+    attempt = _require_active_attempt(
+        state, attempt_id, fencing_token
+    )
+    receipt_hashes = [
+        receipt["receipt_sha256"]
+        for receipt in attempt.get("receipts", [])
+        if receipt.get("workpack_id") == workpack_id
+    ]
+    result = {
+        "schema_version": "1.0",
+        "attempt_id": attempt_id,
+        "node_id": node["node_id"],
+        "workpack_id": workpack_id,
+        "receipt_hashes": receipt_hashes,
+        "fencing_token": fencing_token,
+        "postflight": "PASS",
+        "independent_review": "PASS",
+        "promotion": "PASS",
+    }
+    node_key = json_sha256({"node_id": node["node_id"]})[:16]
+    workpack_key = json_sha256({"workpack_id": workpack_id})[:16]
+    result_path = (
+        store.execution_root
+        / "evidence/promotions/workpacks"
+        / f"{node_key}-{workpack_key}.result.json"
+    )
+    write_json(result_path, result)
+    result_hash = file_sha256(result_path)
+    relative = result_path.relative_to(store.execution_root).as_posix()
+
+    def promoted(current: dict[str, Any]) -> None:
+        current_attempt = _require_active_attempt(
+            current, attempt_id, fencing_token
+        )
+        if current.get("active_workpack") != workpack_id:
+            raise RuntimeViolation(
+                "ACTIVE_WORKPACK_MISMATCH", workpack_id
+            )
+        _append_unique(
+            current.setdefault("completed_workpacks", []),
+            workpack_id,
+        )
+        current["active_workpack"] = None
+        current_attempt["workpack_id"] = None
+        current_attempt["phase"] = "WORKPACK_PROMOTED"
+        current["evidence_index"][relative] = result_hash
+
+    store.append(
+        "WORKPACK_PROMOTED",
+        {
+            "attempt_id": attempt_id,
+            "node_id": node["node_id"],
+            "workpack_id": workpack_id,
+            "result_sha256": result_hash,
+        },
+        mutate=promoted,
+        fencing_token=fencing_token,
+        evidence_sha256=result_hash,
+    )
+    return {
+        "schema_version": "1.0",
+        "status": "PASS",
+        "node_id": node["node_id"],
+        "workpack_id": workpack_id,
+        "evidence_sha256": result_hash,
+    }
+
+
 def _promote_node(
     store: RuntimeStore,
     node: Mapping[str, Any],
@@ -2228,6 +2540,7 @@ def _promote_node(
 def _write_finding(
     store: RuntimeStore,
     node: Mapping[str, Any],
+    workpack_id: str,
     attempt_id: str,
     fencing_token: int,
     failure: Mapping[str, Any],
@@ -2237,6 +2550,7 @@ def _write_finding(
         "finding_id": f"FINDING-{uuid.uuid4()}",
         "attempt_id": attempt_id,
         "node_id": node["node_id"],
+        "workpack_id": workpack_id,
         "error_code": failure["error_code"],
         "message": failure["message"],
         "classification": "ACCEPTANCE_FAILURE_NOT_RETRY",
@@ -2251,6 +2565,8 @@ def _write_finding(
     write_json(path, finding)
     finding_hash = file_sha256(path)
     relative = path.relative_to(store.execution_root).as_posix()
+    finding["finding_ref"] = relative
+    finding["finding_sha256"] = finding_hash
 
     def mutation(state: dict[str, Any]) -> None:
         attempt = _require_active_attempt(
@@ -2259,6 +2575,7 @@ def _write_finding(
         attempt.setdefault("findings", []).append(
             {
                 "finding_id": finding["finding_id"],
+                "workpack_id": workpack_id,
                 "finding_ref": relative,
                 "finding_sha256": finding_hash,
             }
@@ -2270,6 +2587,7 @@ def _write_finding(
         {
             "attempt_id": attempt_id,
             "node_id": node["node_id"],
+            "workpack_id": workpack_id,
             "finding_id": finding["finding_id"],
             "finding_sha256": finding_hash,
         },
@@ -2642,6 +2960,67 @@ def _node_workpacks(node: Mapping[str, Any]) -> list[str]:
         values.append(str(node["workpack_id"]))
     values.extend(str(item) for item in node.get("project_workpack_sequence", []))
     return list(dict.fromkeys(values))
+
+
+def _manifest_workpack_steps(
+    node: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    expected = _node_workpacks(node) or [f"PIPELINE:{node['node_id']}"]
+    steps = manifest.get("workpack_steps")
+    if steps is None:
+        commands = manifest.get("commands")
+        if len(expected) != 1:
+            raise RuntimeViolation(
+                "WORKPACK_STEPS_REQUIRED",
+                str(node["node_id"]),
+            )
+        if not isinstance(commands, list) or not commands:
+            raise RuntimeViolation(
+                "COMMAND_MANIFEST_EMPTY",
+                str(node["node_id"]),
+            )
+        return [{"workpack_id": expected[0], "commands": commands}]
+    if not isinstance(steps, list) or not steps:
+        raise RuntimeViolation(
+            "WORKPACK_STEPS_INVALID",
+            str(node["node_id"]),
+        )
+    actual = [
+        step.get("workpack_id")
+        for step in steps
+        if isinstance(step, Mapping)
+    ]
+    if len(actual) != len(steps) or actual != expected:
+        raise RuntimeViolation(
+            "WORKPACK_SEQUENCE_MISMATCH",
+            f"expected={expected}, actual={actual}",
+        )
+    normalized = []
+    for step in steps:
+        commands = step.get("commands")
+        if not isinstance(commands, list) or not commands:
+            raise RuntimeViolation(
+                "COMMAND_MANIFEST_EMPTY",
+                str(step.get("workpack_id")),
+            )
+        normalized.append(
+            {
+                "workpack_id": str(step["workpack_id"]),
+                "commands": commands,
+            }
+        )
+    return normalized
+
+
+def _contains_token(value: Any, token: str) -> bool:
+    if isinstance(value, str):
+        return token in value
+    if isinstance(value, list):
+        return any(_contains_token(item, token) for item in value)
+    if isinstance(value, Mapping):
+        return any(_contains_token(item, token) for item in value.values())
+    return False
 
 
 def _append_unique(values: list[Any], value: Any) -> None:
