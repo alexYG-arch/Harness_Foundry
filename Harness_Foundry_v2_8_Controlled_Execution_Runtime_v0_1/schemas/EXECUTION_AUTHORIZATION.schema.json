@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://harness-foundry.local/schemas/execution-authorization-1.0.json",
+  "title": "A3 Program-Bounded Execution Authorization",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "authorization_id",
+    "status",
+    "level",
+    "program_id",
+    "epoch_id",
+    "candidate_content_sha256",
+    "dag_node_ids",
+    "workpack_ids",
+    "command_manifests",
+    "allowed_write_roots",
+    "environment_ids",
+    "expires_at",
+    "max_transitions",
+    "max_loop_rounds",
+    "max_wall_time_seconds",
+    "real_target_install_allowed"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "authorization_id": {"type": "string", "minLength": 1},
+    "status": {
+      "enum": ["READY_FOR_HUMAN_CONFIRMATION", "ACTIVE", "REVOKED", "EXPIRED"]
+    },
+    "level": {"const": "A3_PROGRAM_BOUNDED"},
+    "program_id": {"type": "string", "minLength": 1},
+    "epoch_id": {"type": "string", "minLength": 1},
+    "candidate_content_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "dag_node_ids": {"type": "array", "minItems": 1},
+    "workpack_ids": {"type": "array"},
+    "command_manifests": {"type": "object"},
+    "allowed_write_roots": {"type": "array", "minItems": 1},
+    "environment_ids": {"type": "array", "minItems": 1},
+    "expires_at": {"type": "string"},
+    "max_transitions": {"type": "integer", "minimum": 1},
+    "max_loop_rounds": {"type": "integer", "minimum": 1},
+    "max_wall_time_seconds": {"type": "integer", "minimum": 1},
+    "real_target_install_allowed": {"const": false}
+  }
+}

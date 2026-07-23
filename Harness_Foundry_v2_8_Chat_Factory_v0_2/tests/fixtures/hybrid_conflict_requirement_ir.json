@@ -1,0 +1,21 @@
+{
+  "target": {
+    "id": "CONFLICT-HYBRID", "name": "Conflict Hybrid", "type": "HYBRID",
+    "profile": "FULL", "output_root": "/tmp/hffactory-conflict-hybrid",
+    "mission": "Combine an Agent and Harness under an unresolved authority conflict.",
+    "scope": ["Agent review", "Harness execution"], "non_goals": ["Resolve conflicts automatically"],
+    "primary_runtime": "Codex"
+  },
+  "atoms": [{
+    "atom_id": "ATOM-HYBRID-001", "source_locator": "chat#conflict",
+    "text_or_lossless_paraphrase": "Execution authority must be resolved before freeze.",
+    "modality": "MUST", "verification_mode": "HUMAN_DECISION"
+  }],
+  "acceptance_cases": [{"case_id": "AC-HYBRID-001", "atom_ids": ["ATOM-HYBRID-001"], "description": "Resolved authority has a decision record."}],
+  "negative_cases": [{"case_id": "NEG-HYBRID-001", "atom_ids": ["ATOM-HYBRID-001"], "description": "Unresolved authority cannot freeze.", "expected_failure": "SOURCE_AUTHORITY_CONFLICT"}],
+  "source_conflicts": [{
+    "conflict_id": "CONFLICT-AUTH-001", "source_ids": ["SRC-A", "SRC-B"],
+    "field": "execution_authority", "status": "OPEN",
+    "description": "Sources disagree on whether the Agent may execute Harness Workpacks."
+  }]
+}

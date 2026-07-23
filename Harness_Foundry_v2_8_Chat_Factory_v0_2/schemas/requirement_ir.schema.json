@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:harness-foundry:requirement-ir:1.0",
+  "type": "object",
+  "required": [
+    "program_id",
+    "target",
+    "sources",
+    "atoms",
+    "acceptance_cases",
+    "negative_cases",
+    "coverage_edges",
+    "assumptions",
+    "open_questions",
+    "decisions",
+    "user_adjustments",
+    "automation"
+  ],
+  "properties": {
+    "program_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "target": {
+      "type": "object",
+      "required": ["id", "name", "type", "profile", "output_root", "mission", "scope", "non_goals", "primary_runtime"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+        "name": {"type": "string", "minLength": 1},
+        "type": {"enum": ["AGENT", "HARNESS", "HYBRID"]},
+        "profile": {"enum": ["FULL", "STANDARD", "LITE"]},
+        "output_root": {"type": "string", "minLength": 1},
+        "mission": {"type": "string", "minLength": 1},
+        "scope": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+        "non_goals": {"type": "array", "items": {"type": "string"}},
+        "primary_runtime": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": true
+    },
+    "sources": {"type": "array"},
+    "atoms": {"type": "array", "minItems": 1},
+    "acceptance_cases": {"type": "array", "minItems": 1},
+    "negative_cases": {"type": "array", "minItems": 1},
+    "assumptions": {"type": "array"},
+    "open_questions": {"type": "array"},
+    "decisions": {"type": "array"},
+    "user_adjustments": {"type": "array"},
+    "automation": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "requested_level",
+        "activation_default",
+        "max_transitions",
+        "max_loop_rounds",
+        "max_wall_time_seconds",
+        "stop_gate",
+        "retryable_error_codes",
+        "mandatory_human_gate_ids",
+        "real_target_install_excluded",
+        "execution_mode",
+        "auto_start_generated_workpacks",
+        "execution_started"
+      ],
+      "properties": {
+        "schema_version": {"const": "1.0"},
+        "requested_level": {
+          "enum": [
+            "A0_DECLARE_ONLY",
+            "A1_PLAN_ONLY",
+            "A2_WORKPACK_BOUNDED",
+            "A3_PROGRAM_BOUNDED"
+          ]
+        },
+        "activation_default": {"const": "DISABLED"},
+        "max_transitions": {"type": "integer", "minimum": 1},
+        "max_loop_rounds": {"type": "integer", "minimum": 1},
+        "max_wall_time_seconds": {"type": "integer", "minimum": 1},
+        "stop_gate": {"type": "string", "minLength": 1},
+        "retryable_error_codes": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "mandatory_human_gate_ids": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "real_target_install_excluded": {"const": true},
+        "execution_mode": {"const": "AUTHORING_ONLY"},
+        "auto_start_generated_workpacks": {"const": false},
+        "execution_started": {"const": false}
+      },
+      "additionalProperties": false
+    },
+    "coverage_edges": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["atom_id", "workpack_ids", "stage_ids", "release_step_ids", "owner_project_ids", "routing_basis"],
+        "properties": {
+          "atom_id": {"type": "string"},
+          "workpack_ids": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+          "stage_ids": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+          "release_step_ids": {"type": "array", "items": {"type": "string"}},
+          "owner_project_ids": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+          "routing_basis": {"type": "string", "minLength": 1},
+          "status": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "source_conflicts": {"type": "array"}
+  },
+  "additionalProperties": true
+}

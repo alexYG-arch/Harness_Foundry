@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://harness-foundry.local/schemas/bootstrap-approval-bundle-1.0.json",
+  "title": "Bootstrap Approval Bundle",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "bundle_id",
+    "bundle_kind",
+    "handoff",
+    "execution_root",
+    "child_authorizations",
+    "execution_authorization_included",
+    "real_target_install_authorization_included",
+    "bundle_sha256",
+    "confirmation_text"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "bundle_id": {"type": "string", "minLength": 1},
+    "bundle_kind": {"const": "BOOTSTRAP_APPROVAL_BUNDLE"},
+    "handoff": {"type": "object"},
+    "execution_root": {"type": "string", "minLength": 1},
+    "child_authorizations": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5
+    },
+    "execution_authorization_included": {"const": false},
+    "real_target_install_authorization_included": {"const": false},
+    "bundle_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "confirmation_text": {"type": "string", "minLength": 1}
+  }
+}

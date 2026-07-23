@@ -1,0 +1,33 @@
+{
+  "schema_version": "1.0",
+  "runtime_id": "HARNESS_FOUNDRY_V2_8_CONTROLLED_EXECUTION_RUNTIME_V0_1",
+  "version": "0.1.0",
+  "python_requires": ">=3.11",
+  "authoritative_store": "SQLITE_EVENT_STORE",
+  "derived_views": [
+    "control_plane/state/PROGRAM_DRIVER_STATE.json",
+    "control_plane/state/EXECUTION_AUTHORIZATION.json",
+    "control_plane/ledger/EVENTS.jsonl",
+    "control_plane/ledger/PHASE_TRANSITION_LEDGER.jsonl"
+  ],
+  "default_mode": "A1_PLAN_ONLY",
+  "continuous_mode": "A3_PROGRAM_BOUNDED",
+  "real_target_install_excluded": true,
+  "cli": "hfdriver",
+  "supported_commands": [
+    "status",
+    "plan-next",
+    "verify-run",
+    "bootstrap-plan",
+    "bootstrap-apply",
+    "authorization-plan",
+    "authorization-apply",
+    "authorization-revoke",
+    "advance-one",
+    "advance-until-gate",
+    "resume",
+    "migration-plan",
+    "migration-apply"
+  ],
+  "release_state": "LOCAL_RELEASE_GATES_PASSED_NOT_EXTERNALLY_PUBLISHED"
+}
