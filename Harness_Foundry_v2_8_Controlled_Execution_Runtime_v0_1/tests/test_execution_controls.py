@@ -130,6 +130,7 @@ class ExecutionControlTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             fixture = SyntheticRuntime(Path(temporary))
             fixture.bootstrap()
+            fixture.register_overlays(node_ids=["NODE_A"])
             self.assertEqual(
                 plan_next(fixture.execution)["reason"]["code"],
                 "AUTHORIZATION_MISSING",

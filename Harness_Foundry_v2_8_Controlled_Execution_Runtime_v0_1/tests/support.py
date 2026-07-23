@@ -13,10 +13,12 @@ from harness_foundry_runtime.engine import (
     authorization_plan,
     bootstrap_apply,
     bootstrap_plan,
+    register_command_overlays,
 )
 from harness_foundry_runtime.util import (
     file_sha256,
     json_sha256,
+    read_json,
     tree_sha256,
     write_json,
 )
@@ -334,15 +336,9 @@ class SyntheticRuntime:
     ) -> dict[str, Any]:
         selected = node_ids or self.node_ids
         modes = modes or {}
-        manifests = {}
-        for node_id in selected:
-            path = self.make_manifest(
-                node_id, mode=modes.get(node_id, "pass")
-            )
-            manifests[node_id] = {
-                "path": str(path),
-                "sha256": file_sha256(path),
-            }
+        manifests = self.register_overlays(
+            node_ids=selected, modes=modes
+        )
         request = {
             "level": "A3_PROGRAM_BOUNDED",
             "dag_node_ids": selected,
@@ -370,3 +366,40 @@ class SyntheticRuntime:
             self.authorization_path,
             authorization["confirmation_text"],
         )
+
+    def register_overlays(
+        self,
+        *,
+        node_ids: list[str] | None = None,
+        modes: dict[str, str] | None = None,
+    ) -> dict[str, dict[str, str]]:
+        selected = node_ids or self.node_ids
+        modes = modes or {}
+        overlay_documents = {}
+        for node_id in selected:
+            path = self.make_manifest(
+                node_id, mode=modes.get(node_id, "pass")
+            )
+            overlay_documents[node_id] = read_json(path)
+        state = read_json(
+            self.execution
+            / "control_plane/state/PROGRAM_DRIVER_STATE.json"
+        )
+        overlay_path = self.root / "COMMAND_OVERLAY_BUNDLE.json"
+        write_json(
+            overlay_path,
+            {
+                "schema_version": "1.0",
+                "overlay_kind": "RESOLVED_COMMAND_OVERLAY_BUNDLE",
+                "program_id": self.program_id,
+                "epoch_id": state["epoch_id"],
+                "candidate_content_sha256": (
+                    state["candidate_content_sha256"]
+                ),
+                "manifests": overlay_documents,
+            },
+        )
+        manifests = register_command_overlays(
+            self.execution, overlay_path
+        )["command_manifests"]
+        return manifests

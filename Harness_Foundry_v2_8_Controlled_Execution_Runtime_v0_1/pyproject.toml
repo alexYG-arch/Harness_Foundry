@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "harness-foundry-controlled-execution-runtime"
-version = "0.1.0"
+version = "0.1.1"
 description = "Authorization-bound SQLite runtime for Harness Foundry v2.8 Workpacks."
 requires-python = ">=3.11"
 dependencies = []

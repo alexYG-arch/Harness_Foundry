@@ -262,7 +262,9 @@ def migration_apply(
         "state_path_history": [],
         "hard_stop": None,
         "next_human_gate": "MIGRATION_BOOTSTRAP_REVERIFICATION_REQUIRED",
+        "next_required_action": "BOOTSTRAP_PLAN",
         "evidence_index": {},
+        "command_overlay_history": [],
         "migration": {
             "migration_id": plan["migration_id"],
             "migration_plan_sha256": plan_hash,

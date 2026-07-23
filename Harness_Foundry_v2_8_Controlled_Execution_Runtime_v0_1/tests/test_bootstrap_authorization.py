@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 from harness_foundry_runtime.engine import (
     RuntimeViolation,
@@ -68,6 +71,87 @@ class BootstrapAuthorizationTests(unittest.TestCase):
             self.assertFalse(result["workpacks_executed"])
             self.assertEqual(verify_run(fixture.execution)["status"], "PASS")
 
+    def test_bootstrap_materializes_a_self_contained_driver(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = SyntheticRuntime(Path(temporary))
+            fixture.bootstrap()
+            launcher = (
+                fixture.execution / "control_plane/bin/hfdriver"
+            )
+            completed = subprocess.run(
+                [str(launcher), "--help"],
+                cwd=fixture.root,
+                env={
+                    **os.environ,
+                    "PYTHONPATH": "/definitely/not/the/runtime",
+                },
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertIn("usage: hfdriver", completed.stdout)
+
+    def test_failed_driver_probe_does_not_close_runtime_verification(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = SyntheticRuntime(Path(temporary))
+            bundle = bootstrap_plan(
+                fixture.handoff_path, fixture.execution
+            )
+            write_json(fixture.bundle_path, bundle)
+            with mock.patch(
+                "harness_foundry_runtime.engine._launch_driver_probe",
+                side_effect=RuntimeViolation(
+                    "DRIVER_LAUNCH_FAILED", "synthetic failure"
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeViolation, "synthetic failure"
+                ):
+                    bootstrap_apply(
+                        fixture.bundle_path,
+                        bundle["confirmation_text"],
+                    )
+
+            state = json.loads(
+                (
+                    fixture.execution
+                    / "control_plane/state/PROGRAM_DRIVER_STATE.json"
+                ).read_text(encoding="utf-8")
+            )
+            self.assertTrue(state["driver"]["materialized"])
+            self.assertFalse(state["driver"]["runtime_verified"])
+            self.assertNotIn(
+                "PROGRAM_DRIVER_RUNTIME_VERIFIED",
+                state["locally_closed_nodes"],
+            )
+
+    def test_vendored_driver_tamper_fails_verify_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = SyntheticRuntime(Path(temporary))
+            fixture.bootstrap()
+            vendored_engine = (
+                fixture.execution
+                / "control_plane/driver/runtime"
+                / "harness_foundry_runtime/engine.py"
+            )
+            vendored_engine.write_text(
+                vendored_engine.read_text(encoding="utf-8")
+                + "\n# tampered\n",
+                encoding="utf-8",
+            )
+
+            report = verify_run(fixture.execution)
+            codes = {
+                item["code"] for item in report["blocking_findings"]
+            }
+
+            self.assertEqual(report["status"], "FAIL")
+            self.assertIn("EVIDENCE_HASH_MISMATCH", codes)
+
     def test_wrong_bootstrap_confirmation_does_not_create_root(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             fixture = SyntheticRuntime(Path(temporary))
@@ -124,13 +208,19 @@ class BootstrapAuthorizationTests(unittest.TestCase):
             decision = plan_next(fixture.execution)
             report = status(fixture.execution)
 
-            self.assertEqual(decision["decision"], "HUMAN_GATE")
             self.assertEqual(
-                decision["reason"]["code"], "AUTHORIZATION_MISSING"
+                decision["decision"], "PREPARATION_REQUIRED"
+            )
+            self.assertEqual(
+                decision["reason"]["code"], "COMMAND_OVERLAY_REQUIRED"
             )
             self.assertEqual(report["effective_mode"], "A1_PLAN_ONLY")
             self.assertEqual(
                 report["authorization"]["status"], "NOT_GRANTED"
+            )
+            self.assertEqual(
+                report["next_required_action"],
+                "REGISTER_COMMAND_OVERLAYS",
             )
 
     def test_authorization_rejects_path_and_manifest_hash_mismatch(self) -> None:

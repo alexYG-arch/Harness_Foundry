@@ -131,5 +131,5 @@ class MigrationTests(unittest.TestCase):
             after_bootstrap = plan_next(new_root)
             self.assertEqual(
                 after_bootstrap["reason"]["code"],
-                "AUTHORIZATION_MISSING",
+                "COMMAND_OVERLAY_REQUIRED",
             )

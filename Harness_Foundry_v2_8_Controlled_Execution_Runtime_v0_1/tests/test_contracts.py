@@ -23,7 +23,7 @@ class ContractTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        self.assertEqual(manifest["version"], "0.1.0")
+        self.assertEqual(manifest["version"], "0.1.1")
         self.assertEqual(manifest["default_mode"], "A1_PLAN_ONLY")
         self.assertTrue(manifest["real_target_install_excluded"])
         for path in sorted((REPOSITORY_ROOT / "schemas").glob("*.json")):

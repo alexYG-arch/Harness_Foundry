@@ -18,6 +18,11 @@
 runtime verification 完成且用户另行逐字确认精确
 `A3_PROGRAM_BOUNDED` 授权，`advance-until-gate` 才能连续提交机器转换。
 
+Driver materialization 会把当前标准库 Runtime 源码复制到 execution root，
+使用隔离 Python 入口启动，并在关闭 runtime verification 节点前真实执行
+一次只读 `status` 探针。仅存在 launcher 文件或 Hash 不等于 Driver
+可运行。
+
 ## 权威状态
 
 每个 execution root 都拥有独立的：
@@ -59,6 +64,21 @@ python3 tools/hfdriver.py bootstrap-apply \
   --bundle BOOTSTRAP_APPROVAL_BUNDLE.json \
   --confirmation-text 'APPROVE_BOOTSTRAP_BUNDLE::...'
 ```
+
+在申请 A3 前，外部 Resolver 必须提供解析完成的 Command Manifest
+overlay bundle。Runtime 会校验 Program/epoch/candidate 绑定、节点、环境、
+绝对 executable 和 Hash、argv、cwd、写根、postflight 和独立 review，
+再把不可变 Manifest 登记到 SQLite 和 Evidence Index：
+
+```bash
+python3 tools/hfdriver.py register-overlays \
+  --execution-root /absolute/runtime \
+  --bundle /absolute/RESOLVED_COMMAND_OVERLAY_BUNDLE.json
+```
+
+Overlay 注册不运行命令、不激活 Workpack，也不授予执行权限。后续
+`authorization-plan` 只能引用已登记的精确路径和 Hash；修改 overlay
+需要在没有 Active Authorization 时产生新的登记事件。
 
 独立执行授权使用 `authorization-plan` 和 `authorization-apply`。
 Authorization Request 必须精确列出项目/epoch、DAG node、Workpack、解析后

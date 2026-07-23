@@ -18,6 +18,7 @@ from .engine import (
     bootstrap_apply,
     bootstrap_plan,
     plan_next,
+    register_command_overlays,
     resume,
     status,
     verify_run,
@@ -64,6 +65,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     authorization_plan_parser.add_argument("--execution-root", required=True)
     authorization_plan_parser.add_argument("--request", required=True)
+
+    overlay_parser = commands.add_parser(
+        "register-overlays",
+        help=(
+            "Validate and Hash-register resolved Command Manifests "
+            "without granting execution authority"
+        ),
+    )
+    overlay_parser.add_argument("--execution-root", required=True)
+    overlay_parser.add_argument("--bundle", required=True)
 
     authorization_apply_parser = commands.add_parser(
         "authorization-apply",
@@ -125,6 +136,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "authorization-plan":
             result = authorization_plan(
                 args.execution_root, args.request
+            )
+        elif args.command == "register-overlays":
+            result = register_command_overlays(
+                args.execution_root, args.bundle
             )
         elif args.command == "authorization-apply":
             result = authorization_apply(

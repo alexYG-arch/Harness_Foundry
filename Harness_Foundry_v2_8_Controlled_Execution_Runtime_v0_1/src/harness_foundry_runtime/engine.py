@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import shlex
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -27,7 +29,7 @@ from .util import (
 )
 
 
-RUNTIME_VERSION = "0.1.0"
+RUNTIME_VERSION = "0.1.1"
 BOOTSTRAP_COMPLETED_NODES = (
     "START_PACKAGE_CANDIDATE_READY_FOR_HUMAN_REVIEW",
     "START_PACKAGE_HUMAN_APPROVAL",
@@ -399,7 +401,9 @@ def bootstrap_apply(
             "state_path_history": [],
             "hard_stop": None,
             "next_human_gate": None,
+            "next_required_action": None,
             "evidence_index": {},
+            "command_overlay_history": [],
             "legacy_authorizations_imported": False,
             "real_target_install_allowed": False,
         }
@@ -443,6 +447,41 @@ def bootstrap_apply(
         "CONTROL_REGISTRATION", BOOTSTRAP_COMPLETED_NODES[3:4]
     )
 
+    runtime_source = Path(__file__).resolve().parent
+    vendored_parent = execution_root / "control_plane/driver/runtime"
+    vendored_package = vendored_parent / runtime_source.name
+    vendored_package.mkdir(parents=True, exist_ok=True)
+    vendored_files = []
+    for source in sorted(runtime_source.glob("*.py")):
+        destination = vendored_package / source.name
+        shutil.copy2(source, destination)
+        vendored_files.append(destination)
+    entry_path = execution_root / "control_plane/driver/driver_entry.py"
+    entry_path.write_text(
+        "\n".join(
+            (
+                "from pathlib import Path",
+                "import sys",
+                "",
+                "runtime_root = Path(__file__).resolve().parent / 'runtime'",
+                "sys.path.insert(0, str(runtime_root))",
+                "from harness_foundry_runtime.cli import main",
+                "",
+                "raise SystemExit(main())",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    launcher_path = execution_root / "control_plane/bin/hfdriver"
+    launcher_path.parent.mkdir(parents=True, exist_ok=True)
+    launcher_path.write_text(
+        "#!/bin/sh\n"
+        f"exec {shlex.quote(sys.executable)} -I "
+        f"{shlex.quote(str(entry_path))} \"$@\"\n",
+        encoding="utf-8",
+    )
+    launcher_path.chmod(0o755)
     descriptor = {
         "schema_version": "1.0",
         "driver_id": "HF28_CONTROLLED_PROGRAM_DRIVER",
@@ -450,22 +489,23 @@ def bootstrap_apply(
         "program_id": handoff["program_id"],
         "epoch_id": store.load_state()["epoch_id"],
         "candidate_content_sha256": handoff["candidate_content_sha256"],
-        "entrypoint": "python3 -m harness_foundry_runtime.cli",
+        "entrypoint": str(launcher_path),
+        "python_executable": sys.executable,
+        "python_executable_sha256": file_sha256(Path(sys.executable)),
+        "vendored_runtime_root": str(vendored_parent),
         "side_effects_allowed_without_execution_authorization": False,
     }
     descriptor_path = (
         execution_root / "control_plane/driver/PROGRAM_DRIVER_DESCRIPTOR.json"
     )
     write_json(descriptor_path, descriptor)
-    launcher_path = execution_root / "control_plane/bin/hfdriver"
-    launcher_path.parent.mkdir(parents=True, exist_ok=True)
-    launcher_path.write_text(
-        "#!/bin/sh\nexec python3 -m harness_foundry_runtime.cli \"$@\"\n",
-        encoding="utf-8",
-    )
-    launcher_path.chmod(0o755)
     descriptor_hash = file_sha256(descriptor_path)
     launcher_hash = file_sha256(launcher_path)
+    entry_hash = file_sha256(entry_path)
+    runtime_file_hashes = {
+        path.relative_to(execution_root).as_posix(): file_sha256(path)
+        for path in vendored_files
+    }
 
     def materialized(state: dict[str, Any]) -> None:
         state["driver"].update(
@@ -473,12 +513,16 @@ def bootstrap_apply(
                 "materialized": True,
                 "descriptor_sha256": descriptor_hash,
                 "launcher_sha256": launcher_hash,
+                "entry_sha256": entry_hash,
+                "vendored_runtime_file_count": len(runtime_file_hashes),
             }
         )
         state["evidence_index"].update(
             {
                 descriptor_path.relative_to(execution_root).as_posix(): descriptor_hash,
                 launcher_path.relative_to(execution_root).as_posix(): launcher_hash,
+                entry_path.relative_to(execution_root).as_posix(): entry_hash,
+                **runtime_file_hashes,
             }
         )
 
@@ -503,6 +547,7 @@ def bootstrap_apply(
         raise RuntimeViolation(
             "PYTHON_VERSION_UNSUPPORTED", sys.version.split()[0]
         )
+    probe = _launch_driver_probe(launcher_path, execution_root)
 
     runtime_evidence = {
         "schema_version": "1.0",
@@ -511,6 +556,11 @@ def bootstrap_apply(
         "python_version": sys.version.split()[0],
         "descriptor_sha256": descriptor_hash,
         "launcher_sha256": launcher_hash,
+        "entry_sha256": entry_hash,
+        "vendored_runtime_file_hashes": runtime_file_hashes,
+        "python_executable": sys.executable,
+        "python_executable_sha256": file_sha256(Path(sys.executable)),
+        "driver_probe": probe,
         "candidate_content_sha256": tree_sha256(candidate),
         "status": "PASS",
     }
@@ -542,7 +592,8 @@ def bootstrap_apply(
         _append_unique(
             state["locally_closed_nodes"], "PROGRAM_DRIVER_RUNTIME_VERIFIED"
         )
-        state["next_human_gate"] = "EXECUTION_AUTHORIZATION_REQUIRED"
+        state["next_human_gate"] = None
+        state["next_required_action"] = "REGISTER_COMMAND_OVERLAYS"
 
     state = store.append(
         "RUNTIME_VERIFICATION_CONSUMED",
@@ -562,9 +613,254 @@ def bootstrap_apply(
         "driver_runtime_verified": True,
         "effective_mode": "A1_PLAN_ONLY",
         "execution_authorization": "NOT_GRANTED",
-        "next_human_gate": "EXECUTION_AUTHORIZATION_REQUIRED",
+        "next_human_gate": None,
+        "next_required_action": "REGISTER_COMMAND_OVERLAYS",
         "commands_executed": False,
         "workpacks_executed": False,
+    }
+
+
+def _launch_driver_probe(
+    launcher_path: Path, execution_root: Path
+) -> dict[str, Any]:
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"PYTHONPATH", "PYTHONHOME"}
+    }
+    environment["PYTHONNOUSERSITE"] = "1"
+    try:
+        completed = subprocess.run(
+            [
+                str(launcher_path),
+                "status",
+                "--execution-root",
+                str(execution_root),
+            ],
+            cwd=execution_root,
+            env=environment,
+            check=False,
+            capture_output=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeViolation(
+            "DRIVER_LAUNCH_FAILED", str(exc)
+        ) from exc
+    stdout = completed.stdout.decode("utf-8", errors="replace")
+    stderr = completed.stderr.decode("utf-8", errors="replace")
+    if completed.returncode != 0:
+        raise RuntimeViolation(
+            "DRIVER_LAUNCH_FAILED",
+            f"exit={completed.returncode}; stderr={stderr[:500]}",
+        )
+    try:
+        report = json.loads(stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeViolation(
+            "DRIVER_READBACK_INVALID", str(exc)
+        ) from exc
+    if (
+        not isinstance(report, dict)
+        or report.get("status") != "PASS"
+        or report.get("driver_runtime_verified") is not False
+    ):
+        raise RuntimeViolation(
+            "DRIVER_READBACK_INVALID", stdout[:500]
+        )
+    return {
+        "exit_code": completed.returncode,
+        "stdout_sha256": json_sha256({"stdout": stdout}),
+        "stderr_sha256": json_sha256({"stderr": stderr}),
+        "program_id": report.get("program_id"),
+        "runtime_revision": report.get("runtime_revision"),
+        "driver_runtime_verified_before_consumption": False,
+        "status": "PASS",
+    }
+
+
+def register_command_overlays(
+    execution_root: str | Path, bundle_path: str | Path
+) -> dict[str, Any]:
+    store = RuntimeStore(execution_root)
+    state = store.load_state()
+    bundle = read_json(Path(bundle_path).expanduser().resolve())
+    if state.get("driver", {}).get("runtime_verified") is not True:
+        return _overlay_failure(
+            "DRIVER_RUNTIME_NOT_VERIFIED",
+            "bootstrap verification is required",
+        )
+    authorization = state.get("authorization")
+    if (
+        isinstance(authorization, Mapping)
+        and authorization.get("status") == "ACTIVE"
+    ):
+        return _overlay_failure(
+            "OVERLAY_REGISTRATION_WITH_AUTHORIZATION_FORBIDDEN",
+            str(authorization.get("authorization_id")),
+        )
+    for field in (
+        "program_id",
+        "epoch_id",
+        "candidate_content_sha256",
+    ):
+        if bundle.get(field) != state.get(field):
+            return _overlay_failure(
+                "COMMAND_OVERLAY_BINDING_MISMATCH", field
+            )
+    if bundle.get("overlay_kind") != "RESOLVED_COMMAND_OVERLAY_BUNDLE":
+        return _overlay_failure(
+            "COMMAND_OVERLAY_KIND_INVALID",
+            str(bundle.get("overlay_kind")),
+        )
+    manifests = bundle.get("manifests")
+    if not isinstance(manifests, Mapping) or not manifests:
+        return _overlay_failure(
+            "COMMAND_OVERLAY_MANIFESTS_INVALID", "manifests"
+        )
+    nodes = {
+        node["node_id"]: node
+        for node in state.get("control_plan", {}).get("nodes", [])
+    }
+    validated: dict[str, dict[str, Any]] = {}
+    for node_id, manifest in manifests.items():
+        node = nodes.get(node_id)
+        if node is None:
+            return _overlay_failure(
+                "COMMAND_OVERLAY_NODE_UNKNOWN", str(node_id)
+            )
+        if (
+            node.get("human_gate") is True
+            or node_id in ALWAYS_HUMAN_GATES
+        ):
+            return _overlay_failure(
+                "COMMAND_OVERLAY_HUMAN_GATE_FORBIDDEN", str(node_id)
+            )
+        if node.get("auto_advance_eligible") is not True:
+            return _overlay_failure(
+                "COMMAND_OVERLAY_NODE_NOT_AUTOMATABLE", str(node_id)
+            )
+        if node_id in state.get("completed_nodes", []):
+            return _overlay_failure(
+                "COMMAND_OVERLAY_NODE_ALREADY_COMPLETED", str(node_id)
+            )
+        if not isinstance(manifest, Mapping):
+            return _overlay_failure(
+                "COMMAND_OVERLAY_MANIFEST_INVALID", str(node_id)
+            )
+        try:
+            _validate_resolved_manifest(
+                state,
+                node,
+                manifest,
+                authorized_write_roots=None,
+            )
+        except RuntimeViolation as exc:
+            return _overlay_failure(exc.code, exc.message)
+        validated[node_id] = deepcopy(dict(manifest))
+
+    state_root = lexical_path(state["execution_root"])
+    overlay_root = state_root / "control_plane/resolved_commands"
+    bindings: dict[str, dict[str, str]] = {}
+    for node_id, manifest in validated.items():
+        manifest_sha256 = json_sha256(manifest)
+        node_key = json_sha256({"node_id": node_id})[:16]
+        path = overlay_root / f"{node_key}-{manifest_sha256}.json"
+        if path.is_file():
+            existing = read_json(path)
+            if existing != manifest:
+                raise RuntimeViolation(
+                    "COMMAND_OVERLAY_HASH_COLLISION", node_id
+                )
+        else:
+            write_json(path, manifest)
+        bindings[node_id] = {
+            "path": str(path),
+            "sha256": file_sha256(path),
+        }
+    bundle_sha256 = json_sha256(bundle)
+
+    def registered(current: dict[str, Any]) -> None:
+        current_authorization = current.get("authorization")
+        if (
+            isinstance(current_authorization, Mapping)
+            and current_authorization.get("status") == "ACTIVE"
+        ):
+            raise RuntimeViolation(
+                "OVERLAY_REGISTRATION_WITH_AUTHORIZATION_FORBIDDEN",
+                str(current_authorization.get("authorization_id")),
+            )
+        current_nodes = {
+            node["node_id"]: node
+            for node in current["control_plan"]["nodes"]
+        }
+        for node_id, binding in bindings.items():
+            current_nodes[node_id]["command_manifest"] = deepcopy(
+                binding
+            )
+            relative = (
+                Path(binding["path"])
+                .relative_to(state_root)
+                .as_posix()
+            )
+            current["evidence_index"][relative] = binding["sha256"]
+        next_node = _unique_next_node(current)
+        if (
+            next_node is not None
+            and isinstance(
+                next_node.get("command_manifest"), Mapping
+            )
+        ):
+            current["next_required_action"] = (
+                "PLAN_EXECUTION_AUTHORIZATION"
+            )
+            current["next_human_gate"] = (
+                "EXECUTION_AUTHORIZATION_REQUIRED"
+            )
+        current.setdefault("command_overlay_history", []).append(
+            {
+                "bundle_sha256": bundle_sha256,
+                "registered_at": utc_now(),
+                "command_manifests": deepcopy(bindings),
+                "execution_authority_granted": False,
+            }
+        )
+
+    result = store.append(
+        "COMMAND_OVERLAYS_REGISTERED",
+        {
+            "bundle_sha256": bundle_sha256,
+            "node_ids": sorted(bindings),
+            "manifest_hashes": {
+                node_id: binding["sha256"]
+                for node_id, binding in bindings.items()
+            },
+            "execution_authority_granted": False,
+        },
+        mutate=registered,
+        expected_revision=state["revision"],
+    )
+    return {
+        "schema_version": "1.0",
+        "status": "PASS",
+        "program_id": result["state"]["program_id"],
+        "epoch_id": result["state"]["epoch_id"],
+        "bundle_sha256": bundle_sha256,
+        "command_manifests": bindings,
+        "execution_authority_granted": False,
+        "commands_executed": False,
+        "writes_performed": True,
+    }
+
+
+def _overlay_failure(code: str, message: str) -> dict[str, Any]:
+    return {
+        "schema_version": "1.0",
+        "status": "FAIL",
+        "blocking_findings": [{"code": code, "message": message}],
+        "writes_performed": False,
+        "commands_executed": False,
+        "execution_authority_granted": False,
     }
 
 
@@ -635,6 +931,10 @@ def authorization_plan(
     known_nodes = {
         node["node_id"] for node in state.get("control_plan", {}).get("nodes", [])
     }
+    control_nodes = {
+        node["node_id"]: node
+        for node in state.get("control_plan", {}).get("nodes", [])
+    }
     nodes = request.get("dag_node_ids", [])
     if (
         not isinstance(nodes, list)
@@ -671,6 +971,26 @@ def authorization_plan(
                 findings.append(
                     {
                         "code": "COMMAND_MANIFEST_HASH_MISMATCH",
+                        "message": str(node_id),
+                    }
+                )
+            registered = control_nodes.get(node_id, {}).get(
+                "command_manifest"
+            )
+            if not isinstance(registered, Mapping):
+                findings.append(
+                    {
+                        "code": "COMMAND_MANIFEST_NOT_REGISTERED",
+                        "message": str(node_id),
+                    }
+                )
+            elif (
+                registered.get("path") != str(path)
+                or registered.get("sha256") != binding.get("sha256")
+            ):
+                findings.append(
+                    {
+                        "code": "COMMAND_MANIFEST_REGISTRATION_MISMATCH",
                         "message": str(node_id),
                     }
                 )
@@ -815,6 +1135,7 @@ def authorization_apply(
         current["authorization"] = active
         current["effective_mode"] = "A3_PROGRAM_BOUNDED"
         current["next_human_gate"] = None
+        current["next_required_action"] = "ADVANCE_UNTIL_GATE"
         current["authorization_history"].append(
             {
                 "authorization_id": active["authorization_id"],
@@ -888,6 +1209,12 @@ def status(execution_root: str | Path) -> dict[str, Any]:
         "runtime_revision": state["revision"],
         "effective_mode": state["effective_mode"],
         "driver_runtime_verified": state["driver"]["runtime_verified"],
+        "next_required_action": state.get("next_required_action"),
+        "registered_command_manifest_count": sum(
+            1
+            for node in state["control_plan"]["nodes"]
+            if isinstance(node.get("command_manifest"), Mapping)
+        ),
         "highest_touched": (
             state["touched_nodes"][-1] if state["touched_nodes"] else None
         ),
@@ -991,6 +1318,16 @@ def plan_next(execution_root: str | Path) -> dict[str, Any]:
             "decision": "HUMAN_GATE",
             "node_id": node_id,
             "human_gate_id": "BOOTSTRAP_APPROVAL_REQUIRED",
+        }
+    if not isinstance(node.get("command_manifest"), Mapping):
+        return {
+            "decision": "PREPARATION_REQUIRED",
+            "node_id": node_id,
+            "required_action": "REGISTER_COMMAND_OVERLAYS",
+            "reason": {
+                "code": "COMMAND_OVERLAY_REQUIRED",
+                "message": node_id,
+            },
         }
     authorization = state.get("authorization")
     issue = _authorization_issue(state, node, authorization)
@@ -1625,7 +1962,30 @@ def _validate_command_manifest(
     node: Mapping[str, Any],
     manifest: Mapping[str, Any],
 ) -> None:
+    authorization = state["authorization"]
+    _validate_resolved_manifest(
+        state,
+        node,
+        manifest,
+        authorized_write_roots=authorization[
+            "allowed_write_roots"
+        ],
+    )
+
+
+def _validate_resolved_manifest(
+    state: Mapping[str, Any],
+    node: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+    *,
+    authorized_write_roots: Iterable[str] | None,
+) -> None:
     node_id = node["node_id"]
+    if manifest.get("schema_version") != "1.0":
+        raise RuntimeViolation(
+            "COMMAND_MANIFEST_SCHEMA_UNSUPPORTED",
+            str(manifest.get("schema_version")),
+        )
     if manifest.get("node_id") != node_id:
         raise RuntimeViolation(
             "COMMAND_MANIFEST_NODE_MISMATCH", node_id
@@ -1634,6 +1994,22 @@ def _validate_command_manifest(
     if not isinstance(commands, list) or not commands:
         raise RuntimeViolation(
             "COMMAND_MANIFEST_EMPTY", node_id
+        )
+    command_ids = [
+        command.get("command_id")
+        for command in commands
+        if isinstance(command, Mapping)
+    ]
+    if (
+        len(command_ids) != len(commands)
+        or any(
+            not isinstance(command_id, str) or not command_id
+            for command_id in command_ids
+        )
+        or len(command_ids) != len(set(command_ids))
+    ):
+        raise RuntimeViolation(
+            "COMMAND_IDS_INVALID", node_id
         )
     stages = {
         command.get("stage")
@@ -1657,11 +2033,14 @@ def _validate_command_manifest(
         raise RuntimeViolation(
             "INDEPENDENT_REVIEW_REQUIRED", node_id
         )
-    authorization = state["authorization"]
-    authorized_writes = [
-        lexical_path(path)
-        for path in authorization["allowed_write_roots"]
-    ]
+    authorized_writes = (
+        [
+            lexical_path(path)
+            for path in authorized_write_roots
+        ]
+        if authorized_write_roots is not None
+        else None
+    )
     node_writes = [
         lexical_path(path)
         for path in node.get("allowed_write_paths", [])
@@ -1679,6 +2058,7 @@ def _validate_command_manifest(
             or not executable.is_file()
             or not isinstance(argv, list)
             or not argv
+            or not all(isinstance(item, str) for item in argv)
             or argv[0] != str(executable)
             or not cwd.is_absolute()
             or not cwd.is_dir()
@@ -1698,7 +2078,14 @@ def _validate_command_manifest(
             )
         for path in declared_writes:
             lexical = lexical_path(path)
-            if not any(
+            if not lexically_within(
+                lexical, state["execution_root"]
+            ):
+                raise RuntimeViolation(
+                    "COMMAND_WRITE_SCOPE_OUTSIDE_EXECUTION_ROOT",
+                    str(path),
+                )
+            if authorized_writes is not None and not any(
                 lexically_within(lexical, root)
                 for root in authorized_writes
             ):
@@ -1714,14 +2101,27 @@ def _validate_command_manifest(
                     "COMMAND_WRITE_SCOPE_OUTSIDE_NODE", str(path)
                 )
         if not (
-            lexically_within(cwd, state["execution_root"])
-            or lexically_within(cwd, state["candidate_root"])
+            lexically_within(
+                cwd.resolve(), Path(state["execution_root"]).resolve()
+            )
+            or lexically_within(
+                cwd.resolve(), Path(state["candidate_root"]).resolve()
+            )
         ):
             raise RuntimeViolation(
                 "COMMAND_CWD_OUTSIDE_BOUND_ROOTS", str(cwd)
             )
     environment_id = manifest.get("environment_id")
-    if environment_id not in authorization["environment_ids"]:
+    if environment_id != node.get("environment_id"):
+        raise RuntimeViolation(
+            "COMMAND_ENVIRONMENT_NODE_MISMATCH",
+            str(environment_id),
+        )
+    if (
+        authorized_write_roots is not None
+        and environment_id
+        not in state["authorization"]["environment_ids"]
+    ):
         raise RuntimeViolation(
             "COMMAND_ENVIRONMENT_UNAUTHORIZED", str(environment_id)
         )
