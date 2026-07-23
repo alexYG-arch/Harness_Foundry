@@ -62,6 +62,14 @@ class RuntimeViolation(RuntimeError):
 
 def validate_handoff_document(handoff: Mapping[str, Any]) -> list[dict[str, str]]:
     findings: list[dict[str, str]] = []
+    program_id = handoff.get("program_id")
+    if not isinstance(program_id, str) or not program_id:
+        findings.append(
+            {
+                "code": "HANDOFF_PROGRAM_ID_MISSING",
+                "message": "program_id",
+            }
+        )
     excluded = {
         "handoff_sha256",
         "status",
@@ -93,6 +101,54 @@ def validate_handoff_document(handoff: Mapping[str, Any]) -> list[dict[str, str]
         findings.append(
             {"code": "CANDIDATE_HASH_DRIFT", "message": str(candidate)}
         )
+    elif isinstance(program_id, str) and program_id:
+        for name in (
+            "FACTORY_PROVENANCE.json",
+            "PROGRAM_STATE.json",
+            "PROGRAM_DRIVER_STATE.json",
+            "ENGINEERING_PROJECT_DAG.json",
+            "EXECUTION_AUTHORIZATION.json",
+        ):
+            try:
+                document = read_json(candidate / name)
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                findings.append(
+                    {
+                        "code": "HANDOFF_PROGRAM_ID_BINDING_UNREADABLE",
+                        "message": f"{name}: {exc}",
+                    }
+                )
+                continue
+            if document.get("program_id") != program_id:
+                findings.append(
+                    {
+                        "code": "HANDOFF_PROGRAM_ID_MISMATCH",
+                        "message": name,
+                    }
+                )
+        context_path = candidate / "START_CONTEXT.json"
+        if context_path.is_file():
+            try:
+                context = read_json(context_path)
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                findings.append(
+                    {
+                        "code": "HANDOFF_PROGRAM_ID_BINDING_UNREADABLE",
+                        "message": f"START_CONTEXT.json: {exc}",
+                    }
+                )
+            else:
+                context_program_id = context.get("program_id")
+                if (
+                    context_program_id is not None
+                    and context_program_id != program_id
+                ):
+                    findings.append(
+                        {
+                            "code": "HANDOFF_PROGRAM_ID_MISMATCH",
+                            "message": "START_CONTEXT.json",
+                        }
+                    )
     profile = handoff.get("automation_profile")
     if (
         not isinstance(profile, Mapping)

@@ -633,10 +633,52 @@ def export_execution_handoff(
     )
     charter_hash = legacy._file_hash(candidate / "PROGRAM_CHARTER.md")
     profile_hash = legacy._file_hash(candidate / "PROFILE_LOCK.json")
+    program_id = provenance.get("program_id")
+    if not isinstance(program_id, str) or not program_id:
+        findings.append(
+            _finding(
+                "HANDOFF_PROGRAM_ID_MISSING",
+                "FACTORY_PROVENANCE.json",
+            )
+        )
+    for name in (
+        "PROGRAM_STATE.json",
+        "PROGRAM_DRIVER_STATE.json",
+        "ENGINEERING_PROJECT_DAG.json",
+        "EXECUTION_AUTHORIZATION.json",
+    ):
+        document = legacy._read_json(candidate / name, findings)
+        if (
+            isinstance(document, dict)
+            and document.get("program_id") != program_id
+        ):
+            findings.append(
+                _finding("HANDOFF_PROGRAM_ID_MISMATCH", name)
+            )
+    context_program_id = context.get("program_id")
+    if (
+        context_program_id is not None
+        and context_program_id != program_id
+    ):
+        findings.append(
+            _finding(
+                "HANDOFF_PROGRAM_ID_MISMATCH",
+                "START_CONTEXT.json",
+            )
+        )
+    if findings:
+        return {
+            "schema_version": "1.0",
+            "status": "FAIL",
+            "candidate_root": str(candidate),
+            "blocking_findings": findings,
+            "writes_performed": False,
+            "commands_executed": False,
+        }
     body = {
         "schema_version": "1.0",
         "handoff_kind": "HF28_STATIC_CANDIDATE_TO_CONTROLLED_RUNTIME",
-        "program_id": context.get("program_id"),
+        "program_id": program_id,
         "candidate_root": str(candidate),
         "execution_root": context.get("execution_root"),
         "candidate_content_sha256": legacy._candidate_tree_hash(candidate),
@@ -680,7 +722,12 @@ def validate_handoff(
         "blocking_findings": (
             []
             if handoff.get("status") == "PASS"
-            else handoff.get("validation", {}).get("blocking_findings", [])
+            else handoff.get(
+                "blocking_findings",
+                handoff.get("validation", {}).get(
+                    "blocking_findings", []
+                ),
+            )
         ),
         "writes_performed": False,
         "commands_executed": False,

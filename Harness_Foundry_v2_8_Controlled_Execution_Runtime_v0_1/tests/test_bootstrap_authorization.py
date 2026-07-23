@@ -16,12 +16,34 @@ from harness_foundry_runtime.engine import (
     status,
     verify_run,
 )
-from harness_foundry_runtime.util import file_sha256, write_json
+from harness_foundry_runtime.util import file_sha256, json_sha256, write_json
 
 from support import SyntheticRuntime
 
 
 class BootstrapAuthorizationTests(unittest.TestCase):
+    @staticmethod
+    def _rewrite_handoff(
+        fixture: SyntheticRuntime, **changes: object
+    ) -> None:
+        handoff = json.loads(
+            fixture.handoff_path.read_text(encoding="utf-8")
+        )
+        handoff.update(changes)
+        excluded = {
+            "handoff_sha256",
+            "status",
+            "writes_performed",
+            "commands_executed",
+        }
+        body = {
+            key: value
+            for key, value in handoff.items()
+            if key not in excluded
+        }
+        handoff["handoff_sha256"] = json_sha256(body)
+        write_json(fixture.handoff_path, handoff)
+
     def test_bootstrap_bundle_has_five_independent_child_authorizations(
         self,
     ) -> None:
@@ -57,6 +79,40 @@ class BootstrapAuthorizationTests(unittest.TestCase):
                 RuntimeViolation, "bootstrap bundle"
             ):
                 bootstrap_apply(fixture.bundle_path, "wrong")
+            self.assertFalse(fixture.execution.exists())
+
+    def test_bootstrap_rejects_missing_handoff_program_id(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = SyntheticRuntime(Path(temporary))
+            self._rewrite_handoff(fixture, program_id=None)
+
+            result = bootstrap_plan(
+                fixture.handoff_path, fixture.execution
+            )
+            codes = {
+                item["code"] for item in result["blocking_findings"]
+            }
+
+            self.assertEqual(result["status"], "FAIL")
+            self.assertIn("HANDOFF_PROGRAM_ID_MISSING", codes)
+            self.assertFalse(fixture.execution.exists())
+
+    def test_bootstrap_rejects_program_id_binding_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = SyntheticRuntime(Path(temporary))
+            self._rewrite_handoff(
+                fixture, program_id="PROGRAM-OTHER"
+            )
+
+            result = bootstrap_plan(
+                fixture.handoff_path, fixture.execution
+            )
+            codes = {
+                item["code"] for item in result["blocking_findings"]
+            }
+
+            self.assertEqual(result["status"], "FAIL")
+            self.assertIn("HANDOFF_PROGRAM_ID_MISMATCH", codes)
             self.assertFalse(fixture.execution.exists())
 
     def test_a1_plans_but_does_not_advance_without_separate_authorization(

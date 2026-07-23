@@ -741,6 +741,7 @@ def _patch_critical_documents(
     start.update(
         {
             "start_context_id": f"START-CONTEXT-{context['target_id']}",
+            "program_id": context["program_id"],
             "package_id": context["package_id"],
             "package_version": "0.2.0-draft",
             "target_id": context["target_id"],

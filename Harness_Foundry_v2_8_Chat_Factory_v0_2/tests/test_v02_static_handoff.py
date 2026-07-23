@@ -85,6 +85,11 @@ class StaticHandoffTests(unittest.TestCase):
             candidate, execution = self._compile(Path(temporary))
             handoff = export_execution_handoff(candidate)
             validation = validate_handoff(candidate)
+            context = json.loads(
+                (candidate / "START_CONTEXT.json").read_text(
+                    encoding="utf-8"
+                )
+            )
             body = {
                 key: value
                 for key, value in handoff.items()
@@ -106,9 +111,57 @@ class StaticHandoffTests(unittest.TestCase):
             ).hexdigest()
 
             self.assertEqual(handoff["handoff_sha256"], expected)
+            self.assertEqual(
+                handoff["program_id"], "PROGRAM-GENERIC-HARNESS"
+            )
+            self.assertEqual(
+                context["program_id"], "PROGRAM-GENERIC-HARNESS"
+            )
             self.assertEqual(validation["status"], "PASS")
             self.assertFalse(execution.exists())
             self.assertFalse(handoff["execution_authorization_inherited"])
+
+    def test_handoff_uses_provenance_identity_for_existing_candidate(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            candidate, _execution = self._compile(Path(temporary))
+            context_path = candidate / "START_CONTEXT.json"
+            context = json.loads(context_path.read_text(encoding="utf-8"))
+            context.pop("program_id", None)
+            context_path.write_text(
+                json.dumps(context, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
+            handoff = export_execution_handoff(candidate)
+
+            self.assertEqual(handoff["status"], "PASS", handoff)
+            self.assertEqual(
+                handoff["program_id"], "PROGRAM-GENERIC-HARNESS"
+            )
+
+    def test_handoff_rejects_cross_document_program_id_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            candidate, _execution = self._compile(Path(temporary))
+            context_path = candidate / "START_CONTEXT.json"
+            context = json.loads(context_path.read_text(encoding="utf-8"))
+            context["program_id"] = "PROGRAM-OTHER"
+            context_path.write_text(
+                json.dumps(context, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
+            handoff = export_execution_handoff(candidate)
+            validation = validate_handoff(candidate)
+            codes = {
+                item["code"]
+                for item in handoff.get("blocking_findings", [])
+            }
+
+            self.assertEqual(handoff["status"], "FAIL")
+            self.assertEqual(validation["status"], "FAIL")
+            self.assertIn("HANDOFF_PROGRAM_ID_MISMATCH", codes)
 
     def test_static_validation_and_handoff_cli_commands(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

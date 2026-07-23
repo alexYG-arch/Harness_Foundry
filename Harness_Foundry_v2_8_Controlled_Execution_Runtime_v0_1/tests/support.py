@@ -57,6 +57,20 @@ class SyntheticRuntime:
             self.candidate / "PROFILE_LOCK.json",
             {"schema_version": "1.0", "profile": "FULL"},
         )
+        for name in (
+            "FACTORY_PROVENANCE.json",
+            "PROGRAM_STATE.json",
+            "PROGRAM_DRIVER_STATE.json",
+            "EXECUTION_AUTHORIZATION.json",
+            "START_CONTEXT.json",
+        ):
+            write_json(
+                self.candidate / name,
+                {
+                    "schema_version": "1.0",
+                    "program_id": self.program_id,
+                },
+            )
         nodes = []
         predecessor = None
         for index, node_id in enumerate(BOOTSTRAP_NODES):
@@ -105,7 +119,11 @@ class SyntheticRuntime:
             )
         write_json(
             self.candidate / "ENGINEERING_PROJECT_DAG.json",
-            {"schema_version": "1.0", "nodes": nodes},
+            {
+                "schema_version": "1.0",
+                "program_id": self.program_id,
+                "nodes": nodes,
+            },
         )
         write_json(
             self.candidate / "RELEASE_PIPELINE_MANIFEST.json",
