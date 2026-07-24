@@ -1,4 +1,4 @@
-# Harness Foundry v2.8 Chat Factory v0.1
+# Harness Foundry v2.8 Chat Factory v0.2
 
 这是与 `Harness_Foundry_v2_8_Start_Package` 并列的工程化 Authoring Factory。用户在 Codex Chat 中提出 Agent、Harness 或 Hybrid 需求；Codex 负责语义澄清，Factory 负责确定性状态、Hash、冻结、编译、静态校验和候选发布。
 
@@ -11,7 +11,7 @@ AUTHORING_STOP
 
 它不批准 Start Package，不注册或启动 Program Driver，不执行 Workpack，不搭建三工程，不构建或安装 Harness，也不签发 Linkage/Conformance 结论。三工程、Driver、P3 防跳、Release、Authorization、Loop、Repair、Invalidation 与 Reentry 必须完整出现在候选包中，但保持 `PLANNED_NOT_STARTED`。
 
-候选发布后，`validate-candidate` 仅在外部 execution root 存在与候选内容 Hash、Driver 可执行文件 Hash、授权和外部运行时证明一致的验证回执时，允许合同声明的 Build Program Driver 入口已经物化；这不会把候选校验提升为运行时验证，也不会允许其他计划工具或目标程序预先存在。
+候选发布后，`validate-candidate` 与 `validate-candidate-static` 都只读取候选目录和锁定规范。它们不会解析 execution root 中的符号链接，不验证真实 executable、授权、Driver 或运行时回执，也不会因为 execution root 后续物化而改变静态 PASS。上述动态责任属于独立的 `Harness_Foundry_v2_8_Controlled_Execution_Runtime_v0_1`。
 
 ## 在 Codex Chat 中使用
 
@@ -44,13 +44,25 @@ SQLite 是权威 Event Store；JSON/JSONL 是可再生成的只读视图。每�
 ## 关键安全性质
 
 - 只接受固定 sibling 2.8 规范根；逐文件 Hash、整体 Hash、版本、validator 身份均锁定。
-- 本地来源默认只读引用并绑定 Hash；可显式选择不可变快照。HTTP URL、Connector、Plugin、MCP 不在 v0.1 输入范围。
+- 本地来源默认只读引用并绑定 Hash；可显式选择不可变快照。HTTP URL、Connector、Plugin、MCP 不在 v0.2 输入范围。
 - `program_id`、`target.id` 和所有输出路径经过路径安全与重叠检查；规范、Factory、runs 和来源目录不可作为输出。
 - 冻结后变更必须 `REOPEN`，进入新 epoch，并选择新的空输出路径；旧候选不被覆盖。
 - Codex executor、最终 Runtime 与 Build Program Driver 分离；未确认的 CLI argv 不会被伪造，Python/Harness 自报不能证明 Codex 调用。
 - 候选内没有模板文件名、占位符、假 Hash、`PLANNED-REF` 或预授权执行状态。
 - 每个 Intent Atom 在冻结 IR 中绑定项目 Workpack、Stage、可选 Release Step 与 Owner；用户可在 Readback 中调整，编译器不得事后改路由。
-- 独立只读 validator 覆盖固定清单、双向 traceability、P3、20 节点三工程 DAG、23 节点发布顺序、16 个项目 Workpack 的依赖来源/产出/命令/Capsule/Result/Loop/Hash 闭环、权限、Loop/Repair、伪回执和 Authoring Stop。
+- 独立只读静态 validator 覆盖固定清单、双向 traceability、P3、20 节点三工程 DAG、23 节点发布顺序、16 个项目 Workpack 的依赖来源/产出/命令/Capsule/Result/Loop/Hash 闭环，以及 Authoring Stop。旧运行实例识别仅保留为迁移适配材料，不参与新候选 PASS。
+
+## Automation Profile 与执行交接
+
+Requirement IR 的 `automation` 是版本化合同，默认 `A1_PLAN_ONLY` 且 `activation_default=DISABLED`。候选仍固定为空授权、未启动 Driver、`auto_start_generated_workpacks=false`；Profile 只声明未来运行时可申请的上限。
+
+```bash
+python3 tools/hffactory.py validate-candidate-static /absolute/candidate --json
+python3 tools/hffactory.py validate-handoff /absolute/candidate --json
+python3 tools/hffactory.py export-execution-handoff /absolute/candidate --json
+```
+
+`export-execution-handoff` 只在 stdout 输出绑定 Candidate、Requirement IR、Spec、Charter、Profile 与 Automation Profile Hash 的描述；它不创建 execution root、不签发授权、不启动 Driver。运行时实际预算取 Automation Profile 与独立执行授权预算的较小值。
 
 ## 开发与验证
 

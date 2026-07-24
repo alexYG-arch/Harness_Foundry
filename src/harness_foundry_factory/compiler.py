@@ -31,6 +31,8 @@ from .traceability import WORKPACK_PROJECTS, normalize_ir_coverage
 
 PLACEHOLDER_RE = re.compile(r"<[^<>]+>")
 SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+FACTORY_ID = "HARNESS_FOUNDRY_V2_8_CHAT_FACTORY_V0_2"
+FACTORY_VERSION = "0.2.0"
 
 
 def compile_candidate(
@@ -65,12 +67,20 @@ def compile_start_package(
     """Compile, fully materialize, and atomically publish one authoring candidate."""
 
     ir = normalize_ir_coverage(requirement_ir)
+    candidate = Path(candidate_root).expanduser().resolve()
+    ir_target = ir.get("target")
+    if isinstance(ir_target, dict) and ir_target.get("execution_root") in (
+        None,
+        "",
+    ):
+        ir_target["execution_root"] = str(
+            candidate.with_name(f"{candidate.name}_Execution_Runtime")
+        )
     target = _validate_ir(ir)
     spec = Path(spec_root or default_spec_root()).expanduser().resolve()
     staging = Path(staging_root).expanduser().resolve()
-    candidate = Path(candidate_root).expanduser().resolve()
     execution = Path(
-        str(target.get("execution_root") or candidate)
+        str(target["execution_root"])
     ).expanduser().resolve()
     if not spec.is_dir():
         raise ValueError(f"v2.8 spec root does not exist: {spec}")
@@ -153,7 +163,8 @@ def compile_start_package(
         staging / "FACTORY_PROVENANCE.json",
         {
             "schema_version": "1.0",
-            "factory_id": "HARNESS_FOUNDRY_V2_8_CHAT_FACTORY_V0_1",
+            "factory_id": FACTORY_ID,
+            "factory_version": FACTORY_VERSION,
             "program_id": program_id,
             "target_id": target_id,
             "requirement_ir_sha256": ir_hash,
@@ -415,11 +426,67 @@ def _validate_ir(ir: Mapping[str, Any]) -> dict[str, Any]:
     automation = ir.get("automation", {})
     if not isinstance(automation, Mapping):
         raise ValueError("requirement_ir.automation must be an object")
-    for key in ("max_transitions", "max_loop_rounds"):
+    required_automation_fields = {
+        "schema_version",
+        "requested_level",
+        "activation_default",
+        "max_transitions",
+        "max_loop_rounds",
+        "max_wall_time_seconds",
+        "stop_gate",
+        "retryable_error_codes",
+        "mandatory_human_gate_ids",
+        "real_target_install_excluded",
+        "execution_mode",
+        "auto_start_generated_workpacks",
+        "execution_started",
+    }
+    if set(automation) != required_automation_fields:
+        raise ValueError(
+            "requirement_ir.automation must use the complete v1.0 Automation Profile"
+        )
+    if automation.get("schema_version") != "1.0":
+        raise ValueError("requirement_ir.automation.schema_version must be 1.0")
+    if automation.get("requested_level") not in {
+        "A0_DECLARE_ONLY",
+        "A1_PLAN_ONLY",
+        "A2_WORKPACK_BOUNDED",
+        "A3_PROGRAM_BOUNDED",
+    }:
+        raise ValueError("requirement_ir.automation.requested_level is invalid")
+    if (
+        automation.get("activation_default") != "DISABLED"
+        or automation.get("real_target_install_excluded") is not True
+        or automation.get("execution_mode") != "AUTHORING_ONLY"
+        or automation.get("auto_start_generated_workpacks") is not False
+        or automation.get("execution_started") is not False
+    ):
+        raise ValueError("requirement_ir.automation violates the authoring boundary")
+    for key in (
+        "max_transitions",
+        "max_loop_rounds",
+        "max_wall_time_seconds",
+    ):
         if key in automation and (
             not isinstance(automation[key], int) or automation[key] <= 0
         ):
             raise ValueError(f"requirement_ir.automation.{key} must be a positive integer")
+    for key in ("retryable_error_codes", "mandatory_human_gate_ids"):
+        if (
+            not isinstance(automation.get(key), list)
+            or not all(
+                isinstance(item, str) and item
+                for item in automation.get(key, [])
+            )
+            or len(set(automation.get(key, []))) != len(automation.get(key, []))
+        ):
+            raise ValueError(
+                f"requirement_ir.automation.{key} must contain unique strings"
+            )
+    if not isinstance(automation.get("stop_gate"), str) or not automation[
+        "stop_gate"
+    ]:
+        raise ValueError("requirement_ir.automation.stop_gate must be non-empty")
     return dict(target)
 
 
@@ -656,7 +723,7 @@ def _patch_critical_documents(
         {
             "package_id": context["package_id"],
             "target_id": context["target_id"],
-            "version": "0.1.0-draft",
+            "version": "0.2.0-draft",
             "status": "START_PACKAGE_AUTHORING_CANDIDATE",
         }
     )
@@ -674,8 +741,9 @@ def _patch_critical_documents(
     start.update(
         {
             "start_context_id": f"START-CONTEXT-{context['target_id']}",
+            "program_id": context["program_id"],
             "package_id": context["package_id"],
-            "package_version": "0.1.0-draft",
+            "package_version": "0.2.0-draft",
             "target_id": context["target_id"],
             "target_type": context["target_type"],
             "primary_runtime": context["primary_runtime"],
@@ -894,19 +962,61 @@ def _patch_critical_documents(
             },
         }
     )
+    automation = dict(ir.get("automation", {}))
+    automation_profile = {
+        "schema_version": "1.0",
+        "requested_level": str(
+            automation.get("requested_level", "A1_PLAN_ONLY")
+        ),
+        "activation_default": "DISABLED",
+        "max_transitions": int(automation.get("max_transitions", 32)),
+        "max_loop_rounds": int(automation.get("max_loop_rounds", 3)),
+        "max_wall_time_seconds": int(
+            automation.get("max_wall_time_seconds", 3600)
+        ),
+        "stop_gate": str(
+            automation.get("stop_gate", "P4_CERTIFIED_RELEASE_LOCK")
+        ),
+        "retryable_error_codes": list(
+            automation.get(
+                "retryable_error_codes",
+                ["RUNNER_TRANSPORT_TEMPORARY_FAILURE"],
+            )
+        ),
+        "mandatory_human_gate_ids": list(
+            automation.get(
+                "mandatory_human_gate_ids",
+                [
+                    "START_PACKAGE_HUMAN_APPROVAL",
+                    "P3_NOT_APPLICABLE_DECISION",
+                    "REAL_TARGET_INSTALL",
+                ],
+            )
+        ),
+        "real_target_install_excluded": True,
+    }
     docs["PROGRAM_AUTOMATION_POLICY.json"].update(
         {
             "program_id": context["program_id"],
             "default_mode": "AUTHORING_ONLY",
             "automatic_progress_default": False,
             "authoring_may_start_driver": False,
+            "automation_profile": automation_profile,
             "planned_limits_from_frozen_ir": {
-                "max_transitions": int(ir.get("automation", {}).get("max_transitions", 32)),
-                "max_loop_rounds": int(ir.get("automation", {}).get("max_loop_rounds", 3)),
-                "stop_gate": str(ir.get("automation", {}).get("stop_gate", "P4_CERTIFIED_RELEASE_LOCK")),
+                "max_transitions": automation_profile["max_transitions"],
+                "max_loop_rounds": automation_profile["max_loop_rounds"],
+                "max_wall_time_seconds": automation_profile[
+                    "max_wall_time_seconds"
+                ],
+                "stop_gate": automation_profile["stop_gate"],
             },
         }
     )
+    docs["PROGRAM_AUTOMATION_POLICY.json"].setdefault(
+        "controlled_auto_advance", {}
+    )["max_transitions_per_driver_invocation"] = automation_profile[
+        "max_transitions"
+    ]
     docs["EXECUTION_AUTHORIZATION.json"].update(
         {
             "program_id": context["program_id"],
@@ -923,7 +1033,7 @@ def _patch_critical_documents(
     docs["LOOP_STATE.json"].update(
         {"program_id": context["program_id"], "status": "NOT_STARTED", "authorization_ref": None, "current_iteration": 0, "promotion_eligible": False}
     )
-    max_loop_rounds = int(ir.get("automation", {}).get("max_loop_rounds", 3))
+    max_loop_rounds = automation_profile["max_loop_rounds"]
     docs["LOOP_POLICY.json"].setdefault("loop_types", {})[
         "WORKPACK_EXECUTION"
     ] = {
@@ -1959,6 +2069,37 @@ def _project_planned_interface_commands(
     return commands
 
 
+def _bind_project_command_modes(
+    manifest: dict[str, Any],
+    *,
+    project_id: str,
+    workpacks: list[Mapping[str, Any]],
+) -> None:
+    required_modes: dict[str, set[str]] = {}
+    for workpack in workpacks:
+        workpack_id = str(workpack.get("workpack_id", ""))
+        contract = PROJECT_WORKPACK_CONTRACTS.get(workpack_id)
+        if not contract or contract["project_id"] != project_id:
+            continue
+        for command_id in contract["command_ids"]:
+            required_modes.setdefault(str(command_id), set()).add(
+                str(contract["execution_mode"])
+            )
+    for command in manifest.get("commands", []):
+        if not isinstance(command, dict):
+            continue
+        command_id = str(command.get("command_id", ""))
+        if command_id not in required_modes:
+            continue
+        command["allowed_modes"] = sorted(required_modes[command_id])
+        command["command_sha256"] = _hash_without_field(
+            command, "command_sha256"
+        )
+    manifest["manifest_sha256"] = _hash_without_field(
+        manifest, "manifest_sha256"
+    )
+
+
 def _materialize_project_workpack_contracts(
     output: Path,
     *,
@@ -1973,6 +2114,12 @@ def _materialize_project_workpack_contracts(
     global_command_path = output / "COMMAND_MANIFEST.json"
     index = json.loads(index_path.read_text(encoding="utf-8"))
     global_commands = json.loads(global_command_path.read_text(encoding="utf-8"))
+    _bind_project_command_modes(
+        global_commands,
+        project_id=project_id,
+        workpacks=index.get("workpacks", []),
+    )
+    _write_json(global_command_path, global_commands)
     commands_by_id = {
         str(command["command_id"]): command
         for command in global_commands.get("commands", [])
@@ -2556,7 +2703,7 @@ def _recover_existing_candidate(
     except (OSError, UnicodeError, json.JSONDecodeError):
         raise FileExistsError(f"candidate root is not empty: {candidate}") from None
     if (
-        provenance.get("factory_id") != "HARNESS_FOUNDRY_V2_8_CHAT_FACTORY_V0_1"
+        provenance.get("factory_id") != FACTORY_ID
         or provenance.get("requirement_ir_sha256") != requirement_ir_sha256
         or provenance.get("spec_content_sha256") != spec_content_sha256
     ):

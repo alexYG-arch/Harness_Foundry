@@ -50,11 +50,22 @@ def build_parser() -> argparse.ArgumentParser:
     _add_json_flag(verify_run)
 
     validate = subparsers.add_parser("validate-candidate", help="Validate a generated candidate")
-    validate.add_argument("candidate_path", nargs="?")
-    validate.add_argument("--candidate-root")
-    validate.add_argument("--program-id")
-    _add_common_paths(validate, database=True)
-    _add_json_flag(validate)
+    _add_candidate_selector(validate)
+    validate_static = subparsers.add_parser(
+        "validate-candidate-static",
+        help="Validate only immutable candidate content",
+    )
+    _add_candidate_selector(validate_static)
+    validate_handoff = subparsers.add_parser(
+        "validate-handoff",
+        help="Validate the static candidate-to-runtime handoff",
+    )
+    _add_candidate_selector(validate_handoff)
+    export_handoff = subparsers.add_parser(
+        "export-execution-handoff",
+        help="Emit a Hash-bound runtime handoff without writing it",
+    )
+    _add_candidate_selector(export_handoff)
     return parser
 
 
@@ -79,7 +90,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = _service(args, program_id=args.program_id).readback(args.program_id)
         elif args.command == "verify-run":
             result = _service(args, program_id=args.program_id).verify_run(args.program_id)
-        elif args.command == "validate-candidate":
+        elif args.command in {
+            "validate-candidate",
+            "validate-candidate-static",
+            "validate-handoff",
+            "export-execution-handoff",
+        }:
             service = _service(
                 args,
                 require_store=bool(args.program_id),
@@ -91,13 +107,31 @@ def main(argv: Sequence[str] | None = None) -> int:
                     raise RequestValidationError(
                         "use either --program-id or a candidate path, not both"
                     )
-                result = service.validate_program_candidate(args.program_id)
+                if args.command in {
+                    "validate-candidate",
+                    "validate-candidate-static",
+                }:
+                    result = service.validate_program_candidate(args.program_id)
+                elif args.command == "validate-handoff":
+                    result = service.validate_program_handoff(args.program_id)
+                else:
+                    result = service.export_program_execution_handoff(
+                        args.program_id
+                    )
             else:
                 if not candidate_path:
                     raise RequestValidationError(
                         "validate-candidate requires a path or --program-id"
                     )
-                result = service.validate_candidate(candidate_path)
+                if args.command in {
+                    "validate-candidate",
+                    "validate-candidate-static",
+                }:
+                    result = service.validate_candidate(candidate_path)
+                elif args.command == "validate-handoff":
+                    result = service.validate_handoff(candidate_path)
+                else:
+                    result = service.export_execution_handoff(candidate_path)
         else:  # pragma: no cover - argparse enforces the closed command set
             parser.error(f"unknown command: {args.command}")
             return 2
@@ -121,7 +155,17 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     _emit(result, json_output=getattr(args, "json", False))
     if isinstance(result, dict) and result.get("status") == "FAIL":
-        return 7 if args.command == "validate-candidate" else 6
+        return (
+            7
+            if args.command
+            in {
+                "validate-candidate",
+                "validate-candidate-static",
+                "validate-handoff",
+                "export-execution-handoff",
+            }
+            else 6
+        )
     return 0
 
 
@@ -183,6 +227,14 @@ def _add_common_paths(parser: argparse.ArgumentParser, *, database: bool) -> Non
     parser.add_argument("--runs-root", default=str(default_runs_root()))
     if database:
         parser.add_argument("--db")
+
+
+def _add_candidate_selector(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("candidate_path", nargs="?")
+    parser.add_argument("--candidate-root")
+    parser.add_argument("--program-id")
+    _add_common_paths(parser, database=True)
+    _add_json_flag(parser)
 
 
 def _add_json_flag(parser: argparse.ArgumentParser) -> None:

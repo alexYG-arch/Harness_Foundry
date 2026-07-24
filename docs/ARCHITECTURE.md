@@ -9,9 +9,10 @@ User natural language
   -> frozen Requirement IR
   -> v2.8 hash-locked compiler
   -> same-filesystem staging
-  -> read-only target candidate validator + bounded structural Hash repair
+  -> read-only static candidate validator + bounded structural Hash repair
   -> evidence-backed internal Validation Report + second validation
   -> atomic candidate publication
+  -> Hash-bound execution handoff description
 ```
 
 Codex performs semantic interpretation and presents questions. The deterministic Factory owns state transitions, hashing, freeze challenges, compilation, validation, and publication. The Factory never calls another model.
@@ -25,6 +26,17 @@ The canonical Requirement IR contains one `coverage_edges` record per Intent Ato
 Each Program owns `runs/<program_id>/factory.sqlite3`. Events include the resulting snapshot, so the append-only Hash chain can be checked against the current read model; State Hash CAS and idempotency keys prevent stale or duplicate Chat writes. Derived source, IR, decision, validation, readback, and JSONL event views are regenerated from SQLite.
 
 The candidate embeds the frozen Requirement IR, Factory provenance, exact Spec aggregate Hash, traceability graph, runtime ownership, and mandatory negative controls. Compiler validation happens before publication. If a process dies after publication but before the SQLite commit, the same request can recover only a matching Factory-owned candidate with the same Requirement IR and Spec Hash; unrelated non-empty directories are never overwritten.
+
+Static validation uses lexical absolute-path containment and never resolves or
+reads the planned execution root. Executable existence, venv symlinks, runtime
+revisions, authorizations, receipts, and Evidence Hashes are controlled-runtime
+facts. The v0.2 core therefore contains no Program-specific runtime-state
+recognizers; frozen v0.1 recognizers remain only as legacy migration adapters.
+
+The versioned Automation Profile declares a requested A0-A3 level, disabled
+activation default, transition/loop/time ceilings, stop gate, retryable error
+codes, mandatory human gates, and unconditional exclusion of real target
+installation. Candidate compilation never activates that profile.
 
 The engineering DAG expands Lab bootstrap/self-conformance/tool release, Linkage bootstrap/self-conformance/tool release, Main materialization/validation/registration, and G0/C0 through P4 into the fixed 20 nodes required by v2.8. Every node carries Owner, predecessor, Lock/Input/Tool Hash requirements, execution/authorization scope, read/write paths, environment, success output, failure return, invalidation, and allowed-next fields. Composite bootstrap nodes declare an ordered `project_workpack_sequence`; single-workpack nodes bind a real project-local `workpack_id`; control nodes declare only a `pipeline_action_id`. P3 is a machine-readable conditional between `MB-P3` and a separately human-approved N/A Lock action.
 

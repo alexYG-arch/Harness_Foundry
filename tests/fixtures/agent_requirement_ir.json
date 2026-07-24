@@ -40,5 +40,23 @@
   }],
   "assumptions": [], "open_questions": [], "decisions": [],
   "user_adjustments": [], "source_conflicts": [],
-  "automation": {"max_transitions": 16, "max_loop_rounds": 2, "stop_gate": "P4_CERTIFIED_RELEASE_LOCK"}
+  "automation": {
+    "schema_version": "1.0",
+    "requested_level": "A1_PLAN_ONLY",
+    "activation_default": "DISABLED",
+    "max_transitions": 16,
+    "max_loop_rounds": 2,
+    "max_wall_time_seconds": 3600,
+    "stop_gate": "P4_CERTIFIED_RELEASE_LOCK",
+    "retryable_error_codes": ["RUNNER_TRANSPORT_TEMPORARY_FAILURE"],
+    "mandatory_human_gate_ids": [
+      "START_PACKAGE_HUMAN_APPROVAL",
+      "P3_NOT_APPLICABLE_DECISION",
+      "REAL_TARGET_INSTALL"
+    ],
+    "real_target_install_excluded": true,
+    "execution_mode": "AUTHORING_ONLY",
+    "auto_start_generated_workpacks": false,
+    "execution_started": false
+  }
 }

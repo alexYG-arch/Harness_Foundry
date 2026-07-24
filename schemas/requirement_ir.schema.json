@@ -13,7 +13,8 @@
     "assumptions",
     "open_questions",
     "decisions",
-    "user_adjustments"
+    "user_adjustments",
+    "automation"
   ],
   "properties": {
     "program_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
@@ -41,7 +42,55 @@
     "open_questions": {"type": "array"},
     "decisions": {"type": "array"},
     "user_adjustments": {"type": "array"},
-    "automation": {"type": "object"},
+    "automation": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "requested_level",
+        "activation_default",
+        "max_transitions",
+        "max_loop_rounds",
+        "max_wall_time_seconds",
+        "stop_gate",
+        "retryable_error_codes",
+        "mandatory_human_gate_ids",
+        "real_target_install_excluded",
+        "execution_mode",
+        "auto_start_generated_workpacks",
+        "execution_started"
+      ],
+      "properties": {
+        "schema_version": {"const": "1.0"},
+        "requested_level": {
+          "enum": [
+            "A0_DECLARE_ONLY",
+            "A1_PLAN_ONLY",
+            "A2_WORKPACK_BOUNDED",
+            "A3_PROGRAM_BOUNDED"
+          ]
+        },
+        "activation_default": {"const": "DISABLED"},
+        "max_transitions": {"type": "integer", "minimum": 1},
+        "max_loop_rounds": {"type": "integer", "minimum": 1},
+        "max_wall_time_seconds": {"type": "integer", "minimum": 1},
+        "stop_gate": {"type": "string", "minLength": 1},
+        "retryable_error_codes": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "mandatory_human_gate_ids": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "real_target_install_excluded": {"const": true},
+        "execution_mode": {"const": "AUTHORING_ONLY"},
+        "auto_start_generated_workpacks": {"const": false},
+        "execution_started": {"const": false}
+      },
+      "additionalProperties": false
+    },
     "coverage_edges": {
       "type": "array",
       "items": {

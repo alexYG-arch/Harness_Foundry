@@ -14,6 +14,10 @@ from harness_foundry_factory.compiler import (
     compile_candidate,
 )
 from harness_foundry_factory.validator import (
+    _candidate_tree_hash,
+    validate_candidate,
+)
+from harness_foundry_factory.legacy_execution_evidence_validator_v0_1 import (
     _authorized_driver_materialization_precondition,
     _authorized_lab_bootstrap_materialization,
     _authorized_lab_self_conformance_materialization,
@@ -21,8 +25,6 @@ from harness_foundry_factory.validator import (
     _authorized_lab_tool_release_preparation_materialization,
     _authorized_linkage_bootstrap_failure_materialization,
     _authorized_linkage_executor_no_op_failure_materialization,
-    _candidate_tree_hash,
-    validate_candidate,
 )
 
 
@@ -1854,7 +1856,7 @@ class CompilerValidatorTests(unittest.TestCase):
                 CREATED_AT,
             )
 
-    def test_immutable_policy_requires_an_execution_root(self) -> None:
+    def test_immutable_policy_gets_a_disjoint_default_execution_root(self) -> None:
         candidate = self.root / "missing-execution-root-candidate"
         ir = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
         ir["target"]["output_root"] = str(candidate)
@@ -1862,14 +1864,22 @@ class CompilerValidatorTests(unittest.TestCase):
             "candidate_root_access": "READ_ONLY_AFTER_ATOMIC_PUBLICATION"
         }
 
-        with self.assertRaisesRegex(ValueError, "execution_root is required"):
-            compile_candidate(
-                ir,
-                SPEC_ROOT,
-                self.root / "missing-execution-root-staging",
-                candidate,
-                CREATED_AT,
-            )
+        compile_candidate(
+            ir,
+            SPEC_ROOT,
+            self.root / "missing-execution-root-staging",
+            candidate,
+            CREATED_AT,
+        )
+
+        context = json.loads(
+            (candidate / "START_CONTEXT.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            context["execution_root"],
+            str(candidate.with_name(f"{candidate.name}_Execution_Runtime")),
+        )
+        self.assertFalse(context["candidate_execution_root_overlap"])
 
     def test_frozen_provenance_authority_aliases_and_unstructured_negative_cases_compile(self) -> None:
         candidate = self.root / "normalized-frozen-input-candidate"
@@ -2159,8 +2169,12 @@ class CompilerValidatorTests(unittest.TestCase):
         self.assertEqual(
             registration["pipeline_action_id"], "MAIN_PROGRAM_REGISTRATION"
         )
+        context = json.loads(
+            (self.candidate / "START_CONTEXT.json").read_text(encoding="utf-8")
+        )
         main_repository = str(
-            self.candidate / "project_start_packages/main_build/repository"
+            Path(context["execution_root"])
+            / "project_start_packages/main_build/repository"
         )
         for node_id in (
             "MAIN_EXECUTION_PACKAGE_MATERIALIZED",
@@ -2276,6 +2290,66 @@ class CompilerValidatorTests(unittest.TestCase):
         codes = self._finding_codes()
         self.assertIn("PROJECT_COMMAND_MANIFEST_INVALID", codes)
         self.assertIn("PROJECT_WORKPACK_COMMAND_BINDING_INVALID", codes)
+
+    def test_project_commands_allow_their_workpack_execution_modes(self) -> None:
+        for directory in ("external_lab", "linkage_review", "main_build"):
+            project_root = (
+                self.candidate / "project_start_packages" / directory
+            )
+            index = json.loads(
+                (project_root / "WORKPACK_INDEX.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            manifest = json.loads(
+                (project_root / "COMMAND_MANIFEST.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            commands = {
+                item["command_id"]: item for item in manifest["commands"]
+            }
+            for workpack in index["workpacks"]:
+                for command_id in workpack["command_ids"]:
+                    self.assertIn(
+                        workpack["execution_mode"],
+                        commands[command_id]["allowed_modes"],
+                        f"{directory}:{workpack['workpack_id']}:{command_id}",
+                    )
+
+        lab_manifest = json.loads(
+            (
+                self.candidate
+                / "project_start_packages/external_lab/COMMAND_MANIFEST.json"
+            ).read_text(encoding="utf-8")
+        )
+        lab_selftest = next(
+            item
+            for item in lab_manifest["commands"]
+            if item["command_id"] == "LAB-SELFTEST"
+        )
+        self.assertEqual(
+            lab_selftest["allowed_modes"], ["PROJECT_VALIDATION"]
+        )
+
+    def test_project_command_mode_mismatch_is_rejected(self) -> None:
+        def break_lab_selftest_mode(value: dict) -> None:
+            command = next(
+                item
+                for item in value["commands"]
+                if item["command_id"] == "LAB-SELFTEST"
+            )
+            command["allowed_modes"] = ["LAB_CERTIFICATION"]
+
+        self._mutate_json(
+            "project_start_packages/external_lab/COMMAND_MANIFEST.json",
+            break_lab_selftest_mode,
+        )
+
+        self.assertIn(
+            "PROJECT_COMMAND_MODE_CONTRACT_MISMATCH",
+            self._finding_codes(),
+        )
 
     def test_phase_atom_routes_to_matching_project_workpacks_and_artifacts(
         self,

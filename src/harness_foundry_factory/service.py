@@ -313,6 +313,50 @@ class FactoryService:
             )
         return self.validate_candidate(candidate_path, record.snapshot.get("spec_lock"))
 
+    def validate_handoff(
+        self,
+        candidate_root: str | Path,
+        spec_lock: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        from .validator import validate_handoff
+
+        return validate_handoff(candidate_root, spec_lock)
+
+    def export_execution_handoff(
+        self,
+        candidate_root: str | Path,
+        spec_lock: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        from .validator import export_execution_handoff
+
+        return export_execution_handoff(candidate_root, spec_lock)
+
+    def validate_program_handoff(self, program_id: str) -> dict[str, Any]:
+        record = self.store.get_program(program_id)
+        candidate_path = record.snapshot.get("candidate", {}).get("candidate_path")
+        if not candidate_path:
+            raise CandidateValidationError(
+                "program has no generated candidate",
+                details={"program_id": program_id},
+            )
+        return self.validate_handoff(
+            candidate_path, record.snapshot.get("spec_lock")
+        )
+
+    def export_program_execution_handoff(
+        self, program_id: str
+    ) -> dict[str, Any]:
+        record = self.store.get_program(program_id)
+        candidate_path = record.snapshot.get("candidate", {}).get("candidate_path")
+        if not candidate_path:
+            raise CandidateValidationError(
+                "program has no generated candidate",
+                details={"program_id": program_id},
+            )
+        return self.export_execution_handoff(
+            candidate_path, record.snapshot.get("spec_lock")
+        )
+
     def _create(
         self,
         program_id: str,
@@ -1222,14 +1266,40 @@ class FactoryService:
             atom.setdefault("verification_mode", "HUMAN_REVIEW")
             normalized_atoms.append(atom)
         ir["atoms"] = normalized_atoms
-        ir.setdefault(
-            "automation",
-            {
-                "execution_mode": "AUTHORING_ONLY",
-                "auto_start_generated_workpacks": False,
-                "execution_started": False,
-            },
-        )
+        automation = ir.get("automation")
+        if not isinstance(automation, Mapping):
+            automation = {}
+        else:
+            automation = deepcopy(dict(automation))
+        defaults = {
+            "schema_version": "1.0",
+            "requested_level": "A1_PLAN_ONLY",
+            "activation_default": "DISABLED",
+            "max_transitions": 32,
+            "max_loop_rounds": 3,
+            "max_wall_time_seconds": 3600,
+            "stop_gate": "P4_CERTIFIED_RELEASE_LOCK",
+            "retryable_error_codes": [
+                "RUNNER_TRANSPORT_TEMPORARY_FAILURE"
+            ],
+            "mandatory_human_gate_ids": [
+                "START_PACKAGE_HUMAN_APPROVAL",
+                "P3_NOT_APPLICABLE_DECISION",
+                "REAL_TARGET_INSTALL",
+            ],
+            "real_target_install_excluded": True,
+            "execution_mode": "AUTHORING_ONLY",
+            "auto_start_generated_workpacks": False,
+            "execution_started": False,
+        }
+        for key, value in defaults.items():
+            automation.setdefault(key, deepcopy(value))
+        automation["activation_default"] = "DISABLED"
+        automation["real_target_install_excluded"] = True
+        automation["execution_mode"] = "AUTHORING_ONLY"
+        automation["auto_start_generated_workpacks"] = False
+        automation["execution_started"] = False
+        ir["automation"] = automation
         return normalize_ir_coverage(ir)
 
     def _sync_ir_metadata(
