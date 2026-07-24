@@ -29,7 +29,7 @@ from .util import (
 )
 
 
-RUNTIME_VERSION = "0.1.6"
+RUNTIME_VERSION = "0.1.7"
 BOOTSTRAP_COMPLETED_NODES = (
     "START_PACKAGE_CANDIDATE_READY_FOR_HUMAN_REVIEW",
     "START_PACKAGE_HUMAN_APPROVAL",
@@ -1255,6 +1255,9 @@ def status(execution_root: str | Path) -> dict[str, Any]:
             "transitions_max": authorization.get("max_transitions", 0),
             "loop_rounds_used": state["loop_rounds_used"],
             "loop_rounds_max": authorization.get("max_loop_rounds", 0),
+            "active_workpack_loop_rounds_used": authorization.get(
+                "loop_rounds_used", 0
+            ),
         },
         "next": plan,
         "hard_stop": state["hard_stop"],
@@ -2554,7 +2557,9 @@ def _promote_workpack(
         )
         current["active_workpack"] = None
         current_attempt["workpack_id"] = None
+        current_attempt["loop_round"] = 0
         current_attempt["phase"] = "WORKPACK_PROMOTED"
+        current["authorization"]["loop_rounds_used"] = 0
         current["evidence_index"][relative] = result_hash
 
     store.append(

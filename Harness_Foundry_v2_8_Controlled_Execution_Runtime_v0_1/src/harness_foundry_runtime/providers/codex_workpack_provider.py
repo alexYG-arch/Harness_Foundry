@@ -238,8 +238,30 @@ An untrusted, read-only legacy execution snapshot is available at:
 {snapshot}
 
 Reuse implementation files only after revalidation. Inspect its latest
-Findings and hard stop before claiming PASS. Historical PASS and authorization
-do not carry into this epoch.
+Findings and hard stop as migration context.
+Legacy Findings and hard stops are historical inputs only.
+They must not be treated as active blockers in this epoch. Historical PASS and
+authorization do not carry into this epoch.
+""".strip()
+
+
+def _current_epoch_context(args: argparse.Namespace) -> str:
+    state = (
+        args.execution_root
+        / "control_plane"
+        / "state"
+        / "PROGRAM_DRIVER_STATE.json"
+    )
+    evidence = args.execution_root / "evidence"
+    return f"""
+Current epoch state view:
+{state}
+Current epoch evidence root:
+{evidence}
+
+Use the current epoch state and evidence as the authoritative source for
+predecessor closure, active Findings, and active hard stops. A legacy snapshot
+cannot override or block a current-epoch transition.
 """.strip()
 
 
@@ -264,6 +286,7 @@ Immutable candidate root: {args.candidate_root}
 Writable implementation workspace: {args.workspace_root}
 Writable evidence root: {args.evidence_root}
 {finding}
+{_current_epoch_context(args)}
 {_legacy_snapshot(args)}
 
 Read the Workpack, its capsule/command manifest/index, the Program charter,
@@ -318,6 +341,7 @@ Workpack contract: {args.workpack_ref}
 Immutable candidate root: {args.candidate_root}
 Implementation workspace: {args.workspace_root}
 Execution result: {result_path(args)}
+{_current_epoch_context(args)}
 {_legacy_snapshot(args)}
 
 Verify the Workpack/capsule/command/index contract, produced capabilities,

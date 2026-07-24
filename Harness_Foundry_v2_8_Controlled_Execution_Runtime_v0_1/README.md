@@ -136,6 +136,14 @@ postflight 和 Review。Review 必须使用与 execute/fix 不同的
 `executor_identity`、声明 `READ_ONLY` 和空写根；Runtime 还会比较 Review
 前后的目标写范围 Hash，防止“声明只读、实际写入”。
 
+`max_loop_rounds` 约束单个 Active Workpack 的 retry/fix 循环。Workpack
+成功 promotion 后，下一 Workpack 获得同一授权声明的完整循环额度；运行态
+同时保留 `loop_rounds_used` 累计审计计数，以及
+`active_workpack_loop_rounds_used` 当前 Workpack 预算计数。旧 epoch 的
+Finding 和 hard stop 只作为迁移审计输入；当前 epoch 的 SQLite 状态和
+Evidence 才是 predecessor closure 与 active blocker 的权威来源。自动化
+命令 Profile 应把当前 `control_plane/state` 声明为只读根。
+
 内置 `codex_workpack_provider` 不使用旧的 `--sandbox` 模式。它忽略个人
 Codex config/rules，使用 Hash 可审计的 Custom Permissions Profile：
 `:minimal` 只读、候选和声明读根只读、workspace/evidence 写入、工具网络

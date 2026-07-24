@@ -25,7 +25,7 @@ class ContractTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        self.assertEqual(manifest["version"], "0.1.6")
+        self.assertEqual(manifest["version"], "0.1.7")
         self.assertEqual(
             harness_foundry_runtime.__version__, manifest["version"]
         )

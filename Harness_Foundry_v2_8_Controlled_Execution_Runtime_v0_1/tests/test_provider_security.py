@@ -13,6 +13,7 @@ from unittest import mock
 from harness_foundry_runtime.providers.codex_workpack_provider import (
     _runtime_python_projection,
     codex_command,
+    execution_prompt,
     review_prompt,
 )
 
@@ -188,6 +189,47 @@ class ProviderSecurityTests(unittest.TestCase):
             )
             self.assertIn(
                 "Do not require an already successful later review",
+                prompt,
+            )
+
+    def test_current_epoch_state_is_authoritative_over_legacy_stops(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            execution = root / "execution"
+            (
+                execution
+                / "history_snapshot"
+                / "legacy_execution"
+            ).mkdir(parents=True)
+            args = argparse.Namespace(
+                node_id="NODE",
+                workpack_id="WP",
+                workpack_ref=root / "workpack.md",
+                candidate_root=root / "candidate",
+                workspace_root=execution / "workspace",
+                evidence_root=execution / "evidence/NODE",
+                execution_root=execution,
+                finding_ref=None,
+                finding_sha256=None,
+            )
+
+            prompt = execution_prompt(args, repair=False)
+
+            self.assertIn(
+                str(
+                    execution
+                    / "control_plane/state/PROGRAM_DRIVER_STATE.json"
+                ),
+                prompt,
+            )
+            self.assertIn(
+                "Legacy Findings and hard stops are historical inputs only",
+                prompt,
+            )
+            self.assertIn(
+                "must not be treated as active blockers in this epoch",
                 prompt,
             )
 

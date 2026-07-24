@@ -94,6 +94,35 @@ class ExecutionControlTests(unittest.TestCase):
             self.assertEqual(len(finding_events), 1)
             self.assertEqual(state["loop_rounds_used"], 1)
 
+    def test_fix_budget_is_renewed_after_each_workpack_promotion(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = SyntheticRuntime(Path(temporary))
+            fixture.bootstrap()
+            fixture.authorize(
+                modes={
+                    "NODE_A": "repair",
+                    "NODE_B": "repair",
+                },
+                max_loop_rounds=1,
+            )
+
+            result = advance_until_gate(fixture.execution)
+
+            self.assertEqual(result["status"], "STOPPED_AT_GATE")
+            self.assertEqual(result["transitions_committed"], 2)
+            report = status(fixture.execution)
+            self.assertEqual(
+                report["locally_closed_nodes"][-2:],
+                ["NODE_A", "NODE_B"],
+            )
+            self.assertEqual(report["budget"]["loop_rounds_used"], 2)
+            self.assertEqual(
+                report["budget"]["active_workpack_loop_rounds_used"],
+                0,
+            )
+
     def test_review_identity_is_read_only_at_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             fixture = SyntheticRuntime(Path(temporary))
