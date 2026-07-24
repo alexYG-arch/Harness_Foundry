@@ -29,7 +29,7 @@ from .util import (
 )
 
 
-RUNTIME_VERSION = "0.1.7"
+RUNTIME_VERSION = "0.1.8"
 BOOTSTRAP_COMPLETED_NODES = (
     "START_PACKAGE_CANDIDATE_READY_FOR_HUMAN_REVIEW",
     "START_PACKAGE_HUMAN_APPROVAL",
@@ -2439,6 +2439,7 @@ def _validate_command_read_roots(
         *node_writes,
         execution_root / "control_plane/driver/runtime",
         execution_root / "control_plane/providers",
+        execution_root / "control_plane/state",
         execution_root / "evidence",
         execution_root / "history_snapshot",
     ]

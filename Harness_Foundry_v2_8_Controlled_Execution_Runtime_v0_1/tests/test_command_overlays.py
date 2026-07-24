@@ -66,6 +66,44 @@ class CommandOverlayTests(unittest.TestCase):
             )
             self.assertEqual(verify_run(fixture.execution)["status"], "PASS")
 
+    def test_registration_allows_current_epoch_state_as_read_only(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = SyntheticRuntime(Path(temporary))
+            fixture.bootstrap()
+            source = fixture.make_manifest("NODE_A")
+            manifest = json.loads(source.read_text(encoding="utf-8"))
+            state_root = fixture.execution / "control_plane/state"
+            for command in manifest["commands"]:
+                command["allowed_read_roots"].append(str(state_root))
+            state = status(fixture.execution)
+            handoff = json.loads(
+                fixture.handoff_path.read_text(encoding="utf-8")
+            )
+            bundle_path = fixture.root / "STATE_READ_OVERLAY.json"
+            write_json(
+                bundle_path,
+                {
+                    "schema_version": "1.0",
+                    "overlay_kind": "RESOLVED_COMMAND_OVERLAY_BUNDLE",
+                    "program_id": fixture.program_id,
+                    "epoch_id": state["epoch_id"],
+                    "candidate_content_sha256": handoff[
+                        "candidate_content_sha256"
+                    ],
+                    "manifests": {"NODE_A": manifest},
+                },
+            )
+
+            result = register_command_overlays(
+                fixture.execution, bundle_path
+            )
+
+            self.assertEqual(result["status"], "PASS")
+            self.assertFalse(result["execution_authority_granted"])
+            self.assertFalse(result["commands_executed"])
+
     def test_authorization_rejects_an_unregistered_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             fixture = SyntheticRuntime(Path(temporary))
@@ -199,6 +237,11 @@ class CommandOverlayTests(unittest.TestCase):
                 [str(Path.home())],
                 "COMMAND_READ_SCOPE_OUTSIDE_BOUND_ROOTS",
             ),
+            (
+                "control_plane",
+                "CURRENT_CONTROL_PLANE",
+                "COMMAND_READ_SCOPE_OUTSIDE_NODE",
+            ),
         )
         for label, read_roots, expected_code in variants:
             with self.subTest(label=label):
@@ -212,6 +255,10 @@ class CommandOverlayTests(unittest.TestCase):
                     command = manifest["commands"][0]
                     if read_roots is None:
                         command.pop("allowed_read_roots")
+                    elif read_roots == "CURRENT_CONTROL_PLANE":
+                        command["allowed_read_roots"] = [
+                            str(fixture.execution / "control_plane")
+                        ]
                     else:
                         command["allowed_read_roots"] = read_roots
                     state = status(fixture.execution)

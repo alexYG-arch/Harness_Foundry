@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
   "runtime_id": "HARNESS_FOUNDRY_V2_8_CONTROLLED_EXECUTION_RUNTIME_V0_1",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "python_requires": ">=3.11",
   "authoritative_store": "SQLITE_EVENT_STORE",
   "derived_views": [
