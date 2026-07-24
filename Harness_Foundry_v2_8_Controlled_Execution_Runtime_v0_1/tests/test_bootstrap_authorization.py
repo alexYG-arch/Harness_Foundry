@@ -92,6 +92,32 @@ class BootstrapAuthorizationTests(unittest.TestCase):
 
             self.assertEqual(completed.returncode, 0, completed.stderr)
             self.assertIn("usage: hfdriver", completed.stdout)
+            vendored_provider = (
+                fixture.execution
+                / "control_plane/driver/runtime"
+                / "harness_foundry_runtime/providers"
+                / "codex_workpack_provider.py"
+            )
+            vendored_schema = (
+                vendored_provider.parent
+                / "independent_review.schema.json"
+            )
+            self.assertTrue(vendored_provider.is_file())
+            self.assertTrue(vendored_schema.is_file())
+            runtime_evidence = json.loads(
+                (
+                    fixture.execution
+                    / "evidence/bootstrap"
+                    / "DRIVER_RUNTIME_VERIFICATION.json"
+                ).read_text(encoding="utf-8")
+            )
+            hashes = runtime_evidence["vendored_runtime_file_hashes"]
+            self.assertIn(
+                vendored_provider.relative_to(
+                    fixture.execution
+                ).as_posix(),
+                hashes,
+            )
 
     def test_failed_driver_probe_does_not_close_runtime_verification(
         self,

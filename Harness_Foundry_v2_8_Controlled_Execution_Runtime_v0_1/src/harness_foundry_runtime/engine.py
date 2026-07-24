@@ -29,7 +29,7 @@ from .util import (
 )
 
 
-RUNTIME_VERSION = "0.1.4"
+RUNTIME_VERSION = "0.1.6"
 BOOTSTRAP_COMPLETED_NODES = (
     "START_PACKAGE_CANDIDATE_READY_FOR_HUMAN_REVIEW",
     "START_PACKAGE_HUMAN_APPROVAL",
@@ -49,6 +49,10 @@ ALWAYS_HUMAN_GATES = {
     "P3_NOT_APPLICABLE_LOCK",
     "SCOPE_EXPANSION",
     "WAIVER",
+}
+RESERVED_RUNTIME_ENVIRONMENT_KEYS = {
+    "HF_ALLOWED_READ_ROOTS_JSON",
+    "HF_ALLOWED_WRITE_ROOTS_JSON",
 }
 
 
@@ -454,8 +458,17 @@ def bootstrap_apply(
     vendored_package = vendored_parent / runtime_source.name
     vendored_package.mkdir(parents=True, exist_ok=True)
     vendored_files = []
-    for source in sorted(runtime_source.glob("*.py")):
-        destination = vendored_package / source.name
+    for source in sorted(runtime_source.rglob("*")):
+        relative_source = source.relative_to(runtime_source)
+        if (
+            not source.is_file()
+            or "__pycache__" in relative_source.parts
+            or source.suffix == ".pyc"
+            or source.name == ".DS_Store"
+        ):
+            continue
+        destination = vendored_package / relative_source
+        destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
         vendored_files.append(destination)
     entry_path = execution_root / "control_plane/driver/driver_entry.py"
@@ -2095,11 +2108,26 @@ def _run_command_group(
 def _run_command(command: Mapping[str, Any]) -> dict[str, Any]:
     executable = Path(str(command["executable_abs"]))
     started_at = utc_now()
+    environment = (
+        dict(command.get("environment", {}))
+        if isinstance(command.get("environment"), Mapping)
+        else {}
+    )
+    environment["HF_ALLOWED_READ_ROOTS_JSON"] = json.dumps(
+        command["allowed_read_roots"],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    environment["HF_ALLOWED_WRITE_ROOTS_JSON"] = json.dumps(
+        command["allowed_write_roots"],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
     try:
         completed = subprocess.run(
             list(command["argv"]),
             cwd=str(command["cwd_abs"]),
-            env=_bounded_environment(command.get("environment", {})),
+            env=_bounded_environment(environment),
             capture_output=True,
             text=True,
             timeout=int(command.get("timeout_seconds", 300)),
@@ -2336,6 +2364,30 @@ def _validate_resolved_manifest(
                 raise RuntimeViolation(
                     "COMMAND_WRITE_SCOPE_OUTSIDE_NODE", str(path)
                 )
+        declared_reads = command.get("allowed_read_roots")
+        if (
+            not isinstance(declared_reads, list)
+            or not declared_reads
+        ):
+            raise RuntimeViolation(
+                "COMMAND_READ_SCOPE_MISSING",
+                str(command.get("command_id")),
+            )
+        _validate_command_read_roots(
+            state,
+            node,
+            command,
+            declared_reads,
+            declared_writes,
+        )
+        environment = command.get("environment", {})
+        if not isinstance(environment, Mapping) or (
+            RESERVED_RUNTIME_ENVIRONMENT_KEYS & set(environment)
+        ):
+            raise RuntimeViolation(
+                "COMMAND_ENVIRONMENT_RESERVED_KEY",
+                str(command.get("command_id")),
+            )
         if not (
             lexically_within(
                 cwd.resolve(), Path(state["execution_root"]).resolve()
@@ -2361,6 +2413,73 @@ def _validate_resolved_manifest(
         raise RuntimeViolation(
             "COMMAND_ENVIRONMENT_UNAUTHORIZED", str(environment_id)
         )
+
+
+def _validate_command_read_roots(
+    state: Mapping[str, Any],
+    node: Mapping[str, Any],
+    command: Mapping[str, Any],
+    declared_reads: Iterable[Any],
+    declared_writes: Iterable[Any],
+) -> None:
+    candidate_root = lexical_path(state["candidate_root"])
+    execution_root = lexical_path(state["execution_root"])
+    node_reads = [
+        lexical_path(path)
+        for path in node.get("allowed_read_paths", [])
+    ]
+    node_writes = [
+        lexical_path(path)
+        for path in node.get("allowed_write_paths", [])
+    ]
+    execution_read_roots = [
+        *node_writes,
+        execution_root / "control_plane/driver/runtime",
+        execution_root / "control_plane/providers",
+        execution_root / "evidence",
+        execution_root / "history_snapshot",
+    ]
+    normalized_writes = [lexical_path(path) for path in declared_writes]
+    for value in declared_reads:
+        if not isinstance(value, str) or not Path(value).is_absolute():
+            raise RuntimeViolation(
+                "COMMAND_READ_SCOPE_INVALID", str(value)
+            )
+        root = lexical_path(value)
+        if not root.exists():
+            raise RuntimeViolation(
+                "COMMAND_READ_SCOPE_MISSING_PATH", str(root)
+            )
+        if lexically_within(root, candidate_root):
+            if node_reads and not any(
+                lexically_within(root, allowed)
+                for allowed in node_reads
+            ):
+                raise RuntimeViolation(
+                    "COMMAND_READ_SCOPE_OUTSIDE_NODE", str(root)
+                )
+            continue
+        if lexically_within(root, execution_root):
+            if not any(
+                lexically_within(root, allowed)
+                for allowed in execution_read_roots
+            ):
+                raise RuntimeViolation(
+                    "COMMAND_READ_SCOPE_OUTSIDE_NODE", str(root)
+                )
+            continue
+        raise RuntimeViolation(
+            "COMMAND_READ_SCOPE_OUTSIDE_BOUND_ROOTS", str(root)
+        )
+    for write_root in normalized_writes:
+        if not any(
+            lexically_within(write_root, lexical_path(read_root))
+            or lexically_within(lexical_path(read_root), write_root)
+            for read_root in declared_reads
+        ):
+            raise RuntimeViolation(
+                "COMMAND_WRITE_ROOT_NOT_READABLE", str(write_root)
+            )
 
 
 def _load_authorized_manifest(

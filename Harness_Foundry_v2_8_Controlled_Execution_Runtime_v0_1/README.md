@@ -78,8 +78,11 @@ python3 tools/hfdriver.py resolve-overlays \
 ```
 
 Runtime 会校验 Program/epoch/candidate 绑定、Workpack 顺序、环境、绝对
-executable 和最终 Hash、argv、cwd、写根、postflight 和独立 review，再把
-不可变 Manifest 登记到 SQLite 和 Evidence Index。已有外部 Resolver
+executable 和最终 Hash、argv、cwd、读根、写根、postflight 和独立 review，
+再把不可变 Manifest 登记到 SQLite 和 Evidence Index。每条命令必须显式
+声明 `allowed_read_roots`；Runtime 会校验它只能落在候选只读范围、节点写根、
+Evidence、Driver runtime/provider 或只读迁移快照中，并以保留环境变量把
+读写交集传给受控 Provider。已有外部 Resolver
 也可以直接登记解析完成的 overlay：
 
 ```bash
@@ -132,6 +135,18 @@ Fix 命令必须同时声明 `{{HF_FINDING_REF}}` 与
 postflight 和 Review。Review 必须使用与 execute/fix 不同的
 `executor_identity`、声明 `READ_ONLY` 和空写根；Runtime 还会比较 Review
 前后的目标写范围 Hash，防止“声明只读、实际写入”。
+
+内置 `codex_workpack_provider` 不使用旧的 `--sandbox` 模式。它忽略个人
+Codex config/rules，使用 Hash 可审计的 Custom Permissions Profile：
+`:minimal` 只读、候选和声明读根只读、workspace/evidence 写入、工具网络
+关闭，并显式拒绝用户 `~/.codex` 与 workspace `.codex`。Provider 只把当前
+Hash 绑定的运行时 Python 标准库前缀额外加入只读范围，并把解释器复制为
+临时、只读、调用前后 Hash 复验的执行投影；实现与 Review 测试使用该投影，
+不会给 Homebrew 或其他外部安装根写权限。当前独立 Review 可通过直接复验
+清除旧 Review Finding，不要求预先存在另一次成功 Review。因此个人 Memory
+和项目私有配置不会进入 Workpack 子 Agent 的可读范围。Provider 的 Profile
+Hash 与解释器投影 Hash 会写入命令 stderr，并随 Runtime receipt 进入
+Evidence 链。
 
 Workpack 成功后 Runtime 自动推进下一个 Workpack 和下一个已授权 DAG
 节点，不再逐节点请求确认。正常人工门禁只保留预算/修复次数耗尽、授权

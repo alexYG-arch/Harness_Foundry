@@ -50,6 +50,10 @@ class ResolverTests(unittest.TestCase):
                         ),
                     ],
                     "cwd_abs": "{{HF_EXECUTION_ROOT}}/workspace",
+                    "allowed_read_roots": [
+                        "{{HF_CANDIDATE_ROOT}}",
+                        "{{HF_EXECUTION_ROOT}}/workspace",
+                    ],
                     "allowed_write_roots": [
                         "{{HF_EXECUTION_ROOT}}/workspace"
                     ],
@@ -73,6 +77,10 @@ class ResolverTests(unittest.TestCase):
                     "executable_sha256": file_sha256(Path(executable)),
                     "argv": [executable, "-c", check_code],
                     "cwd_abs": "{{HF_EXECUTION_ROOT}}/workspace",
+                    "allowed_read_roots": [
+                        "{{HF_CANDIDATE_ROOT}}",
+                        "{{HF_EXECUTION_ROOT}}/workspace",
+                    ],
                     "allowed_write_roots": [
                         "{{HF_EXECUTION_ROOT}}/workspace"
                     ],
@@ -96,6 +104,10 @@ class ResolverTests(unittest.TestCase):
                     "executable_sha256": "AUTO",
                     "argv": [executable, "-c", check_code],
                     "cwd_abs": "{{HF_EXECUTION_ROOT}}/workspace",
+                    "allowed_read_roots": [
+                        "{{HF_CANDIDATE_ROOT}}",
+                        "{{HF_EXECUTION_ROOT}}/workspace",
+                    ],
                     "allowed_write_roots": [],
                     "environment": {},
                     "expected_exit_codes": [0],

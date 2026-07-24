@@ -113,6 +113,9 @@ class SyntheticRuntime:
                         else []
                     ),
                     "allowed_write_paths": [str(self.workspace)],
+                    "allowed_read_paths": [
+                        str(self.candidate.resolve())
+                    ],
                     "environment_id": "TEST-ENV",
                     "human_gate": False,
                     "human_gate_id": None,
@@ -223,6 +226,10 @@ class SyntheticRuntime:
             "executable_sha256": file_sha256(executable),
             "argv": [str(executable), "-c", code],
             "cwd_abs": str(self.workspace),
+            "allowed_read_roots": [
+                str(self.candidate.resolve()),
+                str(self.workspace),
+            ],
             "allowed_write_roots": (
                 [] if is_review else [str(self.workspace)]
             ),

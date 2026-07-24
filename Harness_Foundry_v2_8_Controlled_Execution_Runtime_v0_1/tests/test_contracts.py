@@ -25,7 +25,7 @@ class ContractTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        self.assertEqual(manifest["version"], "0.1.4")
+        self.assertEqual(manifest["version"], "0.1.6")
         self.assertEqual(
             harness_foundry_runtime.__version__, manifest["version"]
         )
@@ -48,7 +48,7 @@ class ContractTests(unittest.TestCase):
             "CODEX-VIDEO-EDITOR",
         )
         for path in sorted(
-            (REPOSITORY_ROOT / "src/harness_foundry_runtime").glob("*.py")
+            (REPOSITORY_ROOT / "src/harness_foundry_runtime").rglob("*.py")
         ):
             text = path.read_text(encoding="utf-8").upper()
             for literal in forbidden:

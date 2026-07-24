@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
   "runtime_id": "HARNESS_FOUNDRY_V2_8_CONTROLLED_EXECUTION_RUNTIME_V0_1",
-  "version": "0.1.4",
+  "version": "0.1.6",
   "python_requires": ">=3.11",
   "authoritative_store": "SQLITE_EVENT_STORE",
   "derived_views": [
@@ -13,6 +13,11 @@
   "default_mode": "A1_PLAN_ONLY",
   "continuous_mode": "A3_PROGRAM_BOUNDED",
   "real_target_install_excluded": true,
+  "read_scope_contract": "COMMAND_ALLOWED_READ_ROOTS_REQUIRED",
+  "bundled_codex_provider_permissions": "CUSTOM_PERMISSION_PROFILE",
+  "bound_runtime_python_prefix_access": "READ_ONLY",
+  "bound_runtime_python_executable_projection": "EPHEMERAL_READ_ONLY_HASH_VERIFIED",
+  "review_finding_clearance": "CURRENT_REVIEW_MAY_CLEAR_PRIOR_FINDING",
   "cli": "hfdriver",
   "supported_commands": [
     "status",

@@ -190,3 +190,97 @@ class CommandOverlayTests(unittest.TestCase):
                 state["runtime_revision"],
                 status(fixture.execution)["runtime_revision"],
             )
+
+    def test_registration_rejects_missing_or_escaped_read_scope(self) -> None:
+        variants = (
+            ("missing", None, "COMMAND_READ_SCOPE_MISSING"),
+            (
+                "outside",
+                [str(Path.home())],
+                "COMMAND_READ_SCOPE_OUTSIDE_BOUND_ROOTS",
+            ),
+        )
+        for label, read_roots, expected_code in variants:
+            with self.subTest(label=label):
+                with tempfile.TemporaryDirectory() as temporary:
+                    fixture = SyntheticRuntime(Path(temporary))
+                    fixture.bootstrap()
+                    source = fixture.make_manifest("NODE_A")
+                    manifest = json.loads(
+                        source.read_text(encoding="utf-8")
+                    )
+                    command = manifest["commands"][0]
+                    if read_roots is None:
+                        command.pop("allowed_read_roots")
+                    else:
+                        command["allowed_read_roots"] = read_roots
+                    state = status(fixture.execution)
+                    handoff = json.loads(
+                        fixture.handoff_path.read_text(encoding="utf-8")
+                    )
+                    bundle_path = fixture.root / f"{label}.json"
+                    write_json(
+                        bundle_path,
+                        {
+                            "schema_version": "1.0",
+                            "overlay_kind": (
+                                "RESOLVED_COMMAND_OVERLAY_BUNDLE"
+                            ),
+                            "program_id": fixture.program_id,
+                            "epoch_id": state["epoch_id"],
+                            "candidate_content_sha256": handoff[
+                                "candidate_content_sha256"
+                            ],
+                            "manifests": {"NODE_A": manifest},
+                        },
+                    )
+
+                    result = register_command_overlays(
+                        fixture.execution, bundle_path
+                    )
+
+                    self.assertEqual(result["status"], "FAIL")
+                    self.assertEqual(
+                        result["blocking_findings"][0]["code"],
+                        expected_code,
+                    )
+
+    def test_registration_rejects_reserved_scope_environment_keys(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = SyntheticRuntime(Path(temporary))
+            fixture.bootstrap()
+            source = fixture.make_manifest("NODE_A")
+            manifest = json.loads(source.read_text(encoding="utf-8"))
+            manifest["commands"][0]["environment"][
+                "HF_ALLOWED_READ_ROOTS_JSON"
+            ] = "[]"
+            state = status(fixture.execution)
+            handoff = json.loads(
+                fixture.handoff_path.read_text(encoding="utf-8")
+            )
+            bundle_path = fixture.root / "reserved-env.json"
+            write_json(
+                bundle_path,
+                {
+                    "schema_version": "1.0",
+                    "overlay_kind": "RESOLVED_COMMAND_OVERLAY_BUNDLE",
+                    "program_id": fixture.program_id,
+                    "epoch_id": state["epoch_id"],
+                    "candidate_content_sha256": handoff[
+                        "candidate_content_sha256"
+                    ],
+                    "manifests": {"NODE_A": manifest},
+                },
+            )
+
+            result = register_command_overlays(
+                fixture.execution, bundle_path
+            )
+
+            self.assertEqual(result["status"], "FAIL")
+            self.assertEqual(
+                result["blocking_findings"][0]["code"],
+                "COMMAND_ENVIRONMENT_RESERVED_KEY",
+            )

@@ -21,6 +21,7 @@
           "executable_sha256",
           "argv",
           "cwd_abs",
+          "allowed_read_roots",
           "allowed_write_roots",
           "expected_exit_codes",
           "shell",
@@ -38,6 +39,11 @@
           },
           "argv": {"type": "array", "minItems": 1},
           "cwd_abs": {"type": "string", "minLength": 1},
+          "allowed_read_roots": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string", "minLength": 1}
+          },
           "allowed_write_roots": {"type": "array"},
           "expected_exit_codes": {"type": "array", "minItems": 1},
           "shell": {"const": false},
