@@ -2,23 +2,39 @@
 
 from __future__ import annotations
 
+import ast
+import base64
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
-from typing import Any, Callable, Iterable, Mapping
+import subprocess
+import sys
+from typing import Any, Callable, Iterable, Mapping, Sequence
+
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from .constants import (
+    BASELINE_FACTORY_ID,
     DAG_WORKPACK_BINDINGS,
     DAG_WORKPACK_SEQUENCE_BINDINGS,
     ENGINEERING_NODE_ORDER,
+    EPOCH38_LOCAL_RELEASE_REQUIREMENT_SOURCES,
+    EPOCH38_LOCAL_RELEASE_REQUIRES,
+    EPOCH38_LOCAL_ROOT_MATERIALIZATION_REQUIREMENT_SOURCES,
+    EPOCH38_LOCAL_ROOT_MATERIALIZATION_REQUIRES,
+    EPOCH38_LOCAL_TOOL_DISTRIBUTION_REQUIREMENT,
+    FACTORY_ID,
     PHASE_ORDER,
     PROJECT_REQUIRED_FILES,
     PROJECT_WORKPACK_CONTRACTS,
     PROJECTS,
     RELEASE_WORKPACK_BINDINGS,
     RELEASE_STEP_ORDER,
+    ROOT_LAYER_BEHAVIORAL_ATOM_POLICY,
+    ROOT_LAYER_VALIDATION_SCOPE,
     ROOT_MATERIALIZATION_COMMAND_IDS,
     ROOT_MATERIALIZATION_PRODUCES,
     ROOT_MATERIALIZATION_REQUIRES,
@@ -26,12 +42,90 @@ from .constants import (
     TARGET_REQUIRED_DIRECTORIES,
     TARGET_REQUIRED_ENTRY_FILES,
 )
+from .semantic_contracts import (
+    ARTIFACT_MANIFEST_REF,
+    build_artifact_obligation_manifest,
+    explicit_production_enabled,
+    task_bundle_for_workpack,
+    validate_explicit_production_contracts,
+)
 from .traceability import WORKPACK_PROJECTS, WORKPACK_STAGE_COMPATIBILITY
 
 
-PLACEHOLDER_RE = re.compile(r"<[^<>]+>")
+PLACEHOLDER_RE = re.compile(r"<(?!\d)[^<>]+>")
 LINK_RE = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+PORTABLE_MODE = "LOGICAL_RESOURCE_URI"
+LOGICAL_CANDIDATE_ROOT = "harness-resource://candidate"
+LOGICAL_EXECUTION_ROOT = "harness-resource://execution"
+RESOURCE_URI_RE = re.compile(
+    r"harness-resource://(?:candidate|execution)(?:/[A-Za-z0-9._/-]+)?"
+)
+VIRTUAL_CANDIDATE_ROOT = Path("/__harness_resource__/candidate")
+VIRTUAL_EXECUTION_ROOT = Path("/__harness_resource__/execution")
+LOCAL_PATH_RE = re.compile(
+    r"(?:^|[\s\"'=:(])(?:/(?:Users|home|private|tmp|Volumes)/[^/\s]+|"
+    r"/(?:opt|usr/local)/[^/\s]+|"
+    r"[A-Za-z]:\\\\Users\\\\[^\\\s]+|file://)"
+)
+PORTABLE_TEXT_SUFFIXES = {
+    ".json",
+    ".jsonl",
+    ".md",
+    ".py",
+    ".sh",
+    ".toml",
+    ".txt",
+    ".yaml",
+    ".yml",
+}
+CLOSURE_DECLARATION_STATUS = (
+    "CLOSURE_REQUIRED_IN_REPLACEMENT_CANDIDATE_STATIC_RECEIPT"
+)
+CORRECTION_COVERAGE_REF = "canonical_sources/CORRECTION_COVERAGE_MATRIX.json"
+CORRECTION_VALIDATION_REFS = (
+    "tools/self_check.py",
+    "validation/HUMAN_REVIEW_CLOSURE_RECEIPT.json",
+    "validation/START_PACKAGE_VALIDATION_REPORT.json",
+)
+VALIDATION_REPORT_REF = "validation/START_PACKAGE_VALIDATION_REPORT.json"
+VALIDATION_REPORT_RECEIPT_REF = (
+    "validation/START_PACKAGE_VALIDATION_REPORT_RECEIPT.json"
+)
+VALIDATION_REPORT_RECEIPT_SCHEMA_REF = (
+    "contracts/v2_9_release_closure/VALIDATION_REPORT_RECEIPT.schema.json"
+)
+FACTORY_REGRESSION_EXECUTION_RECEIPT_REF = (
+    "validation/FACTORY_REGRESSION_EXECUTION_RECEIPT.json"
+)
+EPOCH34_REMEDIATION_KEY = "v0_33_human_review_remediation"
+EPOCH34_REVIEW_FINDING_IDS = (
+    "HR-V033-001-EXISTING-EXECUTION-ROOT-OVERWRITE",
+    "HR-V033-002-REQUIRED-BINDER-REGRESSION-NOT-EXECUTED",
+)
+EPOCH34_REQUIRED_REGRESSION_TESTS = (
+    "test_epoch33_review_remediation_routes_to_producer_and_both_oracles",
+    "test_runtime_binder_rejects_missing_dependency_before_root_write",
+    "test_runtime_binder_rejects_dangling_uri_without_creating_root",
+    "test_runtime_binder_rejects_portable_inventory_gap_without_creating_root",
+    "test_runtime_binder_rejects_existing_root_by_default_and_allows_exact_reentry",
+    "test_standalone_requires_receiver_side_source_authority_policy",
+)
+EPOCH35_REMEDIATION_KEY = "v0_34_human_review_remediation"
+EPOCH35_REVIEW_FINDING_IDS = (
+    "HR-V034-001-RUNTIME-BINDER-EXECUTION-ROOT-SYMLINK-BYPASS",
+    "HR-V034-002-RUNTIME-BINDER-ATOMIC-PUBLISH-TOCTOU",
+    "HR-V034-003-RUNTIME-BINDER-CLOSURE-OVERCLAIM",
+)
+EPOCH35_REQUIRED_REGRESSION_TESTS = (
+    *EPOCH34_REQUIRED_REGRESSION_TESTS,
+    "test_epoch35_remediation_contract_is_accepted_by_both_oracles",
+    "test_runtime_binder_rejects_dangling_execution_root_symlink",
+    "test_runtime_binder_rejects_execution_root_symlink_to_existing_directory",
+    "test_runtime_binder_atomic_noreplace_rejects_appeared_empty_root",
+    "test_runtime_binder_rejects_parent_identity_swap",
+    "test_runtime_binder_atomic_noreplace_rejects_target_symlink_swap",
+)
 
 
 CheckFunction = Callable[[Path], list[dict[str, Any]]]
@@ -39,14 +133,48 @@ CheckFunction = Callable[[Path], list[dict[str, Any]]]
 
 CHECKS: tuple[tuple[str, CheckFunction], ...] = (
     ("REQUIRED_INVENTORY_AND_SYNTAX", lambda root: _check_inventory(root) + _check_syntax(root)),
+    ("PORTABLE_RELEASE_CONTRACT", lambda root: _check_portability(root)),
+    (
+        "DAG_CONTAINMENT_AND_HUMAN_REVIEW_CLOSURE",
+        lambda root: _check_dag_containment_and_closure(root),
+    ),
+    (
+        "SHARED_CONTROL_BASELINE_EXECUTABLE_CONTRACT",
+        lambda root: _check_shared_control_baseline_executable_contract(root),
+    ),
+    (
+        "CONTROL_PLANE_REGISTRATION_EXECUTABLE_CLOSURE",
+        lambda root: _check_control_plane_registration_executable_closure(root),
+    ),
+    (
+        "PROGRAM_DRIVER_RUNTIME_VERIFICATION_EXECUTABLE_CLOSURE",
+        lambda root: _check_program_driver_runtime_verification_executable_closure(
+            root
+        ),
+    ),
+    (
+        "V2_9_GENERIC_CONTROL_KERNEL",
+        lambda root: _check_v2_9_generic_control_kernel(root)
+        + _check_v2_9_release_closure_control_plane(root)
+        + _check_epoch38_generation_route(root)
+        + _check_epoch38_charter_projection(root),
+    ),
     ("NO_UNRESOLVED_TEMPLATES", lambda root: _check_placeholders(root)),
     ("IDENTITY_REFERENCES_AND_HASHES", lambda root: _check_identity_and_refs(root)),
     (
         "CANDIDATE_IMMUTABILITY_AND_EXECUTION_ROOT",
         lambda root: _check_candidate_execution_separation(root),
     ),
+    (
+        "NONEXECUTABLE_NEGATIVE_FIXTURE_SCHEMA",
+        lambda root: _check_nonexecutable_negative_fixture_schema(root),
+    ),
     ("WORKPACK_ARTIFACT_HASH_BINDINGS", lambda root: _check_artifact_hashes(root)),
     ("SOURCE_ATOM_AND_COVERAGE", lambda root: _check_sources_atoms_coverage(root)),
+    (
+        "SEMANTIC_PRODUCTION_CONTRACTS",
+        lambda root: _check_semantic_production_contracts(root),
+    ),
     ("PHASE_P3_AND_RELEASE_ORDER", lambda root: _check_phase_and_release(root)),
     ("THREE_PROJECT_DAG_AND_PACKAGES", lambda root: _check_three_projects(root)),
     ("AUTHORING_DEFAULTS_AND_AUTHORIZATION", lambda root: _check_authoring_boundary(root)),
@@ -63,13 +191,266 @@ def _context_roots(
     context = _read_json(root / "START_CONTEXT.json", findings)
     if not isinstance(context, dict):
         return root, root, {}
-    candidate_root = Path(
-        str(context.get("candidate_root") or context.get("target_root") or root)
-    ).expanduser().resolve()
-    execution_root = Path(
-        str(context.get("execution_root") or candidate_root)
-    ).expanduser().resolve()
+    candidate_value = str(
+        context.get("candidate_root") or context.get("target_root") or root
+    )
+    execution_value = str(context.get("execution_root") or candidate_value)
+    if _portable_context(context):
+        candidate_root = _contract_path(candidate_value)
+        execution_root = _contract_path(execution_value)
+    else:
+        candidate_root = Path(candidate_value).expanduser().resolve()
+        execution_root = Path(execution_value).expanduser().resolve()
     return candidate_root, execution_root, context
+
+
+def _portable_context(context: Mapping[str, Any]) -> bool:
+    return (
+        context.get("portability_mode") == PORTABLE_MODE
+        or (
+            context.get("candidate_root") == LOGICAL_CANDIDATE_ROOT
+            and context.get("execution_root") == LOGICAL_EXECUTION_ROOT
+        )
+    )
+
+
+def _local_profile_external_authority_not_applicable(
+    root: Path,
+    target: Mapping[str, Any] | None,
+) -> bool:
+    if not isinstance(target, Mapping):
+        return False
+    try:
+        profile = json.loads(
+            (root / "EPOCH38_GENERATION_PROFILE.json").read_text(
+                encoding="utf-8"
+            )
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return False
+    correction = target.get("v2_9_charter_architecture_correction_epoch38")
+    threat_model = (
+        correction.get("threat_model")
+        if isinstance(correction, Mapping)
+        else None
+    )
+    return bool(
+        target.get("architecture_epoch") == 4
+        and target.get("control_plane_epoch") == 4
+        and target.get("assurance_profile_id")
+        == "SELF_USE_LOCAL_TRUSTED_OPERATOR"
+        and target.get("operating_assurance_profile")
+        == "SELF_USE_LOCAL_TRUSTED_OPERATOR"
+        and isinstance(threat_model, Mapping)
+        and threat_model.get("external_trust_anchor") == "NOT_APPLICABLE"
+        and threat_model.get("external_certification_offered") is False
+        and isinstance(profile, Mapping)
+        and profile.get("profile_kind")
+        == "SELF_USE_LOCAL_CORE_CANDIDATE_ROUTE"
+        and profile.get("assurance_profile")
+        == "SELF_USE_LOCAL_TRUSTED_OPERATOR"
+        and profile.get("external_certification_claimed") is False
+        and profile.get("optional_security_hardening")
+        in {"NOT_APPLICABLE", "NOT_RUN"}
+        and profile.get("external_trust_anchor") == "NOT_APPLICABLE"
+    )
+
+
+def _external_receiver_authority_required(
+    root: Path,
+    target: Mapping[str, Any] | None,
+) -> bool:
+    if not isinstance(target, Mapping):
+        return False
+    if _local_profile_external_authority_not_applicable(root, target):
+        return False
+    try:
+        profile = json.loads(
+            (root / "EPOCH38_GENERATION_PROFILE.json").read_text(
+                encoding="utf-8"
+            )
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        profile = None
+    declared_profile = target.get("operating_assurance_profile") or target.get(
+        "assurance_profile_id"
+    )
+    epoch4_active = bool(
+        target.get("architecture_epoch") == 4
+        and target.get("control_plane_epoch") == 4
+    )
+    return bool(
+        isinstance(target.get("v0_24_human_review_remediation"), Mapping)
+        or (
+            epoch4_active
+            and (
+                isinstance(declared_profile, str)
+                or (
+                    isinstance(profile, Mapping)
+                    and (
+                        profile.get("external_certification_claimed") is not False
+                        or profile.get("optional_security_hardening")
+                        not in {"NOT_APPLICABLE", "NOT_RUN"}
+                        or profile.get("external_trust_anchor") != "NOT_APPLICABLE"
+                    )
+                )
+            )
+        )
+    )
+
+
+def _external_receiver_authority_disposition(
+    root: Path,
+    target: Mapping[str, Any] | None,
+) -> str:
+    if _local_profile_external_authority_not_applicable(root, target):
+        return "NOT_APPLICABLE_SELF_USE_LOCAL_TRUSTED_OPERATOR"
+    if _external_receiver_authority_required(root, target):
+        return "REQUIRED_FOR_EXTERNAL_CERTIFICATION"
+    return "NOT_APPLICABLE_NO_EXTERNAL_CERTIFICATION_PROFILE"
+
+
+def _logical_path_within(value: Any, expected_root: Path) -> bool:
+    path = _contract_path(value)
+    return path == expected_root or path.is_relative_to(expected_root)
+
+
+def _contract_path(value: Any) -> Path:
+    """Map logical Resource URIs to non-filesystem paths for containment checks."""
+
+    text = str(value)
+    for uri, virtual_root in (
+        (LOGICAL_CANDIDATE_ROOT, VIRTUAL_CANDIDATE_ROOT),
+        (LOGICAL_EXECUTION_ROOT, VIRTUAL_EXECUTION_ROOT),
+    ):
+        if text == uri:
+            return virtual_root
+        prefix = f"{uri}/"
+        if text.startswith(prefix):
+            suffix = text[len(prefix) :]
+            return virtual_root / suffix
+    return Path(text)
+
+
+def _contract_identity_parts(value: Any) -> tuple[str, ...] | None:
+    """Return a strict identity that rejects traversal and foreign URI schemes."""
+
+    text = str(value)
+    for uri, identity in (
+        (LOGICAL_CANDIDATE_ROOT, ("resource", "candidate")),
+        (LOGICAL_EXECUTION_ROOT, ("resource", "execution")),
+    ):
+        if text == uri:
+            return identity
+        prefix = f"{uri}/"
+        if text.startswith(prefix):
+            suffix = text[len(prefix) :]
+            pieces = suffix.split("/")
+            if not pieces or any(piece in {"", ".", ".."} for piece in pieces):
+                return None
+            return (*identity, *pieces)
+    if "://" in text:
+        return None
+    path = Path(text)
+    raw_pieces = text.replace("\\", "/").split("/")
+    if (
+        not path.is_absolute()
+        or any(piece in {".", ".."} for piece in raw_pieces)
+    ):
+        return None
+    return ("filesystem", path.anchor, *path.parts[1:])
+
+
+def _contract_path_is_contained(value: Any, allowed_root: Any) -> bool:
+    value_parts = _contract_identity_parts(value)
+    root_parts = _contract_identity_parts(allowed_root)
+    return bool(
+        value_parts is not None
+        and root_parts is not None
+        and value_parts[: len(root_parts)] == root_parts
+    )
+
+
+def _contract_serialized_path(root: Path, relative: str) -> str:
+    """Return the persisted form for a path below a physical or logical root."""
+
+    if root == VIRTUAL_CANDIDATE_ROOT:
+        return f"{LOGICAL_CANDIDATE_ROOT}/{relative.lstrip('/')}"
+    if root == VIRTUAL_EXECUTION_ROOT:
+        return f"{LOGICAL_EXECUTION_ROOT}/{relative.lstrip('/')}"
+    return str(root / relative)
+
+
+def _is_nonexecutable_negative_fixture(case: Any) -> bool:
+    atom_ids = case.get("atom_ids") if isinstance(case, Mapping) else None
+    return bool(
+        isinstance(case, Mapping)
+        and isinstance(case.get("case_id"), str)
+        and case["case_id"].startswith("NEG-")
+        and isinstance(atom_ids, list)
+        and atom_ids
+        and all(isinstance(atom_id, str) and atom_id for atom_id in atom_ids)
+        and isinstance(case.get("description"), str)
+        and bool(case["description"].strip())
+        and isinstance(case.get("expected_failure"), str)
+        and bool(case["expected_failure"].strip())
+        and case.get("fixture_kind") == "NON_EXECUTABLE_JSON"
+        and isinstance(case.get("input_fixture"), Mapping)
+        and bool(case["input_fixture"])
+        and isinstance(case.get("origin"), str)
+        and bool(case["origin"].strip())
+    )
+
+
+def _nonexecutable_negative_fixture_payload_ids(document: Any) -> set[int]:
+    if not isinstance(document, Mapping):
+        return set()
+    cases = document.get("cases")
+    if not isinstance(cases, list):
+        return set()
+    return {
+        id(case["input_fixture"])
+        for case in cases
+        if _is_nonexecutable_negative_fixture(case)
+    }
+
+
+def _check_nonexecutable_negative_fixture_schema(
+    root: Path,
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    path = root / "validation/NEGATIVE_CASES.json"
+    if not path.is_file():
+        return findings
+    document = _read_json(path, findings)
+    if not isinstance(document, Mapping):
+        return findings
+    cases = document.get("cases")
+    if not isinstance(cases, list):
+        return [
+            _finding(
+                "NONEXECUTABLE_NEGATIVE_FIXTURE_SCHEMA_INVALID",
+                "validation/NEGATIVE_CASES.json.cases must be an array",
+            )
+        ]
+    seen: set[str] = set()
+    for index, case in enumerate(cases):
+        if not isinstance(case, Mapping) or "fixture_kind" not in case:
+            continue
+        case_id = case.get("case_id")
+        if (
+            not _is_nonexecutable_negative_fixture(case)
+            or str(case_id) in seen
+        ):
+            findings.append(
+                _finding(
+                    "NONEXECUTABLE_NEGATIVE_FIXTURE_SCHEMA_INVALID",
+                    f"validation/NEGATIVE_CASES.json.cases[{index}]",
+                )
+            )
+        if isinstance(case_id, str):
+            seen.add(case_id)
+    return findings
 
 
 def _check_candidate_execution_separation(root: Path) -> list[dict[str, Any]]:
@@ -83,10 +464,17 @@ def _check_candidate_execution_separation(root: Path) -> list[dict[str, Any]]:
     )
     if not immutable:
         return findings
+    portable = _portable_context(context)
+    expected_candidate_value = (
+        LOGICAL_CANDIDATE_ROOT if portable else str(candidate_root)
+    )
+    expected_execution_value = (
+        LOGICAL_EXECUTION_ROOT if portable else str(execution_root)
+    )
     if (
-        context.get("target_root") != str(candidate_root)
-        or context.get("candidate_root") != str(candidate_root)
-        or context.get("execution_root") != str(execution_root)
+        context.get("target_root") != expected_candidate_value
+        or context.get("candidate_root") != expected_candidate_value
+        or context.get("execution_root") != expected_execution_value
         or context.get("execution_root_status") != "PLANNED_NOT_CREATED"
         or context.get("candidate_execution_root_overlap") is not False
         or candidate_root == execution_root
@@ -122,7 +510,13 @@ def _check_candidate_execution_separation(root: Path) -> list[dict[str, Any]]:
 
     def check_path(value: Any, *, expected_root: Path, label: str) -> None:
         path = Path(str(value)).expanduser()
-        if not path.is_absolute() or not path.resolve().is_relative_to(expected_root):
+        valid = (
+            _logical_path_within(value, expected_root)
+            if portable
+            else path.is_absolute()
+            and path.resolve().is_relative_to(expected_root)
+        )
+        if not valid:
             findings.append(
                 _finding(
                     "CANDIDATE_IMMUTABILITY_VIOLATION",
@@ -130,7 +524,11 @@ def _check_candidate_execution_separation(root: Path) -> list[dict[str, Any]]:
                 )
             )
 
+    nonexecutable_fixture_payload_ids: set[int] = set()
+
     def visit(value: Any, location: str) -> None:
+        if id(value) in nonexecutable_fixture_payload_ids:
+            return
         if isinstance(value, dict):
             for key, item in value.items():
                 label = f"{location}.{key}"
@@ -154,11 +552,21 @@ def _check_candidate_execution_separation(root: Path) -> list[dict[str, Any]]:
     for path in sorted(root.rglob("*.json")):
         document = _read_json(path, findings)
         if isinstance(document, (dict, list)):
-            visit(document, path.relative_to(root).as_posix())
+            relative = path.relative_to(root).as_posix()
+            if relative == "validation/NEGATIVE_CASES.json":
+                nonexecutable_fixture_payload_ids = (
+                    _nonexecutable_negative_fixture_payload_ids(document)
+                )
+            else:
+                nonexecutable_fixture_payload_ids = set()
+            visit(document, relative)
 
     capsule = _read_json(root / "CAPSULE.json", findings)
     forbidden = capsule.get("forbidden_write_paths", []) if isinstance(capsule, dict) else []
-    if str(candidate_root) not in forbidden:
+    forbidden_candidate_value = (
+        LOGICAL_CANDIDATE_ROOT if portable else str(candidate_root)
+    )
+    if forbidden_candidate_value not in forbidden:
         findings.append(
             _finding(
                 "CANDIDATE_IMMUTABILITY_VIOLATION",
@@ -168,17 +576,6380 @@ def _check_candidate_execution_separation(root: Path) -> list[dict[str, Any]]:
     return findings
 
 
-def validate_candidate(
+def _check_portability(root: Path) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    portable_inventory: set[str] | None = None
+    manifest_path = root / "validation/PORTABILITY_MANIFEST.json"
+    if not manifest_path.is_file():
+        return findings
+    manifest = _read_json(manifest_path, findings)
+    context = _read_json(root / "START_CONTEXT.json", findings)
+    if not isinstance(manifest, dict) or not isinstance(context, dict):
+        return findings
+    expected_roots = {
+        "candidate": LOGICAL_CANDIDATE_ROOT,
+        "execution": LOGICAL_EXECUTION_ROOT,
+    }
+    expected_self_check = {
+        "command": "python3 tools/self_check.py",
+        "python_version_constraint": ">=3.11,<4",
+        "standard_library_only": False,
+        "network_required": False,
+        "external_packages": ["cryptography>=45,<49"],
+        "receiver_authority_preflight_mode": "PROFILE_AWARE",
+    }
+    frozen_ir = _read_json(
+        root / "canonical_sources/FROZEN_REQUIREMENT_IR.json", findings
+    )
+    frozen_target = frozen_ir.get("target") if isinstance(frozen_ir, Mapping) else None
+    local_authority_na = _local_profile_external_authority_not_applicable(
+        root, frozen_target
+    )
+    external_authority_required = _external_receiver_authority_required(
+        root, frozen_target
+    )
+    if external_authority_required:
+        expected_self_check.update(
+            {
+                "external_receiver_authority_required": True,
+                "external_receiver_authority_disposition": (
+                    "REQUIRED_FOR_EXTERNAL_CERTIFICATION"
+                ),
+                "required_receiver_environment": [
+                    "HF_SOURCE_AUTHORITY_POLICY_LOCK",
+                    "HF_SOURCE_AUTHORITY_TRUST_ANCHOR",
+                    "HF_SOURCE_AUTHORITY_TRUST_ANCHOR_SHA256",
+                ],
+                "receiver_policy_must_be_external_to_candidate": True,
+                "receiver_trust_anchor_must_be_external_to_candidate": True,
+                "receiver_trust_anchor_hash_must_be_pinned_outside_candidate": True,
+            }
+        )
+    elif local_authority_na:
+        profile = _read_json(
+            root / "EPOCH38_GENERATION_PROFILE.json", findings
+        )
+        expected_self_check.update(
+            {
+                "external_receiver_authority_required": False,
+                "external_receiver_authority_disposition": (
+                    "NOT_APPLICABLE_SELF_USE_LOCAL_TRUSTED_OPERATOR"
+                ),
+                "external_certification_claimed": False,
+                "optional_security_hardening": profile.get(
+                    "optional_security_hardening"
+                )
+                if isinstance(profile, Mapping)
+                else None,
+            }
+        )
+    else:
+        expected_self_check.update(
+            {
+                "external_receiver_authority_required": False,
+                "external_receiver_authority_disposition": (
+                    "NOT_APPLICABLE_NO_EXTERNAL_CERTIFICATION_PROFILE"
+                ),
+            }
+        )
+    if (
+        manifest.get("portability_mode") != PORTABLE_MODE
+        or manifest.get("local_binding_policy") != "LOCAL_ONLY_NON_EXPORTABLE"
+        or manifest.get("logical_roots") != expected_roots
+        or manifest.get("resolved_paths_persisted") is not False
+        or manifest.get("external_symlinks_allowed") is not False
+        or context.get("candidate_root") != LOGICAL_CANDIDATE_ROOT
+        or context.get("target_root") != LOGICAL_CANDIDATE_ROOT
+        or context.get("execution_root") != LOGICAL_EXECUTION_ROOT
+        or not isinstance(manifest.get("release_requirements"), dict)
+        or not manifest.get("release_requirements", {}).get("primary_runtime")
+        or not isinstance(
+            manifest.get("release_requirements", {}).get("required_tools"), list
+        )
+        or not isinstance(
+            manifest.get("release_requirements", {}).get("required_plugins"), list
+        )
+        or not isinstance(
+            manifest.get("release_requirements", {}).get("required_mcp_servers"),
+            list,
+        )
+        or manifest.get("release_requirements", {}).get("self_check")
+        != expected_self_check
+    ):
+        findings.append(
+            _finding(
+                "PORTABILITY_MANIFEST_INVALID",
+                "logical roots or local-binding policy are inconsistent",
+            )
+        )
+    self_check_path = root / "tools/self_check.py"
+    portable_file_manifest_path = root / "validation/PORTABLE_FILE_MANIFEST.json"
+    readme_path = root / "README.md"
+    if not self_check_path.is_file():
+        findings.append(
+            _finding(
+                "PORTABLE_SELF_CHECK_MISSING",
+                "tools/self_check.py must travel with the Candidate",
+            )
+        )
+    if not portable_file_manifest_path.is_file():
+        findings.append(
+            _finding(
+                "PORTABLE_FILE_MANIFEST_MISSING",
+                "validation/PORTABLE_FILE_MANIFEST.json is required",
+            )
+        )
+    if not readme_path.is_file() or "python3 tools/self_check.py" not in readme_path.read_text(
+        encoding="utf-8"
+    ):
+        findings.append(
+            _finding(
+                "PORTABLE_SELF_CHECK_UNDOCUMENTED",
+                "README.md must document the exact offline self-check command",
+            )
+        )
+    findings.extend(_check_runtime_binding_support(root, manifest))
+    if local_authority_na:
+        profile = _read_json(
+            root / "EPOCH38_GENERATION_PROFILE.json", findings
+        )
+        if (
+            isinstance(profile, Mapping)
+            and isinstance(profile.get("active_requirement_epoch"), int)
+            and profile["active_requirement_epoch"] >= 51
+        ):
+            negative = _read_json(
+                root / "validation/NEGATIVE_CASES.json", findings
+            )
+            negative_cases = (
+                negative.get("cases", [])
+                if isinstance(negative, Mapping)
+                else []
+            )
+            case_ids = {
+                str(case.get("case_id"))
+                for case in negative_cases
+                if isinstance(case, Mapping)
+            }
+            required_case_ids = {
+                "NEG-V29-E51-LOCAL-RUNTIME-AUTHORITY-CLAIM-DRIFT",
+                "NEG-V29-E51-OPTIONAL-HARDENING-AUTHORITY-OMISSION",
+            }
+            if not required_case_ids.issubset(case_ids):
+                findings.append(
+                    _finding(
+                        "LOCAL_RUNTIME_AUTHORITY_NEGATIVE_FIXTURES_MISSING",
+                        ",".join(sorted(required_case_ids - case_ids)),
+                    )
+                )
+    findings.extend(_check_toolchain_manifest(root, manifest))
+    findings.extend(_check_portable_source_index(root))
+    if portable_file_manifest_path.is_file():
+        file_manifest = _read_json(portable_file_manifest_path, findings)
+        if not isinstance(file_manifest, dict):
+            findings.append(
+                _finding(
+                    "PORTABLE_FILE_MANIFEST_INVALID",
+                    "portable file manifest must be a JSON object",
+                )
+            )
+        else:
+            excluded = set(file_manifest.get("excluded_files") or [])
+            expected_excluded = {
+                "validation/PORTABLE_FILE_MANIFEST.json",
+                "validation/START_PACKAGE_VALIDATION_REPORT.json",
+            }
+            declared_files = file_manifest.get("files")
+            actual_files = {
+                path.relative_to(root).as_posix(): path
+                for path in root.rglob("*")
+                if path.is_file()
+                and path.relative_to(root).as_posix() not in excluded
+            }
+            if (
+                excluded != expected_excluded
+                or file_manifest.get("hash_algorithm") != "sha256"
+                or not isinstance(declared_files, dict)
+                or file_manifest.get("file_count") != len(actual_files)
+                or set(declared_files or {}) != set(actual_files)
+            ):
+                findings.append(
+                    _finding(
+                        "PORTABLE_INVENTORY_MISMATCH",
+                        "portable file manifest does not exactly cover the Candidate",
+                    )
+                )
+            if isinstance(declared_files, dict):
+                portable_inventory = set(declared_files) | excluded
+                for relative, expected_hash in declared_files.items():
+                    path = actual_files.get(relative)
+                    if path is None or _file_hash(path) != expected_hash:
+                        findings.append(
+                            _finding(
+                                "PORTABLE_FILE_HASH_MISMATCH",
+                                str(relative),
+                            )
+                        )
+    if portable_inventory is not None:
+        findings.extend(
+            _check_candidate_resource_uri_closure(root, portable_inventory)
+        )
+        findings.extend(
+            _check_portable_runtime_dependency_closure(root, portable_inventory)
+        )
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root).as_posix()
+        if path.is_symlink():
+            findings.append(_finding("EXTERNAL_SYMLINK_FORBIDDEN", relative))
+            continue
+        if not path.is_file() or path.suffix not in PORTABLE_TEXT_SUFFIXES:
+            continue
+        text = path.read_text(encoding="utf-8")
+        match = LOCAL_PATH_RE.search(text)
+        if match:
+            findings.append(
+                _finding(
+                    "LOCAL_PATH_BINDING",
+                    f"{relative}: {match.group(0).strip()}",
+                )
+            )
+    return findings
+
+
+def _candidate_uri_path(root: Path, uri: Any) -> Path | None:
+    if not isinstance(uri, str) or not uri.startswith(
+        f"{LOGICAL_CANDIDATE_ROOT}/"
+    ):
+        return None
+    suffix = uri.removeprefix(f"{LOGICAL_CANDIDATE_ROOT}/")
+    parts = Path(suffix).parts
+    if not suffix or any(part in {"", ".", ".."} for part in parts):
+        return None
+    path = (root / suffix).resolve()
+    return path if path.is_relative_to(root.resolve()) else None
+
+
+def _check_candidate_resource_uri_closure(
+    root: Path, portable_inventory: set[str]
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    resolved_root = root.resolve()
+    for source in sorted(root.rglob("*")):
+        if not source.is_file() or source.suffix not in PORTABLE_TEXT_SUFFIXES:
+            continue
+        try:
+            text = source.read_text(encoding="utf-8")
+        except UnicodeError:
+            continue
+        for uri in RESOURCE_URI_RE.findall(text):
+            if uri == LOGICAL_CANDIDATE_ROOT:
+                continue
+            if not uri.startswith(f"{LOGICAL_CANDIDATE_ROOT}/"):
+                continue
+            suffix = uri.removeprefix(f"{LOGICAL_CANDIDATE_ROOT}/")
+            parts = Path(suffix).parts
+            target = (root / suffix).resolve()
+            if (
+                not suffix
+                or any(part in {"", ".", ".."} for part in parts)
+                or not target.is_relative_to(resolved_root)
+                or not target.is_file()
+                or target.is_symlink()
+            ):
+                finding = ("CANDIDATE_RESOURCE_URI_DANGLING", uri)
+            elif target.relative_to(root).as_posix() not in portable_inventory:
+                finding = (
+                    "CANDIDATE_RESOURCE_URI_OUTSIDE_PORTABLE_INVENTORY",
+                    uri,
+                )
+            else:
+                continue
+            if finding not in seen:
+                seen.add(finding)
+                findings.append(_finding(*finding))
+    return findings
+
+
+def _check_portable_runtime_dependency_closure(
+    root: Path, portable_inventory: set[str]
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    runtime_root = root / "tools/harness_foundry_runtime"
+    for source in sorted(runtime_root.glob("*.py")):
+        try:
+            tree = ast.parse(source.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, SyntaxError) as exc:
+            findings.append(
+                _finding(
+                    "PORTABLE_RUNTIME_MODULE_INVALID",
+                    f"{source.name}: {exc}",
+                )
+            )
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom) or node.level != 1:
+                continue
+            dependencies = (
+                [node.module.split(".", 1)[0]]
+                if node.module
+                else [alias.name.split(".", 1)[0] for alias in node.names]
+            )
+            for dependency in dependencies:
+                module = runtime_root / f"{dependency}.py"
+                package = runtime_root / dependency / "__init__.py"
+                target = module if module.is_file() else package
+                if not target.is_file():
+                    findings.append(
+                        _finding(
+                            "PORTABLE_RUNTIME_DEPENDENCY_MISSING",
+                            f"{source.name}: .{dependency}",
+                        )
+                    )
+                    continue
+                relative = target.relative_to(root).as_posix()
+                if relative not in portable_inventory:
+                    findings.append(
+                        _finding(
+                            "PORTABLE_RUNTIME_DEPENDENCY_OUTSIDE_INVENTORY",
+                            relative,
+                        )
+                    )
+    return findings
+
+
+def _check_runtime_binding_support(
+    root: Path, portability: Mapping[str, Any]
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    contract_path = root / "validation/RUNTIME_BINDING_CONTRACT.json"
+    setup_path = root / "tools/setup_runtime.py"
+    readme_path = root / "README.md"
+    expected_command = (
+        "python3 tools/setup_runtime.py --execution-root "
+        "../Harness_Foundry_execution"
+    )
+    contract = _read_json(contract_path, findings)
+    runtime_setup = portability.get("release_requirements", {}).get(
+        "runtime_setup"
+    )
+    setup_sha256 = _file_hash(setup_path) if setup_path.is_file() else None
+    frozen_ir = _read_json(
+        root / "canonical_sources/FROZEN_REQUIREMENT_IR.json", findings
+    )
+    target = frozen_ir.get("target") if isinstance(frozen_ir, Mapping) else None
+    local_authority_na = _local_profile_external_authority_not_applicable(
+        root, target
+    )
+    external_authority_required = _external_receiver_authority_required(
+        root, target
+    )
+    expected_authority_disposition = _external_receiver_authority_disposition(
+        root, target
+    )
+    required_true = (
+        "validation_before_first_execution_root_write",
+        "portable_manifest_preflight_required",
+        "candidate_uri_preflight_required",
+        "runtime_dependency_closure_required",
+        "receiver_authority_preflight_required",
+        "fresh_root_atomic_publish_required",
+        "failure_cleanup_keeps_fresh_root_absent",
+        "existing_root_fail_closed_by_default",
+        "idempotent_reentry_requires_explicit_flag",
+        "idempotent_reentry_requires_exact_receipt",
+        "receiver_raw_execution_path_identity_required",
+        "final_component_lstat_before_resolution_required",
+        "parent_directory_identity_pinned_through_publish",
+        "fresh_root_atomic_noreplace_required",
+        "existing_receipt_nofollow_read_required",
+    )
+    if (
+        not setup_path.is_file()
+        or not isinstance(contract, dict)
+        or contract.get("binding_mode") != "LOCAL_ONLY_NON_EXPORTABLE"
+        or contract.get("setup_command") != expected_command
+        or contract.get("candidate_write_policy") != "FORBIDDEN"
+        or contract.get("root_overlap_policy") != "REJECT"
+        or contract.get("resolved_machine_paths_exported") is not False
+        or contract.get("setup_ref")
+        != "harness-resource://candidate/tools/setup_runtime.py"
+        or contract.get("setup_sha256") != setup_sha256
+        or contract.get("fresh_root_same_parent_staging_required") is not True
+        or contract.get("human_gate_consumption_before_binding_success_allowed")
+        is not False
+        or contract.get("existing_binding_overwrite_allowed") is not False
+        or contract.get("receiver_authority_preflight_mode") != "PROFILE_AWARE"
+        or contract.get("external_receiver_authority_required")
+        != external_authority_required
+        or contract.get("external_receiver_authority_disposition")
+        != expected_authority_disposition
+        or any(contract.get(field) is not True for field in required_true)
+        or not isinstance(runtime_setup, dict)
+        or runtime_setup.get("command") != expected_command
+        or runtime_setup.get("writes_candidate") is not False
+        or runtime_setup.get("setup_ref") != contract.get("setup_ref")
+        or runtime_setup.get("setup_sha256") != setup_sha256
+        or any(runtime_setup.get(field) is not True for field in required_true)
+        or runtime_setup.get("receiver_authority_preflight_mode")
+        != "PROFILE_AWARE"
+        or runtime_setup.get("external_receiver_authority_required")
+        != external_authority_required
+        or runtime_setup.get("external_receiver_authority_disposition")
+        != expected_authority_disposition
+        or runtime_setup.get("existing_binding_overwrite_allowed") is not False
+        or contract.get("unsupported_noreplace_platform_behavior") != "FAIL_CLOSED"
+        or runtime_setup.get("unsupported_noreplace_platform_behavior") != "FAIL_CLOSED"
+    ):
+        findings.append(
+            _finding(
+                "RUNTIME_BINDING_CONTRACT_INVALID",
+                "portable Candidate must ship an explicit local-only runtime binder",
+            )
+        )
+    readme = (
+        readme_path.read_text(encoding="utf-8") if readme_path.is_file() else ""
+    )
+    if expected_command not in readme:
+        findings.append(
+            _finding(
+                "RUNTIME_BINDING_SETUP_UNDOCUMENTED",
+                "README.md must document the exact runtime binding command",
+            )
+        )
+    return findings
+
+
+def _epoch33_runtime_binding_review_is_complete(value: Any) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    preflight = value.get("runtime_binder_preflight_contract")
+    routing = value.get("adversarial_domain_contract")
+    binding = value.get("setup_runtime_binding_contract")
+    standalone = value.get("standalone_missing_authority_contract")
+    return (
+        value.get("status") == "REQUIRED_IN_REPLACEMENT_CANDIDATE"
+        and value.get("active_epochs")
+        == {
+            "architecture_epoch": 2,
+            "control_plane_epoch": 2,
+            "requirement_epoch": 33,
+        }
+        and value.get("closure_receipt_required") is True
+        and value.get("closure_receipt_status")
+        == "CLOSURE_REQUIRED_IN_REPLACEMENT_CANDIDATE_STATIC_RECEIPT"
+        and set(value.get("finding_ids") or ())
+        == {
+            "HR-V032-001-BINDER-PREFLIGHT-INCOMPLETE",
+            "HR-V032-002-ADVERSARIAL-DOMAIN-MISROUTED",
+            "HR-V032-003-BINDER-HASH-ATOMICITY-UNBOUND",
+            "HR-V032-004-STANDALONE-CASCADE-FALSE-FINDING",
+        }
+        and isinstance(preflight, Mapping)
+        and all(
+            preflight.get(field) is True
+            for field in (
+                "portable_manifest_before_first_execution_root_write",
+                "all_candidate_uri_closure_before_first_execution_root_write",
+                "runtime_dependency_closure_before_first_execution_root_write",
+                "necessary_receiver_authority_before_first_execution_root_write",
+            )
+        )
+        and isinstance(routing, Mapping)
+        and routing.get("epoch32_uri_binder_cases_owner") == "RUNTIME_BINDER"
+        and routing.get("source_authority_domain_excludes_runtime_binder_cases")
+        is True
+        and set(routing.get("runtime_binder_required_adversarial_cases") or ())
+        == {
+            "DANGLING_CANDIDATE_RESOURCE_URI",
+            "CANDIDATE_RESOURCE_URI_OUTSIDE_PORTABLE_INVENTORY",
+            "MISSING_PACKAGED_RUNTIME_RELATIVE_IMPORT",
+            "BINDER_FAILURE_LEAVES_FRESH_EXECUTION_ROOT_ABSENT",
+        }
+        and isinstance(binding, Mapping)
+        and all(
+            binding.get(field) is True
+            for field in (
+                "runtime_binding_contract_binds_setup_runtime_sha256",
+                "closure_receipt_binds_setup_runtime_sha256",
+                "validation_before_first_execution_root_write",
+                "fresh_root_same_parent_staging_required",
+                "fresh_root_atomic_publish_required",
+                "failure_cleanup_keeps_fresh_root_absent",
+            )
+        )
+        and isinstance(standalone, Mapping)
+        and standalone.get("missing_external_authority_root_finding_preserved")
+        is True
+        and standalone.get("dependent_adversarial_false_findings_suppressed")
+        is True
+    )
+
+
+def _epoch34_runtime_binding_review_is_complete(value: Any) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    existing_root = value.get("existing_execution_root_contract")
+    execution = value.get("required_regression_execution_contract")
+    implementation = value.get("implementation_evidence")
+    return (
+        value.get("status") == "REQUIRED_IN_REPLACEMENT_CANDIDATE"
+        and value.get("active_epochs")
+        == {
+            "architecture_epoch": 2,
+            "control_plane_epoch": 2,
+            "requirement_epoch": 34,
+        }
+        and value.get("closure_receipt_required") is True
+        and value.get("closure_receipt_status")
+        == CLOSURE_DECLARATION_STATUS
+        and set(value.get("finding_ids") or ())
+        == set(EPOCH34_REVIEW_FINDING_IDS)
+        and tuple(value.get("required_regression_tests") or ())
+        == EPOCH34_REQUIRED_REGRESSION_TESTS
+        and isinstance(existing_root, Mapping)
+        and existing_root.get("fail_closed_by_default") is True
+        and existing_root.get("explicit_idempotent_reentry_allowed") is True
+        and existing_root.get("exact_existing_receipt_required") is True
+        and existing_root.get("receipt_overwrite_allowed") is False
+        and isinstance(execution, Mapping)
+        and execution.get("factory_validator_executes_exact_hash_bound_tests")
+        is True
+        and execution.get("candidate_publication_blocked_on_missing_test") is True
+        and execution.get("candidate_publication_blocked_on_failed_test") is True
+        and execution.get("closure_pass_requires_execution_receipt") is True
+        and isinstance(implementation, Mapping)
+        and implementation.get("regression_test_ref")
+        == "tests/test_release_closure_candidate.py"
+        and SHA256_RE.fullmatch(
+            str(implementation.get("regression_test_sha256") or "")
+        )
+        is not None
+    )
+
+
+def _epoch35_runtime_binding_path_atomicity_is_complete(value: Any) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    raw_path = value.get("receiver_raw_path_identity_contract")
+    parent = value.get("parent_directory_identity_contract")
+    publication = value.get("atomic_noreplace_publication_contract")
+    receipt = value.get("idempotent_reentry_nofollow_contract")
+    execution = value.get("required_regression_execution_contract")
+    implementation = value.get("implementation_evidence")
+    return (
+        value.get("status") == "REQUIRED_IN_REPLACEMENT_CANDIDATE"
+        and value.get("active_epochs")
+        == {
+            "architecture_epoch": 2,
+            "control_plane_epoch": 2,
+            "requirement_epoch": 35,
+        }
+        and value.get("closure_receipt_required") is True
+        and value.get("closure_receipt_status") == CLOSURE_DECLARATION_STATUS
+        and set(value.get("finding_ids") or ()) == set(EPOCH35_REVIEW_FINDING_IDS)
+        and tuple(value.get("required_regression_tests") or ())
+        == EPOCH35_REQUIRED_REGRESSION_TESTS
+        and isinstance(raw_path, Mapping)
+        and all(
+            raw_path.get(field) is True
+            for field in (
+                "receiver_argument_preserved_before_resolution",
+                "final_component_lstat_nofollow_required",
+                "dangling_symlink_rejected",
+                "existing_target_symlink_rejected",
+            )
+        )
+        and isinstance(parent, Mapping)
+        and all(
+            parent.get(field) is True
+            for field in (
+                "opened_parent_directory_identity_pinned",
+                "parent_identity_revalidated_before_publish",
+                "publication_uses_pinned_parent_descriptor",
+            )
+        )
+        and isinstance(publication, Mapping)
+        and publication.get("destination_noreplace_required") is True
+        and publication.get("macos_renameatx_np_rename_excl") is True
+        and publication.get("linux_renameat2_rename_noreplace") is True
+        and publication.get("unsafe_replace_fallback_allowed") is False
+        and publication.get("unsupported_platform_behavior") == "FAIL_CLOSED"
+        and isinstance(receipt, Mapping)
+        and receipt.get("execution_root_identity_stable_for_reentry") is True
+        and receipt.get("receipt_directory_nofollow") is True
+        and receipt.get("receipt_file_nofollow") is True
+        and receipt.get("receipt_overwrite_allowed") is False
+        and isinstance(execution, Mapping)
+        and execution.get("factory_validator_executes_exact_hash_bound_tests")
+        is True
+        and execution.get("candidate_publication_blocked_on_missing_test") is True
+        and execution.get("candidate_publication_blocked_on_failed_test") is True
+        and execution.get("closure_pass_requires_execution_receipt") is True
+        and isinstance(implementation, Mapping)
+        and implementation.get("compiler_ref")
+        == "src/harness_foundry_factory/compiler.py"
+        and implementation.get("factory_validator_ref")
+        == "src/harness_foundry_factory/validator.py"
+        and implementation.get("regression_test_ref")
+        == "tests/test_release_closure_candidate.py"
+        and all(
+            SHA256_RE.fullmatch(str(implementation.get(field) or "")) is not None
+            for field in (
+                "compiler_sha256",
+                "factory_validator_sha256",
+                "regression_test_sha256",
+            )
+        )
+    )
+
+
+def _validator_command_provider(executable: str) -> str:
+    if executable.endswith("/codex"):
+        return "codex-cli"
+    if executable.endswith("/program-driver"):
+        return "program-driver"
+    if executable.endswith("/linkage-review"):
+        return "linkage-review-cli"
+    if executable.endswith("/python") or executable.endswith("/python3"):
+        return "python"
+    return "UNDECLARED"
+
+
+def _validator_python_module_provider(module: str) -> str:
+    return {
+        "unittest": "python",
+        "pytest": "pytest",
+        "build": "build",
+        "linkage_review": "linkage-review-module",
+        "external_lab": "external-lab-module",
+    }.get(module, "UNDECLARED")
+
+
+def _candidate_command_dependencies(root: Path) -> list[dict[str, str]]:
+    dependencies: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for path in sorted(root.rglob("*.json")):
+        try:
+            document = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            continue
+        if not isinstance(document, dict) or not isinstance(
+            document.get("commands"), list
+        ):
+            continue
+        relative = path.relative_to(root).as_posix()
+        for index, command in enumerate(document["commands"]):
+            if not isinstance(command, dict):
+                continue
+            executable = command.get("executable_abs") or command.get("executable")
+            if not isinstance(executable, str) or not executable:
+                continue
+            command_id = str(command.get("command_id") or f"INDEX-{index}")
+            items = [
+                ("EXECUTABLE", executable, _validator_command_provider(executable))
+            ]
+            argv = command.get("argv")
+            if (
+                isinstance(argv, list)
+                and len(argv) >= 3
+                and argv[1] == "-m"
+                and isinstance(argv[2], str)
+            ):
+                items.append(
+                    (
+                        "PYTHON_MODULE",
+                        argv[2],
+                        _validator_python_module_provider(argv[2]),
+                    )
+                )
+            for kind, dependency_ref, provider in items:
+                key = (relative, command_id, kind, dependency_ref)
+                if key in seen:
+                    continue
+                seen.add(key)
+                dependencies.append(
+                    {
+                        "command_file_ref": f"{LOGICAL_CANDIDATE_ROOT}/{relative}",
+                        "command_id": command_id,
+                        "dependency_kind": kind,
+                        "dependency_ref": dependency_ref,
+                        "provider_tool_id": provider,
+                    }
+                )
+    return dependencies
+
+
+def _check_toolchain_manifest(
+    root: Path, portability: Mapping[str, Any]
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    toolchain = _read_json(root / "validation/TOOLCHAIN_MANIFEST.json", findings)
+    if not isinstance(toolchain, dict):
+        return findings
+    declared = toolchain.get("required_tools")
+    release_declared = portability.get("release_requirements", {}).get(
+        "required_tools"
+    )
+    ids = [
+        item.get("tool_id")
+        for item in declared or []
+        if isinstance(item, dict)
+    ]
+    expected_dependencies = _candidate_command_dependencies(root)
+    if (
+        not isinstance(declared, list)
+        or declared != release_declared
+        or not ids
+        or len(ids) != len(set(ids))
+        or any(not isinstance(item, str) or not item for item in ids)
+        or toolchain.get("command_dependencies") != expected_dependencies
+        or toolchain.get("command_dependency_count") != len(expected_dependencies)
+    ):
+        findings.append(
+            _finding(
+                "TOOLCHAIN_MANIFEST_MISMATCH",
+                "declared tools must exactly cover the compiled command graph",
+            )
+        )
+        return findings
+    undeclared = sorted(
+        {
+            item["provider_tool_id"]
+            for item in expected_dependencies
+            if item["provider_tool_id"] not in set(ids)
+        }
+    )
+    if (
+        undeclared
+        or toolchain.get("undeclared_provider_ids") != []
+        or toolchain.get("coverage_status") != "PASS"
+    ):
+        findings.append(
+            _finding(
+                "TOOLCHAIN_DEPENDENCY_UNDECLARED",
+                ", ".join(undeclared) or "toolchain declares false coverage",
+            )
+        )
+    return findings
+
+
+def _check_portable_source_index(root: Path) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    source_manifest = _read_json(
+        root / "canonical_sources/SOURCE_MANIFEST.json", findings
+    )
+    index = _read_json(
+        root / "canonical_sources/PORTABLE_SOURCE_INDEX.json", findings
+    )
+    if not isinstance(source_manifest, dict) or not isinstance(index, dict):
+        return findings
+    sources = {
+        str(item.get("source_id")): item
+        for item in source_manifest.get("sources", [])
+        if isinstance(item, dict) and item.get("source_id")
+    }
+    entries = index.get("sources")
+    top_fields = {
+        "schema_version",
+        "candidate_root",
+        "source_count",
+        "all_source_references_resolve_in_candidate",
+        "all_copy_immutable_snapshots_embedded",
+        "sources",
+    }
+    entry_fields = {
+        "source_id",
+        "source_sha256",
+        "copy_policy",
+        "receipt_ref",
+        "receipt_sha256",
+        "payload_ref",
+        "payload_file_sha256",
+        "payload_embedded",
+    }
+    expected_all_snapshots = all(
+        source.get("payload_embedded") is True
+        for source in sources.values()
+        if source.get("copy_policy") == "COPY_IMMUTABLE_SNAPSHOT"
+    )
+    if (
+        not isinstance(entries, list)
+        or set(index) != top_fields
+        or index.get("schema_version") != "1.0"
+        or index.get("candidate_root") != LOGICAL_CANDIDATE_ROOT
+        or index.get("source_count") != len(sources)
+        or index.get("all_source_references_resolve_in_candidate") is not True
+        or index.get("all_copy_immutable_snapshots_embedded")
+        is not expected_all_snapshots
+        or len(sources) != len(source_manifest.get("sources", []))
+        or len(entries) != len(sources)
+        or {item.get("source_id") for item in entries if isinstance(item, dict)}
+        != set(sources)
+    ):
+        findings.append(
+            _finding(
+                "PORTABLE_SOURCE_INDEX_INVALID",
+                "portable source index does not exactly cover SOURCE_MANIFEST",
+            )
+        )
+        return findings
+    for entry in entries:
+        if not isinstance(entry, dict) or set(entry) != entry_fields:
+            findings.append(_finding("PORTABLE_SOURCE_INDEX_INVALID", str(entry)))
+            continue
+        source_id = str(entry.get("source_id"))
+        source = sources[source_id]
+        receipt_path = _candidate_uri_path(root, entry.get("receipt_ref"))
+        if (
+            source.get("path_or_uri") != entry.get("receipt_ref")
+            or source.get("portable_evidence_ref") != entry.get("receipt_ref")
+            or source.get("sha256") != entry.get("source_sha256")
+            or source.get("copy_policy") != entry.get("copy_policy")
+            or receipt_path is None
+            or not receipt_path.is_file()
+            or _file_hash(receipt_path) != entry.get("receipt_sha256")
+        ):
+            findings.append(
+                _finding("PORTABLE_SOURCE_RECEIPT_INVALID", source_id)
+            )
+            continue
+        receipt = _read_json(receipt_path, findings)
+        if (
+            not isinstance(receipt, dict)
+            or receipt.get("source_id") != source_id
+            or receipt.get("source_sha256") != source.get("sha256")
+            or receipt.get("copy_policy") != source.get("copy_policy")
+            or receipt.get("payload_embedded") is not entry.get("payload_embedded")
+            or receipt.get("payload_ref") != entry.get("payload_ref")
+        ):
+            findings.append(
+                _finding("PORTABLE_SOURCE_RECEIPT_INVALID", source_id)
+            )
+            continue
+        if entry.get("payload_embedded") is True:
+            payload_path = _candidate_uri_path(root, entry.get("payload_ref"))
+            try:
+                encoded = payload_path.read_text(encoding="ascii").strip()
+                payload = base64.b64decode(encoded, validate=True)
+            except (AttributeError, OSError, UnicodeError, ValueError):
+                findings.append(
+                    _finding("PORTABLE_SOURCE_PAYLOAD_INVALID", source_id)
+                )
+                continue
+            if (
+                payload_path is None
+                or not payload_path.is_file()
+                or _file_hash(payload_path) != entry.get("payload_file_sha256")
+                or hashlib.sha256(payload).hexdigest() != source.get("sha256")
+                or source.get("snapshot_path") != entry.get("payload_ref")
+            ):
+                findings.append(
+                    _finding("PORTABLE_SOURCE_PAYLOAD_INVALID", source_id)
+                )
+        elif source.get("copy_policy") == "COPY_IMMUTABLE_SNAPSHOT":
+            findings.append(
+                _finding("PORTABLE_SOURCE_PAYLOAD_MISSING", source_id)
+            )
+        elif (
+            entry.get("payload_ref") is not None
+            or entry.get("payload_file_sha256") is not None
+            or source.get("snapshot_path") != entry.get("receipt_ref")
+        ):
+            findings.append(
+                _finding("PORTABLE_SOURCE_PAYLOAD_INVALID", source_id)
+            )
+    return findings
+
+
+def _check_factory_implementation_provenance(
+    root: Path, provenance: Mapping[str, Any]
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    manifest_path = root / "FACTORY_IMPLEMENTATION_MANIFEST.json"
+    manifest = _read_json(manifest_path, findings)
+    if not isinstance(manifest, dict):
+        return findings
+    files = manifest.get("files")
+    if not isinstance(files, dict) or not files:
+        return [
+            _finding(
+                "FACTORY_IMPLEMENTATION_MANIFEST_INVALID",
+                "selected implementation file hashes are missing",
+            )
+        ]
+    invalid_entry = any(
+        not isinstance(relative, str)
+        or Path(relative).is_absolute()
+        or ".." in Path(relative).parts
+        or not isinstance(digest, str)
+        or not SHA256_RE.fullmatch(digest)
+        or len(set(digest)) == 1
+        for relative, digest in files.items()
+    )
+    if (
+        invalid_entry
+        or manifest.get("factory_id") != FACTORY_ID
+        or manifest.get("baseline_factory_id") != BASELINE_FACTORY_ID
+        or manifest.get("implementation_tree_sha256") != _json_hash(files)
+        or provenance.get("factory_implementation_manifest_ref")
+        != "FACTORY_IMPLEMENTATION_MANIFEST.json"
+        or provenance.get("factory_implementation_manifest_sha256")
+        != _file_hash(manifest_path)
+        or provenance.get("factory_implementation_tree_sha256")
+        != manifest.get("implementation_tree_sha256")
+        or provenance.get("compiler_implementation_sha256")
+        != files.get("src/harness_foundry_factory/compiler.py")
+        or provenance.get("validator_implementation_sha256")
+        != files.get("src/harness_foundry_factory/validator.py")
+        or provenance.get("semantic_contracts_implementation_sha256")
+        != files.get("src/harness_foundry_factory/semantic_contracts.py")
+    ):
+        findings.append(
+            _finding(
+                "FACTORY_IMPLEMENTATION_PROVENANCE_MISMATCH",
+                "Factory provenance does not close over the selected implementation tree",
+            )
+        )
+    return findings
+
+
+def _expected_dag_path_containment_matrix(
+    dag_path: Path,
+    dag: Mapping[str, Any],
+) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    for raw_node in dag.get("nodes", []):
+        node = raw_node if isinstance(raw_node, Mapping) else {}
+        allowed = list(node.get("allowed_write_paths") or [])
+        outputs = list(node.get("success_output_refs") or [])
+        contained = [
+            output
+            for output in outputs
+            if any(_contract_path_is_contained(output, root) for root in allowed)
+        ]
+        outside = [output for output in outputs if output not in contained]
+        rows.append(
+            {
+                "node_id": node.get("node_id"),
+                "allowed_write_paths": allowed,
+                "success_output_refs": outputs,
+                "contained_success_output_refs": contained,
+                "outside_success_output_refs": outside,
+                "status": "PASS"
+                if outputs and len(contained) == len(outputs)
+                else "FAIL",
+            }
+        )
+    pass_count = sum(row["status"] == "PASS" for row in rows)
+    return {
+        "schema_version": "1.0",
+        "matrix_id": "DAG_PATH_CONTAINMENT_MATRIX",
+        "dag_ref": "ENGINEERING_PROJECT_DAG.json",
+        "dag_sha256": _file_hash(dag_path),
+        "containment_contract": (
+            "STRICT_RESOLVED_RESOURCE_IDENTITY_CONTAINMENT_NOT_STRING_PREFIX"
+        ),
+        "finding_code": (
+            "ENGINEERING_DAG_SUCCESS_OUTPUT_OUTSIDE_ALLOWED_WRITE_PATHS"
+        ),
+        "node_count": len(rows),
+        "pass_count": pass_count,
+        "rows": rows,
+        "status": "PASS" if rows and pass_count == len(rows) else "FAIL",
+    }
+
+
+def _expected_epoch_domain_contract(
+    target: Mapping[str, Any],
+) -> dict[str, Any]:
+    architecture_epoch = target.get("architecture_epoch")
+    architecture_control_plane_epoch = target.get("control_plane_epoch")
+    if architecture_epoch is None and architecture_control_plane_epoch is None:
+        architecture_epoch = 0
+        architecture_control_plane_epoch = 0
+    return {
+        "schema_version": "1.0",
+        "architecture_epoch": architecture_epoch,
+        "architecture_control_plane_epoch": (
+            architecture_control_plane_epoch
+        ),
+        "execution_control_plane_epoch": 0,
+        "legacy_control_plane_epoch_alias": "execution_control_plane_epoch",
+    }
+
+
+def _check_shared_control_baseline_executable_contract(
+    root: Path,
+) -> list[dict[str, Any]]:
+    """Validate the portable v0.9 producer contract without executing it."""
+
+    findings: list[dict[str, Any]] = []
+    frozen = _read_json(
+        root / "canonical_sources/FROZEN_REQUIREMENT_IR.json", findings
+    )
+    if not isinstance(frozen, dict):
+        return findings
+    target = frozen.get("target")
+    if isinstance(target, Mapping) and target.get(
+        "shared_control_baseline_fixture_role"
+    ) == "HISTORICAL_GOLDEN_FIXTURE_ONLY_NO_SUCCESSOR_AUTHORITY":
+        return findings
+    execution_contract = (
+        target.get("shared_control_baseline_execution_contract")
+        if isinstance(target, Mapping)
+        else None
+    )
+    if not isinstance(execution_contract, Mapping):
+        return findings
+    expected_refs = {
+        "implementation_ref": "tools/shared_control_baseline.py",
+        "result_schema_ref": "contracts/SHARED_CONTROL_BASELINE_RESULT.schema.json",
+        "action_contract_ref": "validation/SHARED_CONTROL_BASELINE_ACTION_CONTRACT.json",
+    }
+    if any(execution_contract.get(key) != value for key, value in expected_refs.items()):
+        findings.append(
+            _finding(
+                "SHARED_CONTROL_BASELINE_CONTRACT_INVALID",
+                "frozen portable artifact refs are not canonical",
+            )
+        )
+        return findings
+    implementation_path = root / expected_refs["implementation_ref"]
+    schema_path = root / expected_refs["result_schema_ref"]
+    contract_path = root / expected_refs["action_contract_ref"]
+    for path in (implementation_path, schema_path, contract_path):
+        if not path.is_file():
+            findings.append(
+                _finding(
+                    "SHARED_CONTROL_BASELINE_EXECUTABLE_ARTIFACT_MISSING",
+                    path.relative_to(root).as_posix(),
+                )
+            )
+    if findings:
+        return findings
+    action_contract = _read_json(contract_path, findings)
+    schema = _read_json(schema_path, findings)
+    if not isinstance(action_contract, dict) or not isinstance(schema, dict):
+        return findings
+    required_result_fields = list(
+        execution_contract.get("required_result_fields") or []
+    )
+    command_fields = action_contract.get("runtime_input_contract", {}).get(
+        "command_manifest_required_fields"
+    )
+    authorization_fields = action_contract.get(
+        "runtime_input_contract", {}
+    ).get("authorization_required_fields")
+    critical_command_fields = {
+        "executor_implementation_sha256",
+        "action_contract_sha256",
+        "result_schema_sha256",
+        "idempotency_key",
+        "lease_id",
+        "fencing_token",
+        "expected_control_state_sha256",
+    }
+    critical_authorization_fields = {
+        "command_manifest_sha256",
+        "executor_implementation_sha256",
+        "idempotency_key",
+        "lease_id",
+        "fencing_token",
+        "expected_control_state_sha256",
+        "not_before",
+        "expires_at",
+    }
+    schema_properties = schema.get("properties")
+    if (
+        action_contract.get("contract_id")
+        != execution_contract.get("contract_id")
+        or action_contract.get("action_id")
+        != execution_contract.get("action_id")
+        or action_contract.get("node_id") != execution_contract.get("node_id")
+        or action_contract.get("implementation_ref")
+        != expected_refs["implementation_ref"]
+        or action_contract.get("executor_implementation_sha256")
+        != _file_hash(implementation_path)
+        or action_contract.get("result_schema_ref")
+        != expected_refs["result_schema_ref"]
+        or action_contract.get("result_schema_sha256") != _file_hash(schema_path)
+        or action_contract.get("execution_contract") != execution_contract
+        or action_contract.get("contract_sha256")
+        != _hash_without_field(action_contract, "contract_sha256")
+        or not isinstance(command_fields, list)
+        or not critical_command_fields.issubset(set(command_fields or []))
+        or not isinstance(authorization_fields, list)
+        or not critical_authorization_fields.issubset(
+            set(authorization_fields or [])
+        )
+    ):
+        findings.append(
+            _finding(
+                "SHARED_CONTROL_BASELINE_CONTRACT_INVALID",
+                "action identity, executable hash, or runtime binding is invalid",
+            )
+        )
+    if (
+        schema.get("type") != "object"
+        or schema.get("additionalProperties") is not False
+        or schema.get("required") != required_result_fields
+        or not isinstance(schema_properties, Mapping)
+        or set(schema_properties or {}) != set(required_result_fields)
+        or any(
+            not isinstance(schema_properties.get(field), Mapping)
+            for field in required_result_fields
+        )
+    ):
+        findings.append(
+            _finding(
+                "SHARED_CONTROL_BASELINE_RESULT_SCHEMA_INVALID",
+                "result schema does not exactly close over required_result_fields",
+            )
+        )
+    try:
+        tree = ast.parse(implementation_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, SyntaxError) as exc:
+        findings.append(
+            _finding("SHARED_CONTROL_BASELINE_IMPLEMENTATION_INVALID", str(exc))
+        )
+        tree = None
+    if tree is not None:
+        function_names = {
+            node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+        }
+        class_names = {
+            node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)
+        }
+        if not {
+            "execute_action",
+            "validate_static_contract",
+            "validate_result_document",
+            "atomic_json",
+            "append_event",
+        }.issubset(function_names) or not {
+            "ContractError",
+            "InjectedCrash",
+        }.issubset(class_names):
+            findings.append(
+                _finding(
+                    "SHARED_CONTROL_BASELINE_IMPLEMENTATION_INVALID",
+                    "production, validation, atomic persistence, or crash boundary is missing",
+                )
+            )
+
+    dag = _read_json(root / "ENGINEERING_PROJECT_DAG.json", findings)
+    manifest = _read_json(root / "THREE_PROJECT_PROGRAM_MANIFEST.json", findings)
+    if isinstance(dag, dict):
+        node = next(
+            (
+                item
+                for item in dag.get("nodes", [])
+                if isinstance(item, Mapping)
+                and item.get("node_id") == "SHARED_CONTROL_BASELINE_LOCK"
+            ),
+            None,
+        )
+        if (
+            not isinstance(node, Mapping)
+            or node.get("action_contract_sha256") != _file_hash(contract_path)
+            or node.get("executor_implementation_sha256")
+            != _file_hash(implementation_path)
+            or node.get("result_schema_sha256") != _file_hash(schema_path)
+            or node.get("transaction_protocol")
+            != "JOURNALED_ATOMIC_RECONCILIATION_V1"
+        ):
+            findings.append(
+                _finding(
+                    "SHARED_CONTROL_BASELINE_DAG_BINDING_INVALID",
+                    "DAG node does not bind the executable contract and result schema",
+                )
+            )
+    if isinstance(manifest, dict):
+        baseline = manifest.get("shared_control_baseline")
+        epoch_domains = manifest.get("epoch_domains")
+        expected_epoch_domains = (
+            _expected_epoch_domain_contract(target)
+            if isinstance(target, Mapping)
+            else None
+        )
+        epoch_domain_binding_valid = (
+            isinstance(epoch_domains, Mapping)
+            and epoch_domains == expected_epoch_domains
+            and manifest.get("control_plane_epoch")
+            == epoch_domains.get("execution_control_plane_epoch")
+            and action_contract.get("epoch_domain_contract")
+            == expected_epoch_domains
+        )
+        if (
+            not isinstance(baseline, Mapping)
+            or baseline.get("action_contract_sha256") != _file_hash(contract_path)
+            or baseline.get("executor_implementation_sha256")
+            != _file_hash(implementation_path)
+            or baseline.get("result_schema_sha256") != _file_hash(schema_path)
+            or baseline.get("runtime_status") != "NOT_EXECUTED"
+            or not epoch_domain_binding_valid
+        ):
+            findings.append(
+                _finding(
+                    "SHARED_CONTROL_BASELINE_MANIFEST_BINDING_INVALID",
+                    "program manifest does not bind the executable contract",
+                )
+            )
+
+    portable_manifest = _read_json(
+        root / "validation/PORTABLE_FILE_MANIFEST.json", findings
+    )
+    if isinstance(portable_manifest, dict):
+        files = portable_manifest.get("files")
+        if (
+            not isinstance(files, Mapping)
+            or files.get(expected_refs["implementation_ref"])
+            != _file_hash(implementation_path)
+            or files.get(expected_refs["result_schema_ref"])
+            != _file_hash(schema_path)
+            or files.get(expected_refs["action_contract_ref"])
+            != _file_hash(contract_path)
+        ):
+            findings.append(
+                _finding(
+                    "SHARED_CONTROL_BASELINE_PORTABLE_BINDING_INVALID",
+                    "portable manifest does not bind all executable artifacts",
+                )
+            )
+    closure_receipt = _read_json(
+        root / "validation/HUMAN_REVIEW_CLOSURE_RECEIPT.json", findings
+    )
+    if isinstance(closure_receipt, dict) and isinstance(target, Mapping) and isinstance(
+        target.get("human_review_v0_8_closure"), Mapping
+    ):
+        closure = next(
+            (
+                item
+                for item in closure_receipt.get("closures", [])
+                if isinstance(item, Mapping)
+                and item.get("requirement_key") == "human_review_v0_8_closure"
+            ),
+            None,
+        )
+        required_evidence = set(expected_refs.values())
+        if not isinstance(closure, Mapping) or not required_evidence.issubset(
+            set(closure.get("evidence_refs") or [])
+        ):
+            findings.append(
+                _finding(
+                    "SHARED_CONTROL_BASELINE_CLOSURE_EVIDENCE_INVALID",
+                    "v0.8 closure does not hash-bind contract, schema, and implementation",
+                )
+            )
+    return findings
+
+
+def _check_control_plane_registration_executable_closure(
+    root: Path,
+) -> list[dict[str, Any]]:
+    """Require a real, Hash-bound registration action on the Epoch 4 route."""
+
+    findings: list[dict[str, Any]] = []
+    if not (root / "EPOCH38_GENERATION_PROFILE.json").is_file():
+        return findings
+    refs = {
+        "implementation": "tools/control_plane_registration.py",
+        "contract": "validation/CONTROL_PLANE_REGISTRATION_ACTION_CONTRACT.json",
+        "schema": "contracts/CONTROL_PLANE_REGISTRATION_RESULT.schema.json",
+    }
+    paths = {name: root / ref for name, ref in refs.items()}
+    runtime_refs = [
+        "tools/harness_foundry_runtime/control_kernel.py",
+        "tools/harness_foundry_runtime/store.py",
+        "tools/harness_foundry_runtime/models.py",
+        "tools/harness_foundry_runtime/constants.py",
+    ]
+    missing = [
+        ref
+        for ref, path in [
+            *[(refs[name], path) for name, path in paths.items()],
+            *[(ref, root / ref) for ref in runtime_refs],
+        ]
+        if not path.is_file()
+    ]
+    if missing:
+        return [
+            _finding(
+                "CONTROL_PLANE_REGISTRATION_EXECUTABLE_ARTIFACT_MISSING",
+                ", ".join(sorted(missing)),
+            )
+        ]
+    contract = _read_json(paths["contract"], findings)
+    schema = _read_json(paths["schema"], findings)
+    if not isinstance(contract, dict) or not isinstance(schema, dict):
+        return findings
+    module_hashes = {ref: _file_hash(root / ref) for ref in runtime_refs}
+    execution = contract.get("execution_contract")
+    runtime_inputs = contract.get("runtime_input_contract")
+    critical_command_fields = {
+        "executor_implementation_sha256",
+        "action_contract_sha256",
+        "result_schema_sha256",
+        "shared_control_baseline_result_sha256",
+        "control_runtime_bundle_sha256",
+        "expected_control_state_sha256",
+        "idempotency_key",
+        "lease_id",
+        "fencing_token",
+    }
+    required_authorization_fields = {
+        "schema_version",
+        "authorization_id",
+        "authorization_class",
+        "status",
+        "one_shot",
+        "program_id",
+        "issuer_role",
+        "issued_at",
+        "node_id",
+        "allowed_action_id",
+        "scope",
+        "command_manifest_hashes",
+        "command_manifest_sha256",
+        "candidate_tree_sha256",
+        "requirement_ir_sha256",
+        "executor_implementation_sha256",
+        "human_approval_receipt_sha256",
+        "shared_control_baseline_result_sha256",
+        "control_runtime_bundle_sha256",
+        "expected_control_state_sha256",
+        "idempotency_key",
+        "lease_id",
+        "fencing_token",
+        "max_transitions",
+        "delegation_allowed",
+        "signature_policy",
+        "signature",
+        "not_before",
+        "expires_at",
+    }
+    runtime_internal_write_refs = [
+        "harness-resource://execution/.harness-foundry/control/PROGRAM_CONTROL_STATE.json",
+        "harness-resource://execution/.harness-foundry/control/PROGRAM_CONTROL_EVENTS.jsonl",
+        (
+            "harness-resource://execution/.harness-foundry/control/transactions/"
+            "CONTROL_PLANE_REGISTRATION.transaction.json"
+        ),
+        (
+            "harness-resource://execution/.harness-foundry/control/leases/"
+            "CONTROL_PLANE_REGISTRATION.lease.json"
+        ),
+        "harness-resource://execution/evidence/engineering_dag/CONTROL_PLANE_REGISTRATION/result.json",
+        (
+            "harness-resource://execution/evidence/engineering_dag/"
+            "CONTROL_PLANE_REGISTRATION/recovery_receipt.json"
+        ),
+    ]
+    authorization_profile = contract.get("authorization_profile")
+    scope_contract = (
+        authorization_profile.get("scope_contract")
+        if isinstance(authorization_profile, Mapping)
+        else None
+    )
+    persistence = contract.get("persistence_contract")
+    persistence_refs = (
+        {
+            value
+            for key, value in persistence.items()
+            if str(key).endswith("_ref") and isinstance(value, str)
+        }
+        if isinstance(persistence, Mapping)
+        else set()
+    )
+    manifest = _read_json(
+        root / "THREE_PROJECT_PROGRAM_MANIFEST.json", findings
+    )
+    epoch_domains = (
+        manifest.get("epoch_domains")
+        if isinstance(manifest, Mapping)
+        else None
+    )
+    if (
+        contract.get("action_id")
+        != "REGISTER-CONTROL-PLANE-EXECUTABLE-CLOSURE"
+        or contract.get("node_id") != "CONTROL_PLANE_REGISTRATION"
+        or contract.get("action_kind") != "REGISTRATION_ONLY"
+        or contract.get("implementation_ref") != refs["implementation"]
+        or contract.get("executor_implementation_sha256")
+        != _file_hash(paths["implementation"])
+        or contract.get("result_schema_ref") != refs["schema"]
+        or contract.get("result_schema_sha256") != _file_hash(paths["schema"])
+        or contract.get("runtime_module_refs") != runtime_refs
+        or contract.get("runtime_module_sha256s") != module_hashes
+        or contract.get("runtime_bundle_sha256") != _json_hash(module_hashes)
+        or contract.get("contract_sha256")
+        != _hash_without_field(contract, "contract_sha256")
+        or not isinstance(execution, Mapping)
+        or execution.get("required_predecessor_node_id")
+        != "SHARED_CONTROL_BASELINE_LOCK"
+        or execution.get("successor_node_id")
+        != "PROGRAM_DRIVER_RUNTIME_VERIFIED"
+        or execution.get("driver_start_allowed") is not False
+        or execution.get("workpack_start_allowed") is not False
+        or execution.get("automatic_successor_advance_allowed") is not False
+        or execution.get("transaction_protocol")
+        != "JOURNALED_ATOMIC_RECONCILIATION_V1"
+        or not isinstance(runtime_inputs, Mapping)
+        or not critical_command_fields.issubset(
+            set(runtime_inputs.get("command_manifest_required_fields") or [])
+        )
+        or set(runtime_inputs.get("authorization_required_fields") or [])
+        != required_authorization_fields
+        or not isinstance(authorization_profile, Mapping)
+        or authorization_profile.get("assurance_profile")
+        != "SELF_USE_LOCAL_TRUSTED_OPERATOR"
+        or authorization_profile.get("issuer_role") != "LOCAL_TRUSTED_OPERATOR"
+        or authorization_profile.get("max_transitions") != 1
+        or authorization_profile.get("delegation_allowed") is not False
+        or authorization_profile.get("signature_policy")
+        != "NOT_APPLICABLE_SELF_USE_LOCAL_TRUSTED_OPERATOR"
+        or authorization_profile.get("signature_value") is not None
+        or authorization_profile.get(
+            "external_cryptographic_signature_required"
+        )
+        is not False
+        or set(authorization_profile.get("required_fields") or [])
+        != required_authorization_fields
+        or not isinstance(scope_contract, Mapping)
+        or scope_contract.get("runtime_internal_write_refs")
+        != runtime_internal_write_refs
+        or contract.get("runtime_internal_write_refs")
+        != runtime_internal_write_refs
+        or persistence_refs != set(runtime_internal_write_refs)
+    ):
+        findings.append(
+            _finding(
+                "CONTROL_PLANE_REGISTRATION_CONTRACT_INVALID",
+                "executable, runtime bundle, predecessor, or one-shot binding is invalid",
+            )
+        )
+
+    required = execution.get("required_result_fields") if isinstance(execution, Mapping) else None
+    properties = schema.get("properties")
+    if (
+        not isinstance(required, list)
+        or schema.get("type") != "object"
+        or schema.get("additionalProperties") is not False
+        or schema.get("required") != required
+        or not isinstance(properties, Mapping)
+        or set(properties) != set(required)
+        or properties.get("driver_started", {}).get("const") is not False
+        or properties.get("workpack_started", {}).get("const") is not False
+    ):
+        findings.append(
+            _finding(
+                "CONTROL_PLANE_REGISTRATION_RESULT_SCHEMA_INVALID",
+                "result schema is not exact or permits a Driver/Workpack start claim",
+            )
+        )
+
+    try:
+        tree = ast.parse(paths["implementation"].read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, SyntaxError) as exc:
+        findings.append(
+            _finding("CONTROL_PLANE_REGISTRATION_IMPLEMENTATION_INVALID", str(exc))
+        )
+        tree = None
+    if tree is not None:
+        functions = {
+            node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+        }
+        if not {
+            "execute_action",
+            "validate_static_contract",
+            "validate_result_document",
+            "_validate_runtime_inputs",
+            "_commit_transaction",
+        }.issubset(functions):
+            findings.append(
+                _finding(
+                    "CONTROL_PLANE_REGISTRATION_IMPLEMENTATION_INVALID",
+                    "real validation, transaction, event, or state-CAS implementation is missing",
+                )
+            )
+
+    dag = _read_json(root / "ENGINEERING_PROJECT_DAG.json", findings)
+    manifest = _read_json(root / "THREE_PROJECT_PROGRAM_MANIFEST.json", findings)
+    driver = _read_json(root / "PROGRAM_DRIVER_CONTRACT.json", findings)
+    policy = _read_json(root / "AUTHORIZATION_POLICY.json", findings)
+    if isinstance(dag, dict):
+        node = next(
+            (
+                item
+                for item in dag.get("nodes", [])
+                if isinstance(item, Mapping)
+                and item.get("node_id") == "CONTROL_PLANE_REGISTRATION"
+            ),
+            None,
+        )
+        if (
+            not isinstance(node, Mapping)
+            or node.get("action_contract_sha256") != _file_hash(paths["contract"])
+            or node.get("executor_implementation_sha256")
+            != _file_hash(paths["implementation"])
+            or node.get("result_schema_sha256") != _file_hash(paths["schema"])
+            or node.get("runtime_bundle_sha256") != _json_hash(module_hashes)
+            or node.get("transaction_protocol")
+            != "JOURNALED_ATOMIC_RECONCILIATION_V1"
+            or node.get("runtime_internal_write_refs")
+            != runtime_internal_write_refs
+        ):
+            findings.append(
+                _finding(
+                    "CONTROL_PLANE_REGISTRATION_DAG_BINDING_INVALID",
+                    "DAG node does not bind the executable closure",
+                )
+            )
+    if isinstance(manifest, dict):
+        registration = manifest.get("control_plane_registration")
+        epoch_domains = manifest.get("epoch_domains")
+        frozen = _read_json(
+            root / "canonical_sources/FROZEN_REQUIREMENT_IR.json", findings
+        )
+        target = frozen.get("target") if isinstance(frozen, Mapping) else None
+        expected_epoch_domains = (
+            _expected_epoch_domain_contract(target)
+            if isinstance(target, Mapping)
+            else None
+        )
+        epoch_domain_binding_valid = (
+            isinstance(epoch_domains, Mapping)
+            and epoch_domains == expected_epoch_domains
+            and manifest.get("control_plane_epoch")
+            == epoch_domains.get("execution_control_plane_epoch")
+            and contract.get("epoch_domain_contract")
+            == expected_epoch_domains
+        )
+        if (
+            not isinstance(registration, Mapping)
+            or registration.get("action_contract_sha256")
+            != _file_hash(paths["contract"])
+            or registration.get("executor_implementation_sha256")
+            != _file_hash(paths["implementation"])
+            or registration.get("runtime_module_sha256s") != module_hashes
+            or registration.get("runtime_bundle_sha256") != _json_hash(module_hashes)
+            or registration.get("runtime_status") != "NOT_EXECUTED"
+            or registration.get("driver_started") is not False
+            or registration.get("workpack_started") is not False
+            or not epoch_domain_binding_valid
+        ):
+            findings.append(
+                _finding(
+                    "CONTROL_PLANE_REGISTRATION_MANIFEST_BINDING_INVALID",
+                    "program manifest does not bind the unexecuted closure",
+                )
+            )
+    if isinstance(driver, dict):
+        action = driver.get("registration_control_actions", {}).get(
+            "CONTROL_PLANE_REGISTRATION"
+        )
+        if (
+            not isinstance(action, Mapping)
+            or action.get("action_contract_ref") != refs["contract"]
+            or action.get("executor_implementation_ref") != refs["implementation"]
+            or action.get("required_execution_mode") != "REGISTRATION_ONLY"
+            or action.get("automatic_successor_advance_allowed") is not False
+            or action.get("driver_start_allowed") is not False
+            or action.get("workpack_start_allowed") is not False
+        ):
+            findings.append(
+                _finding(
+                    "CONTROL_PLANE_REGISTRATION_DRIVER_BINDING_INVALID",
+                    "Program Driver contract does not expose the bounded registration action",
+                )
+            )
+    if isinstance(policy, dict):
+        token_fields = set(policy.get("required_token_fields") or [])
+        rules = policy.get("validation_rules")
+        profile_schemas = policy.get("profile_authorization_schemas")
+        profile_authorizations = (
+            profile_schemas.get("SELF_USE_LOCAL_TRUSTED_OPERATOR")
+            if isinstance(profile_schemas, Mapping)
+            else None
+        )
+        profile_schema = (
+            profile_authorizations.get("REGISTRATION_AUTHORIZATION")
+            if isinstance(profile_authorizations, Mapping)
+            else None
+        )
+        if (
+            not required_authorization_fields.issubset(token_fields)
+            or profile_schema != authorization_profile
+            or not isinstance(rules, Mapping)
+            or any(
+                rules.get(field) is not True
+                for field in (
+                    "registration_predecessor_hash_required",
+                    "control_runtime_bundle_hash_required",
+                    "registration_state_cas_required",
+                    "registration_event_tip_required",
+                    "registration_one_shot_idempotency_fencing_required",
+                    "registration_profile_schema_exact_match_required",
+                    "registration_runtime_internal_write_containment_required",
+                )
+            )
+        ):
+            findings.append(
+                _finding(
+                    "CONTROL_PLANE_REGISTRATION_AUTHORIZATION_POLICY_INVALID",
+                    "authorization policy does not require the full registration binding",
+                )
+            )
+    negatives = _read_json(root / "validation/NEGATIVE_CASES.json", findings)
+    if isinstance(negatives, dict):
+        registration_cases = {
+            str(case.get("case_id")): case
+            for case in negatives.get("cases", [])
+            if isinstance(case, Mapping)
+            and str(case.get("case_id", "")).startswith("NEG-V29-E41-REGISTRATION-")
+        }
+        expected_case_ids = {
+            "NEG-V29-E41-REGISTRATION-AUTHORITY-SCOPE",
+            "NEG-V29-E41-REGISTRATION-HUMAN-SIGNATURE-PROFILE",
+            "NEG-V29-E41-REGISTRATION-INTERNAL-WRITE-CONTAINMENT",
+        }
+        if (
+            set(registration_cases) != expected_case_ids
+            or any(
+                case.get("fixture_kind") != "NON_EXECUTABLE_JSON"
+                or not isinstance(case.get("input_fixture"), Mapping)
+                for case in registration_cases.values()
+            )
+        ):
+            findings.append(
+                _finding(
+                    "CONTROL_PLANE_REGISTRATION_NEGATIVE_FIXTURE_INVALID",
+                    "profile authorization or write-containment JSON fixtures are incomplete",
+                )
+            )
+    portable = _read_json(root / "validation/PORTABLE_FILE_MANIFEST.json", findings)
+    if isinstance(portable, dict):
+        files = portable.get("files")
+        required_files = {
+            **{ref: _file_hash(root / ref) for ref in refs.values()},
+            **module_hashes,
+        }
+        if not isinstance(files, Mapping) or any(
+            files.get(ref) != sha256 for ref, sha256 in required_files.items()
+        ):
+            findings.append(
+                _finding(
+                    "CONTROL_PLANE_REGISTRATION_PORTABLE_BINDING_INVALID",
+                    "portable inventory does not bind the complete executable closure",
+                )
+            )
+    return findings
+
+
+def _check_program_driver_runtime_verification_executable_closure(
+    root: Path,
+) -> list[dict[str, Any]]:
+    """Require a portable, local-profile, read-only Driver verifier."""
+
+    findings: list[dict[str, Any]] = []
+    if not (root / "EPOCH38_GENERATION_PROFILE.json").is_file():
+        return findings
+    refs = {
+        "implementation": "tools/program_driver_runtime_verification.py",
+        "entrypoint": "tools/program_driver.py",
+        "contract": (
+            "validation/PROGRAM_DRIVER_RUNTIME_VERIFICATION_ACTION_CONTRACT.json"
+        ),
+        "schema": (
+            "contracts/PROGRAM_DRIVER_RUNTIME_VERIFICATION_RESULT.schema.json"
+        ),
+    }
+    paths = {name: root / ref for name, ref in refs.items()}
+    missing = [ref for name, ref in refs.items() if not paths[name].is_file()]
+    if missing:
+        return [
+            _finding(
+                "PROGRAM_DRIVER_RUNTIME_VERIFICATION_ARTIFACT_MISSING",
+                ", ".join(sorted(missing)),
+            )
+        ]
+    contract = _read_json(paths["contract"], findings)
+    schema = _read_json(paths["schema"], findings)
+    if not isinstance(contract, dict) or not isinstance(schema, dict):
+        return findings
+    probe_commands = ["status", "plan-next", "validate-transition"]
+    runtime_internal_write_refs = [
+        "harness-resource://execution/.harness-foundry/control/PROGRAM_CONTROL_STATE.json",
+        "harness-resource://execution/.harness-foundry/control/PROGRAM_CONTROL_EVENTS.jsonl",
+        (
+            "harness-resource://execution/.harness-foundry/control/transactions/"
+            "PROGRAM_DRIVER_RUNTIME_VERIFIED.transaction.json"
+        ),
+        (
+            "harness-resource://execution/.harness-foundry/control/leases/"
+            "PROGRAM_DRIVER_RUNTIME_VERIFIED.lease.json"
+        ),
+        (
+            "harness-resource://execution/evidence/engineering_dag/"
+            "PROGRAM_DRIVER_RUNTIME_VERIFIED/result.json"
+        ),
+    ]
+    required_authorization_fields = {
+        "schema_version",
+        "authorization_id",
+        "authorization_class",
+        "status",
+        "one_shot",
+        "program_id",
+        "issuer_role",
+        "issued_at",
+        "node_id",
+        "allowed_action_id",
+        "scope",
+        "command_manifest_hashes",
+        "command_manifest_sha256",
+        "candidate_tree_sha256",
+        "requirement_ir_sha256",
+        "executor_implementation_sha256",
+        "driver_entrypoint_sha256",
+        "human_approval_receipt_sha256",
+        "control_plane_registration_result_sha256",
+        "expected_control_state_sha256",
+        "expected_event_tip",
+        "read_only_probe_commands",
+        "forbidden_actions",
+        "idempotency_key",
+        "lease_id",
+        "fencing_token",
+        "max_transitions",
+        "delegation_allowed",
+        "signature_policy",
+        "signature",
+        "not_before",
+        "expires_at",
+    }
+    execution = contract.get("execution_contract")
+    runtime_inputs = contract.get("runtime_input_contract")
+    authorization_profile = contract.get("authorization_profile")
+    scope_contract = (
+        authorization_profile.get("scope_contract")
+        if isinstance(authorization_profile, Mapping)
+        else None
+    )
+    persistence = contract.get("persistence_contract")
+    persistence_refs = (
+        {
+            value
+            for key, value in persistence.items()
+            if str(key).endswith("_ref") and isinstance(value, str)
+        }
+        if isinstance(persistence, Mapping)
+        else set()
+    )
+    manifest = _read_json(
+        root / "THREE_PROJECT_PROGRAM_MANIFEST.json", findings
+    )
+    epoch_domains = (
+        manifest.get("epoch_domains")
+        if isinstance(manifest, Mapping)
+        else None
+    )
+    if (
+        contract.get("action_id")
+        != "VERIFY-PORTABLE-PROGRAM-DRIVER-RUNTIME"
+        or contract.get("node_id") != "PROGRAM_DRIVER_RUNTIME_VERIFIED"
+        or contract.get("action_kind") != "PROJECT_VALIDATION"
+        or contract.get("implementation_ref") != refs["implementation"]
+        or contract.get("executor_implementation_sha256")
+        != _file_hash(paths["implementation"])
+        or contract.get("driver_entrypoint_ref") != refs["entrypoint"]
+        or contract.get("driver_entrypoint_sha256")
+        != _file_hash(paths["entrypoint"])
+        or contract.get("result_schema_ref") != refs["schema"]
+        or contract.get("result_schema_sha256")
+        != _file_hash(paths["schema"])
+        or contract.get("read_only_probe_commands") != probe_commands
+        or not isinstance(epoch_domains, Mapping)
+        or contract.get("epoch_domain_contract") != epoch_domains
+        or contract.get("runtime_internal_write_refs")
+        != runtime_internal_write_refs
+        or contract.get("contract_sha256")
+        != _hash_without_field(contract, "contract_sha256")
+        or not isinstance(execution, Mapping)
+        or execution.get("required_predecessor_node_id")
+        != "CONTROL_PLANE_REGISTRATION"
+        or execution.get("successor_node_id")
+        != "MAIN_EXECUTION_PACKAGE_MATERIALIZED"
+        or execution.get("read_only_probe_commands") != probe_commands
+        or execution.get("driver_start_allowed") is not False
+        or execution.get("workpack_start_allowed") is not False
+        or execution.get("automatic_successor_advance_allowed") is not False
+        or execution.get("transaction_protocol")
+        != "JOURNALED_ONE_SHOT_STATE_CAS_V1"
+        or execution.get("unknown_commit_state_policy")
+        != "FAIL_CLOSED_NO_REPLAY"
+        or not isinstance(runtime_inputs, Mapping)
+        or set(runtime_inputs.get("authorization_required_fields") or [])
+        != required_authorization_fields
+        or not isinstance(authorization_profile, Mapping)
+        or authorization_profile.get("assurance_profile")
+        != "SELF_USE_LOCAL_TRUSTED_OPERATOR"
+        or authorization_profile.get("authorization_class")
+        != "PROJECT_VALIDATION_AUTHORIZATION"
+        or authorization_profile.get("issuer_role")
+        != "LOCAL_TRUSTED_OPERATOR"
+        or authorization_profile.get("max_transitions") != 1
+        or authorization_profile.get("delegation_allowed") is not False
+        or authorization_profile.get("signature_policy")
+        != "NOT_APPLICABLE_SELF_USE_LOCAL_TRUSTED_OPERATOR"
+        or authorization_profile.get("signature_value") is not None
+        or authorization_profile.get(
+            "external_cryptographic_signature_required"
+        )
+        is not False
+        or set(authorization_profile.get("required_fields") or [])
+        != required_authorization_fields
+        or not isinstance(scope_contract, Mapping)
+        or scope_contract.get("read_only_probe_commands") != probe_commands
+        or scope_contract.get("runtime_internal_write_refs")
+        != runtime_internal_write_refs
+        or persistence_refs != set(runtime_internal_write_refs)
+    ):
+        findings.append(
+            _finding(
+                "PROGRAM_DRIVER_RUNTIME_VERIFICATION_CONTRACT_INVALID",
+                "entrypoint, authorization, probe, or persistence binding is invalid",
+            )
+        )
+
+    required = (
+        execution.get("required_result_fields")
+        if isinstance(execution, Mapping)
+        else None
+    )
+    properties = schema.get("properties")
+    if (
+        not isinstance(required, list)
+        or schema.get("type") != "object"
+        or schema.get("additionalProperties") is not False
+        or schema.get("required") != required
+        or not isinstance(properties, Mapping)
+        or set(properties) != set(required)
+        or properties.get("next_node", {}).get("const")
+        != "MAIN_EXECUTION_PACKAGE_MATERIALIZED"
+        or properties.get("driver_started", {}).get("const") is not False
+        or properties.get("workpack_started", {}).get("const") is not False
+        or properties.get("side_effects_allowed", {}).get("const") is not False
+    ):
+        findings.append(
+            _finding(
+                "PROGRAM_DRIVER_RUNTIME_VERIFICATION_RESULT_SCHEMA_INVALID",
+                "result schema is not exact or permits a runtime-start claim",
+            )
+        )
+
+    for name, required_functions in (
+        (
+            "entrypoint",
+            {"status", "plan_next", "validate_transition", "main"},
+        ),
+        (
+            "implementation",
+            {
+                "execute_action",
+                "validate_static_contract",
+                "validate_result_document",
+                "_validate_runtime_inputs",
+                "_run_read_only_probes",
+            },
+        ),
+    ):
+        try:
+            tree = ast.parse(paths[name].read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, SyntaxError) as exc:
+            findings.append(
+                _finding(
+                    "PROGRAM_DRIVER_RUNTIME_VERIFICATION_IMPLEMENTATION_INVALID",
+                    str(exc),
+                )
+            )
+            continue
+        functions = {
+            node.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef)
+        }
+        if not required_functions.issubset(functions):
+            findings.append(
+                _finding(
+                    "PROGRAM_DRIVER_RUNTIME_VERIFICATION_IMPLEMENTATION_INVALID",
+                    f"{name} lacks required read-only runtime functions",
+                )
+            )
+
+    dag = _read_json(root / "ENGINEERING_PROJECT_DAG.json", findings)
+    driver = _read_json(root / "PROGRAM_DRIVER_CONTRACT.json", findings)
+    policy = _read_json(root / "AUTHORIZATION_POLICY.json", findings)
+    if isinstance(dag, Mapping):
+        node = next(
+            (
+                item
+                for item in dag.get("nodes", [])
+                if isinstance(item, Mapping)
+                and item.get("node_id") == "PROGRAM_DRIVER_RUNTIME_VERIFIED"
+            ),
+            None,
+        )
+        if (
+            not isinstance(node, Mapping)
+            or node.get("action_contract_sha256")
+            != _file_hash(paths["contract"])
+            or node.get("executor_implementation_sha256")
+            != _file_hash(paths["implementation"])
+            or node.get("driver_entrypoint_sha256")
+            != _file_hash(paths["entrypoint"])
+            or node.get("result_schema_sha256") != _file_hash(paths["schema"])
+            or node.get("read_only_probe_commands") != probe_commands
+            or node.get("runtime_internal_write_refs")
+            != runtime_internal_write_refs
+            or node.get("transaction_protocol")
+            != "JOURNALED_ONE_SHOT_STATE_CAS_V1"
+        ):
+            findings.append(
+                _finding(
+                    "PROGRAM_DRIVER_RUNTIME_VERIFICATION_DAG_BINDING_INVALID",
+                    "DAG node does not bind the read-only executable closure",
+                )
+            )
+    if isinstance(manifest, Mapping):
+        binding = manifest.get("program_driver_runtime_verification")
+        if (
+            not isinstance(binding, Mapping)
+            or binding.get("action_contract_sha256")
+            != _file_hash(paths["contract"])
+            or binding.get("executor_implementation_sha256")
+            != _file_hash(paths["implementation"])
+            or binding.get("driver_entrypoint_sha256")
+            != _file_hash(paths["entrypoint"])
+            or binding.get("result_schema_sha256")
+            != _file_hash(paths["schema"])
+            or binding.get("read_only_probe_commands") != probe_commands
+            or binding.get("runtime_status") != "NOT_EXECUTED"
+            or binding.get("driver_started") is not False
+            or binding.get("workpack_started") is not False
+        ):
+            findings.append(
+                _finding(
+                    "PROGRAM_DRIVER_RUNTIME_VERIFICATION_MANIFEST_BINDING_INVALID",
+                    "program manifest does not bind the unexecuted verifier",
+                )
+            )
+    if isinstance(driver, Mapping):
+        action = driver.get("project_validation_actions", {}).get(
+            "PROGRAM_DRIVER_RUNTIME_VERIFIED"
+        )
+        if (
+            driver.get("driver_entrypoint_ref") != refs["entrypoint"]
+            or driver.get("driver_entrypoint_sha256")
+            != _file_hash(paths["entrypoint"])
+            or driver.get("runtime_verification_ref") != refs["contract"]
+            or driver.get("runtime_verification_sha256")
+            != _file_hash(paths["contract"])
+            or not isinstance(action, Mapping)
+            or action.get("required_execution_mode") != "PROJECT_VALIDATION"
+            or action.get("read_only_probe_commands") != probe_commands
+            or action.get("automatic_successor_advance_allowed") is not False
+            or action.get("driver_start_allowed") is not False
+            or action.get("workpack_start_allowed") is not False
+        ):
+            findings.append(
+                _finding(
+                    "PROGRAM_DRIVER_RUNTIME_VERIFICATION_DRIVER_BINDING_INVALID",
+                    "Program Driver contract does not expose the bounded verifier",
+                )
+            )
+    if isinstance(policy, Mapping):
+        local = policy.get("profile_authorization_schemas", {}).get(
+            "SELF_USE_LOCAL_TRUSTED_OPERATOR", {}
+        )
+        profile_schema = (
+            local.get("PROJECT_VALIDATION_AUTHORIZATION")
+            if isinstance(local, Mapping)
+            else None
+        )
+        rules = policy.get("validation_rules")
+        if (
+            profile_schema != authorization_profile
+            or not required_authorization_fields.issubset(
+                set(policy.get("required_token_fields") or [])
+            )
+            or not isinstance(rules, Mapping)
+            or any(
+                rules.get(field) is not True
+                for field in (
+                    "project_validation_predecessor_hash_required",
+                    "program_driver_entrypoint_hash_required",
+                    "project_validation_state_cas_required",
+                    "project_validation_event_tip_required",
+                    "project_validation_one_shot_idempotency_fencing_required",
+                    "project_validation_profile_schema_exact_match_required",
+                    "project_validation_read_only_probe_set_required",
+                    "project_validation_runtime_internal_write_containment_required",
+                )
+            )
+        ):
+            findings.append(
+                _finding(
+                    "PROGRAM_DRIVER_RUNTIME_VERIFICATION_AUTHORIZATION_POLICY_INVALID",
+                    "local Project Validation policy is incomplete",
+                )
+            )
+    negatives = _read_json(root / "validation/NEGATIVE_CASES.json", findings)
+    if isinstance(negatives, Mapping):
+        cases = {
+            str(case.get("case_id")): case
+            for case in negatives.get("cases", [])
+            if isinstance(case, Mapping)
+            and str(case.get("case_id", "")).startswith(
+                "NEG-V29-E43-DRIVER-VERIFY-"
+            )
+        }
+        expected = {
+            "NEG-V29-E43-DRIVER-VERIFY-AUTHORITY-SCOPE",
+            "NEG-V29-E43-DRIVER-VERIFY-ENTRYPOINT-HASH",
+            "NEG-V29-E43-DRIVER-VERIFY-READ-ONLY-BOUNDARY",
+        }
+        if (
+            set(cases) != expected
+            or any(
+                case.get("fixture_kind") != "NON_EXECUTABLE_JSON"
+                or not isinstance(case.get("input_fixture"), Mapping)
+                for case in cases.values()
+            )
+        ):
+            findings.append(
+                _finding(
+                    "PROGRAM_DRIVER_RUNTIME_VERIFICATION_NEGATIVE_FIXTURE_INVALID",
+                    "non-executable Driver verification fixtures are incomplete",
+                )
+            )
+    portable = _read_json(
+        root / "validation/PORTABLE_FILE_MANIFEST.json", findings
+    )
+    if isinstance(portable, Mapping):
+        files = portable.get("files")
+        if not isinstance(files, Mapping) or any(
+            files.get(ref) != _file_hash(root / ref) for ref in refs.values()
+        ):
+            findings.append(
+                _finding(
+                    "PROGRAM_DRIVER_RUNTIME_VERIFICATION_PORTABLE_BINDING_INVALID",
+                    "portable inventory does not bind the complete Driver verifier",
+                )
+            )
+    return findings
+
+
+def _check_controlled_workpack_runtime_executable_closure(
+    root: Path,
+    *,
+    active_requirement_epoch: int | None = None,
+) -> list[dict[str, Any]]:
+    """Require a real, portable sibling-Runtime provider for the root Workpack."""
+
+    findings: list[dict[str, Any]] = []
+    node_id = "MAIN_EXECUTION_PACKAGE_MATERIALIZED"
+    workpack_id = "WP-HARNESS-FOUNDRY-V2-9-CHAT-FACTORY-G0-001"
+    refs = {
+        "provider": "tools/harness_foundry_runtime/workpack_runtime.py",
+        "entrypoint": "tools/workpack_runtime.py",
+        "contract": "validation/CONTROLLED_WORKPACK_RUNTIME_CONTRACT.json",
+        "commands": f"commands/{workpack_id}.commands.json",
+        "capsule": f"capsules/{workpack_id}.capsule.json",
+        "index": "WORKPACK_INDEX.json",
+        "profile": "EPOCH38_GENERATION_PROFILE.json",
+    }
+    paths = {name: root / relative for name, relative in refs.items()}
+    if any(not path.is_file() for path in paths.values()):
+        missing = sorted(name for name, path in paths.items() if not path.is_file())
+        return [
+            _finding(
+                "CONTROLLED_WORKPACK_RUNTIME_ARTIFACT_MISSING",
+                ",".join(missing),
+            )
+        ]
+    contract = _read_json(paths["contract"], findings)
+    dag = _read_json(root / "ENGINEERING_PROJECT_DAG.json", findings)
+    manifest = _read_json(
+        root / "THREE_PROJECT_PROGRAM_MANIFEST.json", findings
+    )
+    driver = _read_json(root / "PROGRAM_DRIVER_CONTRACT.json", findings)
+    policy = _read_json(root / "AUTHORIZATION_POLICY.json", findings)
+    index = _read_json(paths["index"], findings)
+    commands = _read_json(paths["commands"], findings)
+    capsule = _read_json(paths["capsule"], findings)
+    profile = _read_json(paths["profile"], findings)
+    if not all(
+        isinstance(value, Mapping)
+        for value in (
+            contract,
+            dag,
+            manifest,
+            driver,
+            policy,
+            index,
+            commands,
+            capsule,
+            profile,
+        )
+    ):
+        return findings
+    contract_active_epoch = contract.get("active_requirement_epoch")
+    allowed_write_refs = [
+        (
+            "harness-resource://execution/evidence/engineering_dag/"
+            "MAIN_EXECUTION_PACKAGE_MATERIALIZED"
+        ),
+        (
+            "harness-resource://execution/project_start_packages/"
+            "main_build/repository"
+        ),
+    ]
+    authorization = contract.get("authorization_profile")
+    scope = (
+        authorization.get("scope_contract")
+        if isinstance(authorization, Mapping)
+        else None
+    )
+    overlay = contract.get("command_overlay_contract")
+    hydration = contract.get("hydration_contract")
+    execution = contract.get("execution_contract")
+    if (
+        contract.get("contract_id") != "EPOCH45_CONTROLLED_WORKPACK_RUNTIME_V1"
+        or isinstance(contract_active_epoch, bool)
+        or not isinstance(contract_active_epoch, int)
+        or contract_active_epoch < 45
+        or (
+            active_requirement_epoch is not None
+            and contract_active_epoch != active_requirement_epoch
+        )
+        or contract.get("profile_origin_requirement_epoch") != 38
+        or profile.get("profile_origin_requirement_epoch") != 38
+        or profile.get("active_requirement_epoch") != contract_active_epoch
+        or contract.get("assurance_profile")
+        != "SELF_USE_LOCAL_TRUSTED_OPERATOR"
+        or contract.get("node_id") != node_id
+        or contract.get("workpack_id") != workpack_id
+        or contract.get("provider_kind") != "CODEX_WORKPACK_PROVIDER"
+        or contract.get("provider_implementation_ref") != refs["provider"]
+        or contract.get("provider_implementation_sha256")
+        != _file_hash(paths["provider"])
+        or contract.get("runtime_entrypoint_ref") != refs["entrypoint"]
+        or contract.get("runtime_entrypoint_sha256")
+        != _file_hash(paths["entrypoint"])
+        or contract.get("contract_sha256")
+        != _hash_without_field(contract, "contract_sha256")
+        or contract.get("factory_execution_allowed") is not False
+        or contract.get("sibling_controlled_runtime_required") is not True
+        or contract.get("test_adapter_or_schema_only_closure_allowed") is not False
+        or contract.get("external_runtime_state_reuse_allowed") is not False
+        or not isinstance(overlay, Mapping)
+        or overlay.get("required") is not True
+        or overlay.get("command_ids")
+        != ["ROOT-CODEX-CODING", "ROOT-MATERIALIZATION-VERIFY"]
+        or overlay.get("absolute_executable_and_sha256_required") is not True
+        or overlay.get("exact_argv_required") is not True
+        or overlay.get("shell_reparse_allowed") is not False
+        or overlay.get("codex_required_sandbox") != "workspace-write"
+        or not isinstance(hydration, Mapping)
+        or hydration.get("side_effect_free") is not True
+        or hydration.get("candidate_must_remain_read_only") is not True
+        or hydration.get("status_after_hydration")
+        != "READY_FOR_A3_PREPARATION"
+        or hydration.get("execution_authorized_after_hydration") is not False
+        or not isinstance(authorization, Mapping)
+        or authorization.get("authorization_class") != "A3_PROGRAM_BOUNDED"
+        or authorization.get("max_transitions") != 1
+        or authorization.get("max_loop_rounds") != 1
+        or authorization.get("delegation_allowed") is not False
+        or not isinstance(scope, Mapping)
+        or scope.get("node_id") != node_id
+        or scope.get("workpack_id") != workpack_id
+        or scope.get("allowed_write_refs") != allowed_write_refs
+        or scope.get("network_allowed") is not False
+        or scope.get("real_target_install_allowed") is not False
+        or scope.get("automatic_successor_advance_allowed") is not False
+        or not isinstance(execution, Mapping)
+        or execution.get("max_transitions") != 1
+        or execution.get("max_loop_rounds") != 1
+        or execution.get("allowed_write_refs") != allowed_write_refs
+        or execution.get("validation_scope")
+        != "STRUCTURAL_PACKAGE_CONTRACT_ONLY"
+        or execution.get("network_allowed") is not False
+        or execution.get("real_target_install_allowed") is not False
+        or execution.get("candidate_write_allowed") is not False
+        or execution.get("automatic_postflight_required") is not True
+        or execution.get("independent_structural_review_required") is not True
+        or execution.get("automatic_successor_advance_allowed") is not False
+    ):
+        findings.append(
+            _finding(
+                "CONTROLLED_WORKPACK_RUNTIME_CONTRACT_INVALID",
+                "provider, hydration, overlay, A3, or execution boundary is invalid",
+            )
+        )
+
+    required_functions = {
+        "candidate_identity",
+        "verify_codex_cli_schema",
+        "hydrate_workpack_runtime",
+        "validate_a3_authorization",
+        "execute_hydrated_workpack",
+    }
+    try:
+        provider_tree = ast.parse(paths["provider"].read_text(encoding="utf-8"))
+        entrypoint_tree = ast.parse(
+            paths["entrypoint"].read_text(encoding="utf-8")
+        )
+    except (OSError, UnicodeError, SyntaxError) as exc:
+        findings.append(
+            _finding("CONTROLLED_WORKPACK_RUNTIME_IMPLEMENTATION_INVALID", str(exc))
+        )
+    else:
+        provider_functions = {
+            node.name
+            for node in ast.walk(provider_tree)
+            if isinstance(node, ast.FunctionDef)
+        }
+        entrypoint_functions = {
+            node.name
+            for node in ast.walk(entrypoint_tree)
+            if isinstance(node, ast.FunctionDef)
+        }
+        provider_text = paths["provider"].read_text(encoding="utf-8")
+        if (
+            not required_functions.issubset(provider_functions)
+            or "subprocess.run" not in provider_text
+            or "TEST_ONLY_IDEMPOTENT_ADAPTERS" in provider_text
+            or "test_adapter_results" in provider_text
+            or "main" not in entrypoint_functions
+        ):
+            findings.append(
+                _finding(
+                    "CONTROLLED_WORKPACK_RUNTIME_IMPLEMENTATION_INVALID",
+                    "real provider or portable entrypoint is incomplete",
+                )
+            )
+
+    node = next(
+        (
+            item
+            for item in dag.get("nodes", [])
+            if isinstance(item, Mapping) and item.get("node_id") == node_id
+        ),
+        None,
+    )
+    binding = manifest.get("main_execution_package_runtime")
+    driver_action = driver.get("workpack_execution_actions", {}).get(node_id)
+    local_profile = policy.get("profile_authorization_schemas", {}).get(
+        "SELF_USE_LOCAL_TRUSTED_OPERATOR", {}
+    )
+    policy_a3 = (
+        local_profile.get("PROJECT_BOOTSTRAP_AUTHORIZATION")
+        if isinstance(local_profile, Mapping)
+        else None
+    )
+    rules = policy.get("validation_rules")
+    expected_hashes = {
+        "runtime_provider_sha256": _file_hash(paths["provider"]),
+        "runtime_entrypoint_sha256": _file_hash(paths["entrypoint"]),
+        "runtime_contract_sha256": _file_hash(paths["contract"]),
+    }
+    if (
+        not isinstance(node, Mapping)
+        or node.get("runtime_provider_ref") != refs["provider"]
+        or node.get("runtime_entrypoint_ref") != refs["entrypoint"]
+        or node.get("runtime_contract_ref") != refs["contract"]
+        or node.get("active_requirement_epoch") != contract_active_epoch
+        or any(node.get(key) != value for key, value in expected_hashes.items())
+        or node.get("runtime_hydration_required") is not True
+        or node.get("command_overlay_required") is not True
+        or node.get("max_transitions") != 1
+        or node.get("max_loop_rounds") != 1
+        or node.get("automatic_successor_advance_allowed") is not False
+        or not isinstance(binding, Mapping)
+        or binding.get("runtime_status") != "PLANNED_NOT_HYDRATED"
+        or binding.get("execution_authorized") is not False
+        or binding.get("workpack_executed") is not False
+        or binding.get("active_requirement_epoch") != contract_active_epoch
+        or any(binding.get(key) != value for key, value in expected_hashes.items())
+        or not isinstance(driver_action, Mapping)
+        or driver_action.get("required_authorization_class")
+        != "A3_PROGRAM_BOUNDED"
+        or driver_action.get("active_requirement_epoch")
+        != contract_active_epoch
+        or driver_action.get("factory_execution_allowed") is not False
+        or driver_action.get("automatic_successor_advance_allowed") is not False
+        or policy_a3 != authorization
+        or not isinstance(rules, Mapping)
+        or any(
+            rules.get(key) is not True
+            for key in (
+                "workpack_runtime_provider_hash_required",
+                "workpack_runtime_overlay_hash_required",
+                "workpack_runtime_cli_schema_hash_required",
+                "workpack_runtime_candidate_hydration_required",
+                "workpack_runtime_exact_write_roots_required",
+                "workpack_runtime_a3_exact_scope_required",
+                "workpack_runtime_external_state_reuse_forbidden",
+            )
+        )
+    ):
+        findings.append(
+            _finding(
+                "CONTROLLED_WORKPACK_RUNTIME_PROJECTION_INVALID",
+                "DAG, Driver, Program Manifest, or local authorization policy drifted",
+            )
+        )
+
+    for document, label in (
+        (index, "WORKPACK_INDEX"),
+        (commands, "COMMAND_MANIFEST"),
+        (capsule, "CAPSULE"),
+    ):
+        if (
+            document.get("runtime_provider_ref") != refs["provider"]
+            or document.get("active_requirement_epoch")
+            != contract_active_epoch
+            or document.get("runtime_entrypoint_ref") != refs["entrypoint"]
+            or document.get("runtime_contract_ref") != refs["contract"]
+            or any(document.get(key) != value for key, value in expected_hashes.items())
+            or document.get("runtime_hydration_required") is not True
+            or document.get("command_overlay_required") is not True
+        ):
+            findings.append(
+                _finding("CONTROLLED_WORKPACK_RUNTIME_PROJECTION_INVALID", label)
+            )
+
+    negatives = _read_json(root / "validation/NEGATIVE_CASES.json", findings)
+    if isinstance(negatives, Mapping):
+        cases = {
+            str(case.get("case_id")): case
+            for case in negatives.get("cases", [])
+            if isinstance(case, Mapping)
+            and str(case.get("case_id", "")).startswith(
+                "NEG-V29-E45-WORKPACK-RUNTIME-"
+            )
+        }
+        expected = {
+            "NEG-V29-E45-WORKPACK-RUNTIME-CODEX-HASH": (
+                "CODEX_HASH_MISMATCH",
+                {"codex_executable_sha256": "0" * 64},
+            ),
+            "NEG-V29-E45-WORKPACK-RUNTIME-WRITE-ROOT": (
+                "COMMAND_OVERLAY_WRITE_ROOT_INVALID",
+                {"allowed_write_roots": [LOGICAL_CANDIDATE_ROOT]},
+            ),
+            "NEG-V29-E45-WORKPACK-RUNTIME-A3-SCOPE": (
+                "A3_AUTHORIZATION_INVALID",
+                {
+                    "max_transitions": 2,
+                    "max_loop_rounds": 2,
+                    "real_target_install_allowed": True,
+                },
+            ),
+        }
+        if set(cases) != set(expected) or any(
+            not _is_nonexecutable_negative_fixture(case)
+            or case.get("origin")
+            != "EPOCH45_CONTROLLED_RUNTIME_WORKPACK_EXECUTABLE_CLOSURE"
+            or case.get("expected_failure") != expected[case_id][0]
+            or case.get("input_fixture") != expected[case_id][1]
+            for case_id, case in cases.items()
+        ):
+            findings.append(
+                _finding(
+                    "CONTROLLED_WORKPACK_RUNTIME_NEGATIVE_FIXTURE_INVALID",
+                    "non-executable Runtime fixtures are incomplete",
+                )
+            )
+    portable = _read_json(root / "validation/PORTABLE_FILE_MANIFEST.json", findings)
+    if isinstance(portable, Mapping):
+        files = portable.get("files")
+        if not isinstance(files, Mapping) or any(
+            files.get(relative) != _file_hash(root / relative)
+            for relative in refs.values()
+        ):
+            findings.append(
+                _finding(
+                    "CONTROLLED_WORKPACK_RUNTIME_PORTABLE_BINDING_INVALID",
+                    "portable inventory does not bind the Runtime closure",
+                )
+            )
+    return findings
+
+
+def _check_main_execution_package_validation_executable_closure(
+    root: Path,
+    *,
+    active_requirement_epoch: int | None = None,
+) -> list[dict[str, Any]]:
+    """Require the Epoch 49 byte-backed structural validation provider."""
+
+    findings: list[dict[str, Any]] = []
+    node_id = "MAIN_EXECUTION_PACKAGE_VALIDATED"
+    refs = {
+        "provider": (
+            "tools/harness_foundry_runtime/"
+            "main_execution_package_validation.py"
+        ),
+        "entrypoint": "tools/main_execution_package_validation.py",
+        "contract": (
+            "validation/MAIN_EXECUTION_PACKAGE_VALIDATION_ACTION_CONTRACT.json"
+        ),
+        "schema": (
+            "contracts/MAIN_EXECUTION_PACKAGE_VALIDATION_RESULT.schema.json"
+        ),
+        "profile": "EPOCH38_GENERATION_PROFILE.json",
+    }
+    paths = {name: root / relative for name, relative in refs.items()}
+    if any(not path.is_file() for path in paths.values()):
+        missing = sorted(name for name, path in paths.items() if not path.is_file())
+        return [
+            _finding(
+                "MAIN_EXECUTION_PACKAGE_VALIDATION_ARTIFACT_MISSING",
+                ",".join(missing),
+            )
+        ]
+    contract = _read_json(paths["contract"], findings)
+    schema = _read_json(paths["schema"], findings)
+    profile = _read_json(paths["profile"], findings)
+    dag = _read_json(root / "ENGINEERING_PROJECT_DAG.json", findings)
+    manifest = _read_json(root / "THREE_PROJECT_PROGRAM_MANIFEST.json", findings)
+    driver = _read_json(root / "PROGRAM_DRIVER_CONTRACT.json", findings)
+    policy = _read_json(root / "AUTHORIZATION_POLICY.json", findings)
+    if not all(
+        isinstance(value, Mapping)
+        for value in (contract, schema, profile, dag, manifest, driver, policy)
+    ):
+        return findings
+    contract_epoch = contract.get("active_requirement_epoch")
+    repository_ref = (
+        "harness-resource://execution/project_start_packages/main_build/repository"
+    )
+    evidence_ref = (
+        "harness-resource://execution/evidence/engineering_dag/"
+        "MAIN_EXECUTION_PACKAGE_VALIDATED"
+    )
+    internal_write_refs = [
+        (
+            "harness-resource://execution/.harness-foundry/control/"
+            "PROGRAM_CONTROL_STATE.json"
+        ),
+        (
+            "harness-resource://execution/.harness-foundry/control/"
+            "PROGRAM_CONTROL_EVENTS.jsonl"
+        ),
+        (
+            "harness-resource://execution/.harness-foundry/control/transactions/"
+            "MAIN_EXECUTION_PACKAGE_VALIDATED.transaction.json"
+        ),
+        (
+            "harness-resource://execution/.harness-foundry/control/leases/"
+            "MAIN_EXECUTION_PACKAGE_VALIDATED.lease.json"
+        ),
+        f"{evidence_ref}/result.json",
+    ]
+    authorization = contract.get("authorization_profile")
+    scope = (
+        authorization.get("scope_contract")
+        if isinstance(authorization, Mapping)
+        else None
+    )
+    execution = contract.get("execution_contract")
+    persistence = contract.get("persistence_contract")
+    persistence_refs = (
+        {
+            value
+            for key, value in persistence.items()
+            if str(key).endswith("_ref") and isinstance(value, str)
+        }
+        if isinstance(persistence, Mapping)
+        else set()
+    )
+    if (
+        contract.get("contract_id")
+        != "MAIN_EXECUTION_PACKAGE_VALIDATION_CLOSURE_V1"
+        or isinstance(contract_epoch, bool)
+        or not isinstance(contract_epoch, int)
+        or contract_epoch < 49
+        or (
+            active_requirement_epoch is not None
+            and contract_epoch != active_requirement_epoch
+        )
+        or profile.get("active_requirement_epoch") != contract_epoch
+        or contract.get("assurance_profile")
+        != "SELF_USE_LOCAL_TRUSTED_OPERATOR"
+        or contract.get("action_id")
+        != "VALIDATE-MAIN-EXECUTION-PACKAGE-STRUCTURE"
+        or contract.get("node_id") != node_id
+        or contract.get("implementation_ref") != refs["provider"]
+        or contract.get("executor_implementation_sha256")
+        != _file_hash(paths["provider"])
+        or contract.get("runtime_entrypoint_ref") != refs["entrypoint"]
+        or contract.get("runtime_entrypoint_sha256")
+        != _file_hash(paths["entrypoint"])
+        or contract.get("result_schema_ref") != refs["schema"]
+        or contract.get("result_schema_sha256") != _file_hash(paths["schema"])
+        or contract.get("contract_sha256")
+        != _hash_without_field(contract, "contract_sha256")
+        or contract.get("validation_scope")
+        != "STRUCTURAL_PACKAGE_CONTRACT_ONLY"
+        or contract.get("predecessor_repository_write_allowed") is not False
+        or contract.get("automatic_successor_advance_allowed") is not False
+        or not isinstance(authorization, Mapping)
+        or authorization.get("authorization_class")
+        != "PROJECT_VALIDATION_AUTHORIZATION"
+        or authorization.get("max_transitions") != 1
+        or authorization.get("max_loop_rounds") != 1
+        or authorization.get("delegation_allowed") is not False
+        or not isinstance(scope, Mapping)
+        or scope.get("predecessor_repository_ref") != repository_ref
+        or scope.get("predecessor_repository_write_allowed") is not False
+        or scope.get("node_evidence_write_ref") != evidence_ref
+        or scope.get("runtime_internal_write_refs") != internal_write_refs
+        or scope.get("automatic_successor_advance_allowed") is not False
+        or not isinstance(execution, Mapping)
+        or execution.get("required_predecessor_node_id")
+        != "MAIN_EXECUTION_PACKAGE_MATERIALIZED"
+        or execution.get("successor_node_id") != "MAIN_PROGRAM_REGISTRATION"
+        or execution.get("predecessor_repository_ref") != repository_ref
+        or execution.get("predecessor_repository_write_allowed") is not False
+        or execution.get("node_evidence_write_ref") != evidence_ref
+        or execution.get("validation_scope")
+        != "STRUCTURAL_PACKAGE_CONTRACT_ONLY"
+        or execution.get("max_transitions") != 1
+        or execution.get("max_loop_rounds") != 1
+        or execution.get("real_target_install_allowed") is not False
+        or execution.get("automatic_successor_advance_allowed") is not False
+        or execution.get("produced_capabilities")
+        != ["MAIN_EXECUTION_PACKAGE_VALIDATED_PASS"]
+        or persistence_refs != set(internal_write_refs)
+        or schema.get("additionalProperties") is not False
+        or schema.get("required") != execution.get("required_result_fields")
+    ):
+        findings.append(
+            _finding(
+                "MAIN_EXECUTION_PACKAGE_VALIDATION_CONTRACT_INVALID",
+                "provider, authorization, repository, evidence, or promotion boundary drifted",
+            )
+        )
+
+    try:
+        provider_tree = ast.parse(paths["provider"].read_text(encoding="utf-8"))
+        entrypoint_tree = ast.parse(paths["entrypoint"].read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, SyntaxError) as exc:
+        findings.append(
+            _finding(
+                "MAIN_EXECUTION_PACKAGE_VALIDATION_IMPLEMENTATION_INVALID",
+                str(exc),
+            )
+        )
+    else:
+        provider_functions = {
+            node.name
+            for node in ast.walk(provider_tree)
+            if isinstance(node, ast.FunctionDef)
+        }
+        entrypoint_functions = {
+            node.name
+            for node in ast.walk(entrypoint_tree)
+            if isinstance(node, ast.FunctionDef)
+        }
+        provider_text = paths["provider"].read_text(encoding="utf-8")
+        if (
+            not {
+                "validate_static_contract",
+                "_validate_materialized_repository",
+                "_validate_runtime_inputs",
+                "execute_action",
+            }.issubset(provider_functions)
+            or "subprocess.run" in provider_text
+            or "TEST_ONLY_IDEMPOTENT_ADAPTERS" in provider_text
+            or "main" not in entrypoint_functions
+        ):
+            findings.append(
+                _finding(
+                    "MAIN_EXECUTION_PACKAGE_VALIDATION_IMPLEMENTATION_INVALID",
+                    "real non-executing structural provider or entrypoint is incomplete",
+                )
+            )
+
+    node = next(
+        (
+            item
+            for item in dag.get("nodes", [])
+            if isinstance(item, Mapping) and item.get("node_id") == node_id
+        ),
+        None,
+    )
+    binding = manifest.get("main_execution_package_validation")
+    driver_action = driver.get("project_validation_actions", {}).get(node_id)
+    local_profile = policy.get("profile_authorization_schemas", {}).get(
+        "SELF_USE_LOCAL_TRUSTED_OPERATOR", {}
+    )
+    policy_authorization = (
+        local_profile.get("MAIN_EXECUTION_PACKAGE_VALIDATION_AUTHORIZATION")
+        if isinstance(local_profile, Mapping)
+        else None
+    )
+    rules = policy.get("validation_rules")
+    expected_hashes = {
+        "action_contract_sha256": _file_hash(paths["contract"]),
+        "executor_implementation_sha256": _file_hash(paths["provider"]),
+        "runtime_entrypoint_sha256": _file_hash(paths["entrypoint"]),
+        "result_schema_sha256": _file_hash(paths["schema"]),
+    }
+    if (
+        not isinstance(node, Mapping)
+        or node.get("action_contract_ref") != refs["contract"]
+        or node.get("executor_implementation_ref") != refs["provider"]
+        or node.get("runtime_entrypoint_ref") != refs["entrypoint"]
+        or node.get("result_schema_ref") != refs["schema"]
+        or any(node.get(key) != value for key, value in expected_hashes.items())
+        or node.get("predecessor_repository_ref") != repository_ref
+        or node.get("predecessor_repository_write_allowed") is not False
+        or node.get("allowed_write_paths") != [evidence_ref]
+        or node.get("automatic_successor_advance_allowed") is not False
+        or node.get("active_requirement_epoch") != contract_epoch
+        or not isinstance(binding, Mapping)
+        or binding.get("runtime_status") != "NOT_EXECUTED"
+        or binding.get("predecessor_repository_write_allowed") is not False
+        or binding.get("node_evidence_write_ref") != evidence_ref
+        or binding.get("successor_started") is not False
+        or any(binding.get(key) != value for key, value in expected_hashes.items())
+        or not isinstance(driver_action, Mapping)
+        or driver_action.get("action_contract_ref") != refs["contract"]
+        or driver_action.get("executor_implementation_ref") != refs["provider"]
+        or driver_action.get("runtime_entrypoint_ref") != refs["entrypoint"]
+        or driver_action.get("predecessor_repository_write_allowed") is not False
+        or driver_action.get("node_evidence_write_ref") != evidence_ref
+        or driver_action.get("automatic_successor_advance_allowed") is not False
+        or policy_authorization != authorization
+        or not isinstance(rules, Mapping)
+        or any(
+            rules.get(key) is not True
+            for key in (
+                "main_package_validation_predecessor_result_hash_required",
+                "main_package_validation_repository_tree_hash_required",
+                "main_package_validation_predecessor_repository_read_only",
+                "main_package_validation_node_evidence_only_command_write",
+                "main_package_validation_one_shot_state_cas_required",
+                "main_package_validation_no_successor_auto_advance",
+                "main_package_validation_self_report_only_forbidden",
+            )
+        )
+    ):
+        findings.append(
+            _finding(
+                "MAIN_EXECUTION_PACKAGE_VALIDATION_PROJECTION_INVALID",
+                "DAG, Driver, Manifest, or local policy binding drifted",
+            )
+        )
+
+    negatives = _read_json(root / "validation/NEGATIVE_CASES.json", findings)
+    if isinstance(negatives, Mapping):
+        cases = {
+            str(case.get("case_id")): case
+            for case in negatives.get("cases", [])
+            if isinstance(case, Mapping)
+            and str(case.get("case_id", "")).startswith(
+                "NEG-V29-E49-MAIN-PACKAGE-VALIDATION-"
+            )
+        }
+        expected = {
+            "NEG-V29-E49-MAIN-PACKAGE-VALIDATION-REPOSITORY-DRIFT",
+            "NEG-V29-E49-MAIN-PACKAGE-VALIDATION-WRITE-ROOT",
+            "NEG-V29-E49-MAIN-PACKAGE-VALIDATION-SELF-REPORT",
+        }
+        if set(cases) != expected or any(
+            not _is_nonexecutable_negative_fixture(case)
+            or case.get("origin")
+            != "EPOCH49_MAIN_EXECUTION_PACKAGE_VALIDATION_CLOSURE"
+            for case in cases.values()
+        ):
+            findings.append(
+                _finding(
+                    "MAIN_EXECUTION_PACKAGE_VALIDATION_NEGATIVE_FIXTURE_INVALID",
+                    "non-executable structural validation fixtures are incomplete",
+                )
+            )
+    portable = _read_json(root / "validation/PORTABLE_FILE_MANIFEST.json", findings)
+    if isinstance(portable, Mapping):
+        files = portable.get("files")
+        if not isinstance(files, Mapping) or any(
+            files.get(relative) != _file_hash(root / relative)
+            for relative in refs.values()
+        ):
+            findings.append(
+                _finding(
+                    "MAIN_EXECUTION_PACKAGE_VALIDATION_PORTABLE_BINDING_INVALID",
+                    "portable inventory does not bind the validation closure",
+                )
+            )
+    return findings
+
+
+def _expected_correction_implementation_refs(correction_id: str) -> list[str]:
+    refs = {
+        "CORR-29-001": [
+            "FACTORY_PROVENANCE.json",
+            "canonical_sources/FROZEN_REQUIREMENT_IR.json",
+            "V2_9_CONTROL_KERNEL_MANIFEST.json",
+        ],
+        "CORR-29-002": [
+            "DECISION_POLICY.json",
+            "TRANSITION_CONTRACTS.json",
+            "tools/harness_foundry_runtime/control_kernel.py",
+        ],
+        "CORR-29-003": [
+            "V2_9_CONTROL_KERNEL_MANIFEST.json",
+            "tools/harness_foundry_runtime/store.py",
+            "tools/harness_foundry_runtime/control_kernel.py",
+        ],
+        "CORR-29-004": [
+            "AUTHORIZATION_POLICY.json",
+            "TRANSITION_CONTRACTS.json",
+            "contracts/v2_9/PARENT_AUTHORIZATION.schema.json",
+            "contracts/v2_9/DERIVED_GRANT.schema.json",
+            "tools/harness_foundry_runtime/control_kernel.py",
+        ],
+        "CORR-29-005": [
+            "ASSURANCE_PROFILE.json",
+            "tools/harness_foundry_runtime/requirement_completion.py",
+        ],
+        "CORR-29-006": [
+            "contracts/v2_9/MINIMUM_REQUIREMENT_COMPLETION.schema.json",
+            "tools/harness_foundry_runtime/requirement_completion.py",
+        ],
+        "CORR-29-007": [
+            "ASSURANCE_PROFILE.json",
+            "tools/harness_foundry_runtime/requirement_completion.py",
+        ],
+        "CORR-29-008": [
+            "FACTORY_PROVENANCE.json",
+            "canonical_sources/SOURCE_MANIFEST.json",
+            "validation/PORTABILITY_MANIFEST.json",
+            "tools/setup_runtime.py",
+        ],
+    }
+    return list(refs.get(correction_id, []))
+
+
+def _check_correction_coverage(
+    root: Path,
+    target: Mapping[str, Any],
+    correction: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    traceability = correction.get("correction_traceability")
+    if not isinstance(traceability, Mapping) or traceability.get("required") is not True:
+        return findings
+    matrix_path = root / CORRECTION_COVERAGE_REF
+    matrix = _read_json(matrix_path, findings)
+    atom_catalog = _read_json(
+        root / "canonical_sources/NORMATIVE_ATOM_CATALOG.json", findings
+    )
+    atom_coverage = _read_json(
+        root / "canonical_sources/ATOM_COVERAGE_MATRIX.json", findings
+    )
+    if not all(
+        isinstance(value, Mapping)
+        for value in (matrix, atom_catalog, atom_coverage)
+    ):
+        findings.append(
+            _finding("V2_9_CORRECTION_COVERAGE_INVALID", "required documents missing")
+        )
+        return findings
+    expected_ids = [str(value) for value in traceability.get("expected_correction_ids", [])]
+    raw_requirements = correction.get("correction_requirements")
+    declarations = (
+        {
+            str(item.get("correction_id")): item
+            for item in raw_requirements
+            if isinstance(item, Mapping) and item.get("correction_id")
+        }
+        if isinstance(raw_requirements, list)
+        else {}
+    )
+    atom_ids = {
+        str(item.get("atom_id"))
+        for item in atom_catalog.get("atoms", [])
+        if isinstance(item, Mapping) and item.get("atom_id")
+    }
+    coverage_by_atom = {
+        str(item.get("atom_id")): item
+        for item in atom_coverage.get("coverage", [])
+        if isinstance(item, Mapping) and item.get("atom_id")
+    }
+    rows = matrix.get("rows")
+    row_by_id = (
+        {
+            str(item.get("correction_id")): item
+            for item in rows
+            if isinstance(item, Mapping) and item.get("correction_id")
+        }
+        if isinstance(rows, list)
+        else {}
+    )
+    if (
+        traceability.get("candidate_artifact_ref") != CORRECTION_COVERAGE_REF
+        or traceability.get("mapping_source")
+        != "target.control_plane_architecture_correction.correction_requirements"
+        or traceability.get("validator_mode")
+        != "FAIL_CLOSED_EXACT_MAPPING_AND_HASH_BINDING"
+        or traceability.get("standalone_self_check_required") is not True
+        or traceability.get("runtime_evidence_must_remain_pending_until_execution")
+        is not True
+        or not isinstance(raw_requirements, list)
+        or len(declarations) != len(raw_requirements)
+        or list(declarations) != expected_ids
+        or not isinstance(rows, list)
+        or len(row_by_id) != len(rows)
+        or list(row_by_id) != expected_ids
+        or matrix.get("expected_correction_ids") != expected_ids
+        or matrix.get("correction_count") != len(expected_ids)
+        or matrix.get("candidate_static_status") != "PASS"
+        or matrix.get("runtime_evidence_status")
+        != "PENDING_UNTIL_AUTHORIZED_EXECUTION"
+        or matrix.get("execution_started") is not False
+        or matrix.get("matrix_sha256")
+        != _hash_without_field(matrix, "matrix_sha256")
+        or manifest.get("correction_coverage_ref") != CORRECTION_COVERAGE_REF
+        or manifest.get("correction_coverage_sha256") != _file_hash(matrix_path)
+    ):
+        findings.append(
+            _finding(
+                "V2_9_CORRECTION_COVERAGE_INVALID",
+                "declaration, exact IDs, lifecycle, or manifest binding is invalid",
+            )
+        )
+    for correction_id in expected_ids:
+        declaration = declarations.get(correction_id)
+        row = row_by_id.get(correction_id)
+        if not isinstance(declaration, Mapping) or not isinstance(row, Mapping):
+            continue
+        maps_to = [str(value) for value in declaration.get("maps_to", [])]
+        expected_coverage = []
+        for atom_id in maps_to:
+            edge = coverage_by_atom.get(atom_id, {})
+            expected_coverage.append(
+                {
+                    "atom_id": atom_id,
+                    "workpack_ids": list(edge.get("workpack_ids") or []),
+                    "stage_ids": list(edge.get("stage_ids") or []),
+                    "release_step_ids": list(edge.get("release_step_ids") or []),
+                    "owner_project_ids": list(edge.get("owner_project_ids") or []),
+                    "coverage_status": edge.get("status"),
+                }
+            )
+        implementation_refs = _expected_correction_implementation_refs(
+            correction_id
+        )
+        if (
+            not maps_to
+            or len(set(maps_to)) != len(maps_to)
+            or any(atom_id not in atom_ids or atom_id not in coverage_by_atom for atom_id in maps_to)
+            or row.get("requirement") != declaration.get("requirement")
+            or row.get("maps_to") != maps_to
+            or row.get("mapped_atom_coverage") != expected_coverage
+            or row.get("implementation_artifact_refs") != implementation_refs
+            or row.get("validation_refs") != list(CORRECTION_VALIDATION_REFS)
+            or row.get("candidate_static_lifecycle")
+            != "MATERIALIZED_AND_HASH_BOUND"
+            or row.get("runtime_lifecycle")
+            != "PENDING_UNTIL_AUTHORIZED_EXECUTION"
+            or row.get("runtime_evidence_refs") != []
+            or row.get("runtime_claims_verified") is not False
+            or row.get("row_sha256") != _hash_without_field(row, "row_sha256")
+            or any(not (root / relative).is_file() for relative in implementation_refs)
+            or any(not (root / relative).is_file() for relative in CORRECTION_VALIDATION_REFS)
+        ):
+            findings.append(
+                _finding("V2_9_CORRECTION_COVERAGE_INVALID", correction_id)
+            )
+    v0_10 = target.get("human_review_v0_10_closure")
+    receipt = _read_json(
+        root / "validation/HUMAN_REVIEW_CLOSURE_RECEIPT.json", findings
+    )
+    closure = (
+        next(
+            (
+                item
+                for item in receipt.get("closures", [])
+                if isinstance(item, Mapping)
+                and item.get("requirement_key") == "human_review_v0_10_closure"
+            ),
+            None,
+        )
+        if isinstance(receipt, Mapping)
+        else None
+    )
+    required_evidence = {
+        CORRECTION_COVERAGE_REF,
+        "V2_9_CONTROL_KERNEL_MANIFEST.json",
+        "DECISION_POLICY.json",
+        "ASSURANCE_PROFILE.json",
+        "CONTROL_PLANE_PROGRAM_GRAPH.json",
+        "TRANSITION_CONTRACTS.json",
+        "tools/harness_foundry_runtime/control_kernel.py",
+        "tools/harness_foundry_runtime/requirement_completion.py",
+        "tools/harness_foundry_runtime/store.py",
+        "tools/self_check.py",
+    }
+    if isinstance(v0_10, Mapping):
+        evidence_refs = set(closure.get("evidence_refs") or []) if isinstance(closure, Mapping) else set()
+        evidence_hashes = closure.get("evidence_sha256") if isinstance(closure, Mapping) else None
+        if (
+            not isinstance(closure, Mapping)
+            or not required_evidence.issubset(evidence_refs)
+            or not isinstance(evidence_hashes, Mapping)
+            or any(
+                evidence_hashes.get(relative) != _file_hash(root / relative)
+                for relative in required_evidence
+            )
+        ):
+            findings.append(
+                _finding(
+                    "HUMAN_REVIEW_CLOSURE_RECEIPT_INVALID",
+                    "v0.10 closure lacks exact control-kernel evidence hashes",
+                )
+            )
+    v0_11 = target.get("human_review_v0_11_closure")
+    closure_v0_11 = (
+        next(
+            (
+                item
+                for item in receipt.get("closures", [])
+                if isinstance(item, Mapping)
+                and item.get("requirement_key")
+                == "human_review_v0_11_closure"
+            ),
+            None,
+        )
+        if isinstance(receipt, Mapping)
+        else None
+    )
+    required_v0_11_evidence = {
+        "V2_9_CONTROL_KERNEL_MANIFEST.json",
+        "TRANSITION_CONTRACTS.json",
+        "PROFILE_READ_VALIDATION_ADAPTER_BINDING.json",
+        "CONTROL_EVENT_STORE_ACTIVATION_CONTRACT.json",
+        "contracts/v2_9/TRANSITION_RESULT.schema.json",
+        "contracts/v2_9/ADAPTER_BINDING.schema.json",
+        "contracts/v2_9/CONTROL_EVENT_STORE_ACTIVATION.schema.json",
+        "tools/harness_foundry_runtime/control_kernel.py",
+        "tools/harness_foundry_runtime/store.py",
+        "tools/self_check.py",
+    }
+    if isinstance(v0_11, Mapping):
+        evidence_refs = (
+            set(closure_v0_11.get("evidence_refs") or [])
+            if isinstance(closure_v0_11, Mapping)
+            else set()
+        )
+        evidence_hashes = (
+            closure_v0_11.get("evidence_sha256")
+            if isinstance(closure_v0_11, Mapping)
+            else None
+        )
+        if (
+            not isinstance(evidence_hashes, Mapping)
+            or not required_v0_11_evidence.issubset(evidence_refs)
+            or any(
+                evidence_hashes.get(relative) != _file_hash(root / relative)
+                for relative in required_v0_11_evidence
+            )
+        ):
+            findings.append(
+                _finding(
+                    "HUMAN_REVIEW_CLOSURE_RECEIPT_INVALID",
+                    "v0.11 closure lacks exact integration-correction evidence hashes",
+                )
+            )
+    return findings
+
+
+def _expected_native_control_store_contract() -> dict[str, Any]:
+    columns = {
+        "control_events": [
+            ("sequence", "INTEGER", False, 1),
+            ("event_id", "TEXT", True, 0),
+            ("program_id", "TEXT", True, 0),
+            ("stream_revision", "INTEGER", True, 0),
+            ("event_type", "TEXT", True, 0),
+            ("payload_json", "TEXT", True, 0),
+            ("previous_event_hash", "TEXT", False, 0),
+            ("event_hash", "TEXT", True, 0),
+            ("created_at", "TEXT", True, 0),
+        ],
+        "control_idempotency": [
+            ("program_id", "TEXT", True, 1),
+            ("idempotency_key", "TEXT", True, 2),
+            ("request_sha256", "TEXT", True, 0),
+            ("events_json", "TEXT", True, 0),
+            ("created_at", "TEXT", True, 0),
+        ],
+    }
+    contract = {
+        "schema_version": "2.9",
+        "authority_model": "SINGLE_APPEND_ONLY_SQLITE_CONTROL_EVENT_STORE",
+        "tables": {
+            table: [
+                {
+                    "name": name,
+                    "type": column_type,
+                    "not_null": not_null,
+                    "primary_key_position": primary_key_position,
+                }
+                for name, column_type, not_null, primary_key_position in rows
+            ]
+            for table, rows in columns.items()
+        },
+        "append_only_triggers": {
+            "control_events_reject_update": (
+                "CREATE TRIGGER control_events_reject_update BEFORE UPDATE ON "
+                "control_events BEGIN SELECT RAISE(ABORT, "
+                "'control_events is append-only'); END"
+            ),
+            "control_events_reject_delete": (
+                "CREATE TRIGGER control_events_reject_delete BEFORE DELETE ON "
+                "control_events BEGIN SELECT RAISE(ABORT, "
+                "'control_events is append-only'); END"
+            ),
+        },
+        "preexisting_store_policy": (
+            "REJECT_BEFORE_SCHEMA_OR_JOURNAL_MUTATION"
+        ),
+    }
+    contract["schema_contract_sha256"] = _json_hash(contract)
+    return contract
+
+
+def _check_v2_9_generic_control_kernel(root: Path) -> list[dict[str, Any]]:
+    """Validate the active Epoch 1 producer bundle, not a node story."""
+
+    findings: list[dict[str, Any]] = []
+    frozen = _read_json(
+        root / "canonical_sources/FROZEN_REQUIREMENT_IR.json", findings
+    )
+    if not isinstance(frozen, dict):
+        return findings
+    target = frozen.get("target")
+    correction = (
+        target.get("control_plane_architecture_correction")
+        if isinstance(target, Mapping)
+        else None
+    )
+    if not (
+        isinstance(target, Mapping)
+        and isinstance(correction, Mapping)
+        and target.get("architecture_epoch") == 1
+        and target.get("control_plane_epoch") == 1
+    ):
+        return findings
+
+    integration = target.get("v0_11_execution_integration_correction")
+    required_paths = [
+        "V2_9_CONTROL_KERNEL_MANIFEST.json",
+        "ASSURANCE_PROFILE.json",
+        "DECISION_POLICY.json",
+        "TRANSITION_CONTRACTS.json",
+        "CONTROL_PLANE_PROGRAM_GRAPH.json",
+        "tools/harness_foundry_runtime/control_kernel.py",
+        "tools/harness_foundry_runtime/requirement_completion.py",
+        "tools/harness_foundry_runtime/store.py",
+        "contracts/v2_9/CONTROL_EVENT.schema.json",
+        "contracts/v2_9/PARENT_AUTHORIZATION.schema.json",
+        "contracts/v2_9/DERIVED_GRANT.schema.json",
+        "contracts/v2_9/DECISION_RECEIPT.schema.json",
+        "contracts/v2_9/MINIMUM_REQUIREMENT_COMPLETION.schema.json",
+    ]
+    if isinstance(integration, Mapping):
+        required_paths.extend(
+            [
+                "contracts/v2_9/TRANSITION_RESULT.schema.json",
+                "contracts/v2_9/ADAPTER_BINDING.schema.json",
+                "contracts/v2_9/CONTROL_EVENT_STORE_ACTIVATION.schema.json",
+                "PROFILE_READ_VALIDATION_ADAPTER_BINDING.json",
+                "CONTROL_EVENT_STORE_ACTIVATION_CONTRACT.json",
+            ]
+        )
+    for relative in required_paths:
+        if not (root / relative).is_file():
+            findings.append(
+                _finding("V2_9_CONTROL_KERNEL_ARTIFACT_MISSING", relative)
+            )
+    if findings:
+        return findings
+
+    manifest_path = root / "V2_9_CONTROL_KERNEL_MANIFEST.json"
+    manifest = _read_json(manifest_path, findings)
+    profile = _read_json(root / "ASSURANCE_PROFILE.json", findings)
+    policy_path = root / "DECISION_POLICY.json"
+    policy = _read_json(policy_path, findings)
+    transition_path = root / "TRANSITION_CONTRACTS.json"
+    transitions = _read_json(transition_path, findings)
+    graph_path = root / "CONTROL_PLANE_PROGRAM_GRAPH.json"
+    graph = _read_json(graph_path, findings)
+    if not all(
+        isinstance(value, dict)
+        for value in (manifest, profile, policy, transitions, graph)
+    ):
+        return findings
+
+    module_hashes = manifest.get("runtime_module_sha256")
+    schema_hashes = manifest.get("schema_sha256")
+    if (
+        manifest.get("manifest_sha256")
+        != _hash_without_field(manifest, "manifest_sha256")
+        or manifest.get("architecture_epoch") != 1
+        or manifest.get("control_plane_epoch") != 1
+        or manifest.get("persistent_authority")
+        != "SINGLE_APPEND_ONLY_SQLITE_CONTROL_EVENT_STORE"
+        or manifest.get("parent_authorization_status") != "NOT_GRANTED"
+        or manifest.get("derived_grant_count") != 0
+        or manifest.get("execution_started") is not False
+        or manifest.get("status")
+        != "FROZEN_IMPLEMENTATION_READY_NOT_AUTHORIZED"
+        or manifest.get("architecture_lock_proposal_sha256")
+        != correction.get("architecture_lock_proposal_sha256")
+        or not isinstance(module_hashes, Mapping)
+        or not isinstance(schema_hashes, Mapping)
+    ):
+        findings.append(
+            _finding(
+                "V2_9_CONTROL_KERNEL_MANIFEST_INVALID",
+                "authority, epoch, authoring stop, or manifest hash is invalid",
+            )
+        )
+    for relative, digest in (module_hashes or {}).items():
+        path = root / str(relative)
+        if (
+            Path(str(relative)).is_absolute()
+            or ".." in Path(str(relative)).parts
+            or not path.is_file()
+            or digest != _file_hash(path)
+        ):
+            findings.append(
+                _finding("V2_9_CONTROL_KERNEL_MODULE_HASH_INVALID", str(relative))
+            )
+    for relative, digest in (schema_hashes or {}).items():
+        path = root / str(relative)
+        if (
+            Path(str(relative)).is_absolute()
+            or ".." in Path(str(relative)).parts
+            or not path.is_file()
+            or digest != _file_hash(path)
+        ):
+            findings.append(
+                _finding("V2_9_CONTROL_KERNEL_SCHEMA_HASH_INVALID", str(relative))
+            )
+
+    evaluator_relative = "tools/harness_foundry_runtime/control_kernel.py"
+    if (
+        policy.get("status") != "FROZEN"
+        or policy.get("rule_language_id") != "HF29_DETERMINISTIC_JSON_RULES"
+        or policy.get("rule_language_version") != "1.0"
+        or policy.get("evaluator_ref")
+        != f"harness-resource://candidate/{evaluator_relative}"
+        or policy.get("evaluator_sha256")
+        != _file_hash(root / evaluator_relative)
+        or policy.get("conflict_policy") != "FAIL_CLOSED_POLICY_CONFLICT"
+        or policy.get("unknown_policy") != "FAIL_CLOSED_POLICY_UNKNOWN"
+        or policy.get("precedence")
+        != [
+            "PLATFORM_SAFETY",
+            "FROZEN_CHARTER",
+            "FROZEN_REQUIREMENT",
+            "ARCHITECTURE_POLICY",
+            "TRANSITION_LOCAL",
+        ]
+    ):
+        findings.append(
+            _finding(
+                "V2_9_DECISION_POLICY_BINDING_INVALID",
+                "Decision Policy or evaluator binding is invalid",
+            )
+        )
+
+    contracts = transitions.get("contracts")
+    expected_kinds = {
+        "READ_ONLY_VALIDATION",
+        "INTERNAL_STATE_TRANSACTION",
+        "BOUNDED_REVERSIBLE_FIXTURE_ACTION",
+    }
+    if (
+        transitions.get("status") != "FROZEN_NOT_EXECUTED"
+        or not isinstance(contracts, list)
+        or transitions.get("contracts_sha256") != _json_hash(contracts or [])
+        or {item.get("node_kind") for item in contracts or [] if isinstance(item, Mapping)}
+        != expected_kinds
+    ):
+        findings.append(
+            _finding(
+                "V2_9_TRANSITION_CONTRACT_SET_INVALID",
+                "three representative node kinds are not bound to one contract set",
+            )
+        )
+    for contract in contracts or []:
+        if not isinstance(contract, Mapping):
+            continue
+        write_roots = contract.get("allowed_write_roots")
+        if (
+            contract.get("required_authorization_class")
+            != "PARENT_RISK_ENVELOPE"
+            or contract.get("decision_policy_sha256") != _file_hash(policy_path)
+            or contract.get("rule_evaluator_sha256")
+            != _file_hash(root / evaluator_relative)
+            or contract.get("conflict_policy")
+            != "FAIL_CLOSED_POLICY_CONFLICT"
+            or contract.get("unknown_policy") != "FAIL_CLOSED_POLICY_UNKNOWN"
+            or contract.get("execution_status") != "PLANNED_NOT_AUTHORIZED"
+            or not isinstance(write_roots, list)
+            or not write_roots
+            or any(
+                not str(value).startswith("harness-resource://execution/")
+                for value in write_roots
+            )
+        ):
+            findings.append(
+                _finding(
+                    "V2_9_TRANSITION_CONTRACT_INVALID",
+                    str(contract.get("transition_id")),
+                )
+            )
+
+    if isinstance(integration, Mapping):
+        result_schema_path = root / "contracts/v2_9/TRANSITION_RESULT.schema.json"
+        result_schema = _read_json(result_schema_path, findings)
+        adapter_path = root / "PROFILE_READ_VALIDATION_ADAPTER_BINDING.json"
+        adapter = _read_json(adapter_path, findings)
+        activation_path = root / "CONTROL_EVENT_STORE_ACTIVATION_CONTRACT.json"
+        activation = _read_json(activation_path, findings)
+        if not all(
+            isinstance(value, Mapping)
+            for value in (result_schema, adapter, activation)
+        ):
+            return findings
+        expected_statuses = [
+            "PASS",
+            "VALIDATION_FAILED",
+            "TEMPORARY_FAILURE",
+            "UNKNOWN_SIDE_EFFECT",
+        ]
+        status_rule = result_schema.get("properties", {}).get("status", {})
+        reason_conditions = result_schema.get("allOf")
+        evaluator_source = (root / evaluator_relative).read_text(encoding="utf-8")
+        if (
+            status_rule.get("enum") != expected_statuses
+            or not isinstance(reason_conditions, list)
+            or not any(
+                isinstance(item, Mapping)
+                and item.get("if", {})
+                .get("properties", {})
+                .get("status", {})
+                .get("const")
+                == "VALIDATION_FAILED"
+                and "reason_code" in item.get("then", {}).get("required", [])
+                for item in reason_conditions
+            )
+            or 'if status == "VALIDATION_FAILED"' not in evaluator_source
+            or '"outcome": "VALIDATION_FAILED"' not in evaluator_source
+            or "DETERMINISTIC_VALIDATION_FAILURE" not in evaluator_source
+        ):
+            findings.append(
+                _finding(
+                    "V2_9_DETERMINISTIC_FAILURE_CONTRACT_INVALID",
+                    "result schema or durable non-retry Engine branch is invalid",
+                )
+            )
+        profile_transition = next(
+            (
+                item
+                for item in contracts or []
+                if isinstance(item, Mapping)
+                and item.get("transition_id") == "PROFILE_READ_VALIDATION"
+            ),
+            None,
+        )
+        command_contract = (
+            profile_transition.get("command_contract")
+            if isinstance(profile_transition, Mapping)
+            else None
+        )
+        if (
+            adapter.get("binding_status") != "PLANNED_NOT_BOUND"
+            or any(
+                adapter.get(field) is not None
+                for field in (
+                    "implementation_ref",
+                    "implementation_sha256",
+                    "entrypoint",
+                    "runtime_transition_contract_sha256",
+                )
+            )
+            or adapter.get("candidate_materializes_adapter") is not False
+            or adapter.get("execution_started") is not False
+            or adapter.get("result_schema_ref")
+            != "harness-resource://candidate/contracts/v2_9/TRANSITION_RESULT.schema.json"
+            or adapter.get("result_schema_sha256")
+            != _file_hash(result_schema_path)
+            or adapter.get("derived_grant_binding_requirement")
+            != "RUNTIME_TRANSITION_CONTRACT_SHA256_REQUIRED"
+            or adapter.get("binding_contract_sha256")
+            != _hash_without_field(adapter, "binding_contract_sha256")
+            or manifest.get("adapter_binding_ref")
+            != "PROFILE_READ_VALIDATION_ADAPTER_BINDING.json"
+            or manifest.get("adapter_binding_sha256") != _file_hash(adapter_path)
+            or not isinstance(command_contract, Mapping)
+            or command_contract.get("adapter_binding_ref")
+            != "harness-resource://candidate/PROFILE_READ_VALIDATION_ADAPTER_BINDING.json"
+            or command_contract.get("adapter_binding_sha256")
+            != _file_hash(adapter_path)
+            or command_contract.get("runtime_transition_contract_sha256")
+            is not None
+            or profile_transition.get("result_schema_sha256")
+            != _file_hash(result_schema_path)
+        ):
+            findings.append(
+                _finding(
+                    "V2_9_ADAPTER_BINDING_INVALID",
+                    "unbound adapter identity or Runtime Grant binding is invalid",
+                )
+            )
+        expected_store = _expected_native_control_store_contract()
+        bootstrap = activation.get("bootstrap_import")
+        store_path = root / "tools/harness_foundry_runtime/store.py"
+        if (
+            activation.get("activation_status") != "PLANNED_NOT_ACTIVATED"
+            or activation.get("active_store_ref")
+            != "harness-resource://execution/.harness-foundry/control/v2_9/control_event_store.sqlite3"
+            or activation.get("implementation_ref")
+            != "harness-resource://candidate/tools/harness_foundry_runtime/store.py"
+            or activation.get("implementation_sha256") != _file_hash(store_path)
+            or activation.get("schema_ref")
+            != "harness-resource://candidate/contracts/v2_9/CONTROL_EVENT_STORE_ACTIVATION.schema.json"
+            or activation.get("schema_sha256")
+            != _file_hash(
+                root / "contracts/v2_9/CONTROL_EVENT_STORE_ACTIVATION.schema.json"
+            )
+            or activation.get("native_schema_contract") != expected_store
+            or activation.get("native_schema_contract_sha256")
+            != expected_store["schema_contract_sha256"]
+            or activation.get("preexisting_incompatible_store_policy")
+            != "REJECT_BEFORE_SCHEMA_OR_JOURNAL_MUTATION"
+            or activation.get("append_only_update_delete_triggers_required")
+            is not True
+            or activation.get("ad_hoc_same_filename_store_reuse_forbidden")
+            is not True
+            or not isinstance(bootstrap, Mapping)
+            or bootstrap.get("status") != "PLANNED_NOT_EXECUTED"
+            or bootstrap.get("separate_migration_authorization_required")
+            is not True
+            or bootstrap.get("migration_authorization_status") != "NOT_GRANTED"
+            or bootstrap.get("historical_v0_11_event_hash")
+            != integration.get(
+                "native_control_event_store_activation_contract", {}
+            ).get("historical_v0_11_event_hash")
+            or activation.get("active_authority_count_after_activation") != 1
+            or activation.get("store_created") is not False
+            or activation.get("store_migrated") is not False
+            or activation.get("execution_started") is not False
+            or activation.get("contract_sha256")
+            != _hash_without_field(activation, "contract_sha256")
+            or manifest.get("control_event_store_activation_contract_ref")
+            != "CONTROL_EVENT_STORE_ACTIVATION_CONTRACT.json"
+            or manifest.get(
+                "control_event_store_activation_contract_sha256"
+            )
+            != _file_hash(activation_path)
+            or manifest.get("control_event_store_activation_status")
+            != "PLANNED_NOT_ACTIVATED"
+            or manifest.get("bootstrap_import_status")
+            != "PLANNED_NOT_EXECUTED"
+        ):
+            findings.append(
+                _finding(
+                    "V2_9_CONTROL_EVENT_STORE_ACTIVATION_INVALID",
+                    "native Event Store schema, activation, or import boundary is invalid",
+                )
+            )
+
+    nodes = graph.get("nodes")
+    if (
+        graph.get("status") != "INSTANTIATED_NOT_EXECUTED"
+        or graph.get("program_graph_sha256")
+        != _hash_without_field(graph, "program_graph_sha256")
+        or not isinstance(nodes, list)
+        or {item.get("node_kind") for item in nodes if isinstance(item, Mapping)}
+        != expected_kinds
+        or graph.get("profile_sha256")
+        != _file_hash(root / "ASSURANCE_PROFILE.json")
+        or profile.get("status") != "FROZEN"
+        or profile.get("program_graph_template_id")
+        != graph.get("program_graph_template_id")
+    ):
+        findings.append(
+            _finding(
+                "V2_9_PROFILE_PROGRAM_GRAPH_INVALID",
+                "static Profile and active Program Graph do not close",
+            )
+        )
+
+    try:
+        kernel_tree = ast.parse(
+            (root / evaluator_relative).read_text(encoding="utf-8")
+        )
+        completion_tree = ast.parse(
+            (
+                root
+                / "tools/harness_foundry_runtime/requirement_completion.py"
+            ).read_text(encoding="utf-8")
+        )
+        store_tree = ast.parse(
+            (root / "tools/harness_foundry_runtime/store.py").read_text(
+                encoding="utf-8"
+            )
+        )
+    except (OSError, UnicodeError, SyntaxError) as exc:
+        findings.append(_finding("V2_9_CONTROL_KERNEL_SOURCE_INVALID", str(exc)))
+    else:
+        kernel_classes = {
+            node.name for node in ast.walk(kernel_tree) if isinstance(node, ast.ClassDef)
+        }
+        kernel_functions = {
+            node.name for node in ast.walk(kernel_tree) if isinstance(node, ast.FunctionDef)
+        }
+        completion_functions = {
+            node.name
+            for node in ast.walk(completion_tree)
+            if isinstance(node, ast.FunctionDef)
+        }
+        store_classes = {
+            node.name for node in ast.walk(store_tree) if isinstance(node, ast.ClassDef)
+        }
+        store_functions = {
+            node.name
+            for node in ast.walk(store_tree)
+            if isinstance(node, ast.FunctionDef)
+        }
+        if (
+            "GenericTransitionEngine" not in kernel_classes
+            or not {"evaluate_decision_policy", "rebuild_control_projections"}.issubset(
+                kernel_functions
+            )
+            or "ControlEventStore" not in store_classes
+            or (
+                isinstance(integration, Mapping)
+                and not {
+                    "control_event_store_schema_contract",
+                    "_require_exact_existing_schema",
+                }.issubset(store_functions)
+            )
+            or not {
+                "evaluate_requirement_completion",
+                "evaluate_control_domain",
+                "evaluate_human_cost_acceptance",
+            }.issubset(completion_functions)
+            or any(name.startswith("_authorized_") for name in kernel_functions)
+        ):
+            findings.append(
+                _finding(
+                    "V2_9_CONTROL_KERNEL_SOURCE_INVALID",
+                    "generic Engine, projections, completion, or retirement boundary is missing",
+                )
+            )
+
+    findings.extend(
+        _check_correction_coverage(root, target, correction, manifest)
+    )
+    legacy_dag = _read_json(root / "ENGINEERING_PROJECT_DAG.json", findings)
+    legacy_manifest = _read_json(
+        root / "THREE_PROJECT_PROGRAM_MANIFEST.json", findings
+    )
+    if (
+        not isinstance(legacy_dag, Mapping)
+        or not isinstance(legacy_manifest, Mapping)
+        or legacy_dag.get("authority_role") != "V28_COMPATIBILITY_FIXTURE_ONLY"
+        or legacy_manifest.get("authority_role")
+        != "V28_COMPATIBILITY_FIXTURE_ONLY"
+        or legacy_dag.get("successor_execution_allowed") is not False
+        or legacy_manifest.get("successor_execution_allowed") is not False
+        or (root / "tools/shared_control_baseline.py").exists()
+    ):
+        findings.append(
+            _finding(
+                "V2_9_LEGACY_CONTROL_PATH_NOT_RETIRED",
+                "v0.9 topology remains active or its node-specific executor was republished",
+            )
+        )
+    return findings
+
+
+def _epoch2_implementation_refs(correction_id: str) -> list[str]:
+    refs = {
+        "CORR-29-009": [
+            "V2_9_RELEASE_CLOSURE_CONTROL_PLANE_MANIFEST.json",
+            "SEMANTIC_IMPLEMENTATION_AUTHORIZATION_IDENTITY_CONTRACT.json",
+            "contracts/v2_9_release_closure/IDENTITY_DERIVATION_INPUT.schema.json",
+            "contracts/v2_9_release_closure/IDENTITY_BUNDLE.schema.json",
+            "contracts/v2_9_release_closure/MACHINE_GRANT_BINDING.schema.json",
+            "tools/harness_foundry_runtime/identity_derivation.py",
+            "EVENT_STORE_AUTHORITY_ADAPTER_CONTRACT.json",
+            "AUTHORITY_TRUST_ROOT.json",
+            "contracts/v2_9_release_closure/EVENT_STORE_AUTHORITY_ADAPTER_BINDING.schema.json",
+            "contracts/v2_9_release_closure/SOURCE_AUTHORITY_POLICY_LOCK.schema.json",
+            "tools/harness_foundry_runtime/authority_adapter.py",
+        ],
+        "CORR-29-010": [
+            "GENERIC_RECOVERY_DECISION_PROTOCOL.json",
+            "contracts/v2_9_release_closure/RECOVERY_DECISION.schema.json",
+            "tools/harness_foundry_runtime/recovery_decision.py",
+        ],
+        "CORR-29-011": [
+            "COMPLEXITY_GOVERNOR.json",
+            "contracts/v2_9_release_closure/COMPLEXITY_DECISION.schema.json",
+            "tools/harness_foundry_runtime/complexity_governor.py",
+        ],
+        "CORR-29-012": [
+            "PRODUCT_SAFETY_RELEASE_CLOSURE_GRAPH.json",
+            "contracts/v2_9_release_closure/CLOSURE_RECEIPT.schema.json",
+            "contracts/v2_9_release_closure/COMPATIBILITY_LINKAGE_RECEIPT.schema.json",
+            "contracts/v2_9_release_closure/TRUSTED_RELEASE_CONTEXT.schema.json",
+            "contracts/v2_9_release_closure/FINAL_RELEASE_DECISION.schema.json",
+            "tools/harness_foundry_runtime/closure_lanes.py",
+            "EVENT_STORE_AUTHORITY_ADAPTER_CONTRACT.json",
+            "AUTHORITY_TRUST_ROOT.json",
+            "contracts/v2_9_release_closure/EVENT_STORE_AUTHORITY_ADAPTER_BINDING.schema.json",
+            "tools/harness_foundry_runtime/authority_adapter.py",
+        ],
+        "CORR-29-013": [
+            "EVIDENCE_LIFECYCLE_AND_PROJECTION_CONTRACT.json",
+            "contracts/v2_9_release_closure/EVIDENCE_INDEX_ENTRY.schema.json",
+            "tools/harness_foundry_runtime/evidence_projection.py",
+            "canonical_sources/RELEASE_CLOSURE_CORRECTION_COVERAGE_MATRIX.json",
+        ],
+    }
+    return list(refs.get(correction_id, []))
+
+
+def _factory_epoch18_adversarial_oracle(
+    include_epoch22_release_artifact_hash_cases: bool = False,
+) -> set[str]:
+    """Independent Event Store trust-boundary oracle; imports no Candidate code."""
+
+    binding = {
+        "database_identity_sha256": "9" * 64,
+        "adapter_implementation_sha256": "8" * 64,
+    }
+    events: list[dict[str, Any]] = []
+    previous: str | None = None
+    for revision, (event_type, payload) in enumerate(
+        (
+            ("CONTROL_EVENT_STORE_ACTIVATED", {"database_identity_sha256": "9" * 64}),
+            ("CURRENT_STATE_COMMITTED", {"current_state_sha256": "c" * 64}),
+            ("CLOSURE_RECEIPT_ISSUED", {"receipt_id": "RECEIPT-PRODUCT"}),
+        ),
+        1,
+    ):
+        body = {
+            "revision": revision,
+            "event_type": event_type,
+            "payload": payload,
+            "previous_event_hash": previous,
+        }
+        event_hash = _json_hash(body)
+        events.append({**body, "event_hash": event_hash})
+        previous = event_hash
+
+    def verified_read(
+        candidate_events: list[dict[str, Any]],
+        *,
+        exact_adapter_type: bool = True,
+        implementation_hash: str = "8" * 64,
+        database_identity: str = "9" * 64,
+    ) -> dict[str, Any] | None:
+        if not exact_adapter_type or implementation_hash != binding[
+            "adapter_implementation_sha256"
+        ]:
+            return None
+        previous_hash: str | None = None
+        for revision, event in enumerate(candidate_events, 1):
+            body = {key: value for key, value in event.items() if key != "event_hash"}
+            if (
+                event.get("revision") != revision
+                or event.get("previous_event_hash") != previous_hash
+                or event.get("event_hash") != _json_hash(body)
+            ):
+                return None
+            previous_hash = str(event["event_hash"])
+        activation = candidate_events[0]["payload"]
+        if (
+            activation.get("database_identity_sha256") != database_identity
+            or database_identity != binding["database_identity_sha256"]
+        ):
+            return None
+        return {
+            "state_revision": len(candidate_events),
+            "event_store_tip_sha256": previous_hash,
+            "current_state_sha256": candidate_events[1]["payload"][
+                "current_state_sha256"
+            ],
+            "issued_receipt_id": candidate_events[2]["payload"]["receipt_id"],
+            "consumed_receipt_ids": {
+                receipt_id
+                for event in candidate_events
+                if event["event_type"] == "CLOSURE_RECEIPT_SET_CONSUMED"
+                for receipt_id in event["payload"]["receipt_ids"]
+            },
+        }
+
+    current = verified_read(events)
+    rejected: set[str] = set()
+    forged_context = {
+        "state_revision": 999,
+        "event_store_tip_sha256": "f" * 64,
+        "current_state_sha256": "e" * 64,
+        "issued_receipt_id": "FORGED",
+    }
+    if current != forged_context:
+        rejected.add("FULLY_FORGED_CONTEXT_AND_ALL_RECEIPTS_WITH_RECOMPUTED_HASHES")
+    stale_bundle = {"state_revision": 2, "event_store_tip_sha256": events[1]["event_hash"]}
+    if current != stale_bundle:
+        rejected.add("RECOMPUTED_STALE_BUNDLE_PLUS_MATCHING_STALE_STATE")
+    if verified_read(events, exact_adapter_type=False) is None:
+        rejected.add("FAKE_ADAPTER_OBJECT")
+    if verified_read(events, implementation_hash="0" * 64) is None:
+        rejected.add("WRONG_ADAPTER_IMPLEMENTATION_SHA256")
+    if verified_read(events, database_identity="0" * 64) is None:
+        rejected.add("FORGED_EVENT_STORE_WITH_WRONG_AUTHORIZED_DATABASE_IDENTITY")
+    evaluated_tip = str(current["event_store_tip_sha256"])
+    changed = [*events, {
+        "revision": 4,
+        "event_type": "AUDIT_EVENT",
+        "payload": {},
+        "previous_event_hash": evaluated_tip,
+    }]
+    changed[-1]["event_hash"] = _json_hash(changed[-1])
+    changed_state = verified_read(changed)
+    if changed_state and changed_state["event_store_tip_sha256"] != evaluated_tip:
+        rejected.add("EVENT_STORE_TIP_CHANGED_AFTER_EVALUATION_BEFORE_ATOMIC_COMMIT")
+    consumed = [*events, {
+        "revision": 4,
+        "event_type": "CLOSURE_RECEIPT_SET_CONSUMED",
+        "payload": {"receipt_ids": ["RECEIPT-PRODUCT"]},
+        "previous_event_hash": evaluated_tip,
+    }]
+    consumed[-1]["event_hash"] = _json_hash(consumed[-1])
+    consumed_state = verified_read(consumed)
+    if consumed_state and "RECEIPT-PRODUCT" in consumed_state["consumed_receipt_ids"]:
+        rejected.add("RECEIPT_CONSUMED_AFTER_EVALUATION_BEFORE_ATOMIC_COMMIT")
+    trusted_key = Ed25519PrivateKey.generate()
+    attacker_key = Ed25519PrivateKey.generate()
+    signed_binding = {
+        "authorization_purpose": "EVENT_STORE_ADAPTER_BINDING",
+        "database_identity_sha256": binding["database_identity_sha256"],
+        "adapter_contract_sha256": "c" * 64,
+    }
+    binding_message = json.dumps(
+        signed_binding,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    for case_name, signature in (
+        ("UNSIGNED_MATCHING_EVENT_STORE_BINDING", b""),
+        (
+            "FORGED_EVENT_STORE_AND_MATCHING_BINDING_WITH_ATTACKER_SIGNATURE",
+            attacker_key.sign(binding_message),
+        ),
+    ):
+        try:
+            trusted_key.public_key().verify(signature, binding_message)
+        except InvalidSignature:
+            rejected.add(case_name)
+    if "0" * 64 != signed_binding["adapter_contract_sha256"]:
+        rejected.add("WRONG_ACTUAL_ADAPTER_CONTRACT_HASH")
+    forged_commit = {
+        "authorization_purpose": "RUNTIME_RELEASE_COMMIT",
+        "authorization_id": "FORGED-AUTHORIZATION",
+    }
+    commit_message = json.dumps(
+        forged_commit,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    try:
+        trusted_key.public_key().verify(
+            attacker_key.sign(commit_message),
+            commit_message,
+        )
+    except InvalidSignature:
+        rejected.add("SELF_ASSERTED_RELEASE_COMMIT_AUTHORIZATION")
+    consumed_authorizations = {"SIGNED-ONE-SHOT-AUTHORIZATION"}
+    if "SIGNED-ONE-SHOT-AUTHORIZATION" in consumed_authorizations:
+        rejected.add("REPLAYED_SIGNED_RELEASE_COMMIT_AUTHORIZATION")
+    if include_epoch22_release_artifact_hash_cases:
+        actual_release_artifacts = {
+            "candidate_content_sha256": "2" * 64,
+            "requirement_ir_sha256": "3" * 64,
+            "executor_release_sha256": "4" * 64,
+            "human_gate_receipt_sha256": "5" * 64,
+        }
+        for field, actual in actual_release_artifacts.items():
+            if "f" * 64 != actual:
+                rejected.add(
+                    "VALID_SIGNATURE_WRONG_"
+                    + field.removesuffix("_sha256").upper()
+                    + "_SHA256"
+                )
+    return rejected
+
+
+def _check_v2_9_release_closure_control_plane(
+    root: Path,
+) -> list[dict[str, Any]]:
+    """Statically validate active Epoch 2 without using the standalone oracle."""
+
+    findings: list[dict[str, Any]] = []
+    frozen = _read_json(
+        root / "canonical_sources/FROZEN_REQUIREMENT_IR.json", findings
+    )
+    if not isinstance(frozen, Mapping):
+        return findings
+    target = frozen.get("target")
+    if not (
+        isinstance(target, Mapping)
+        and target.get("architecture_epoch") == 2
+        and target.get("control_plane_epoch") == 2
+    ):
+        return findings
+    remediation = target.get("release_closure_control_plane_remediation")
+    alignment = target.get(
+        "v0_15_epoch2_producer_validator_alignment_correction"
+    )
+    human_review_remediation = target.get("v0_16_human_review_remediation")
+    epoch17_remediation = target.get("v0_17_human_review_remediation")
+    epoch18_remediation = target.get("v0_18_human_review_remediation")
+    epoch20_remediation = target.get("v0_20_human_review_remediation")
+    epoch22_remediation = target.get("v0_22_human_review_remediation")
+    epoch24_remediation = target.get("v0_24_human_review_remediation")
+    epoch25_remediation = target.get("v0_25_generation_failure_remediation")
+    epoch26_remediation = target.get("v0_26_human_review_remediation")
+    epoch28_remediation = target.get("v0_27_human_review_remediation")
+    epoch29_remediation = target.get("v0_28_human_review_remediation")
+    epoch30_remediation = target.get("v0_29_human_review_remediation")
+    epoch31_remediation = target.get("v0_30_human_review_remediation")
+    epoch32_remediation = target.get("v0_31_runtime_binding_failure_remediation")
+    epoch33_remediation = target.get("v0_32_human_review_remediation")
+    epoch34_remediation = target.get("v0_33_human_review_remediation")
+    epoch35_remediation = target.get("v0_34_human_review_remediation")
+    expected_requirement_epoch = (
+        35
+        if epoch35_remediation is not None
+        else 34
+        if epoch34_remediation is not None
+        else 33
+        if epoch33_remediation is not None
+        else 32
+        if epoch32_remediation is not None
+        else 31
+        if epoch31_remediation is not None
+        else 30
+        if epoch30_remediation is not None
+        else 29
+        if epoch29_remediation is not None
+        else 28
+        if epoch28_remediation is not None
+        else 26
+        if epoch26_remediation is not None
+        else 25 if epoch25_remediation is not None else 24
+    )
+    expected_ids = [f"CORR-29-{index:03d}" for index in range(9, 14)]
+    expected_artifacts = [
+        "V2_9_RELEASE_CLOSURE_CONTROL_PLANE_MANIFEST.json",
+        "SEMANTIC_IMPLEMENTATION_AUTHORIZATION_IDENTITY_CONTRACT.json",
+        "GENERIC_RECOVERY_DECISION_PROTOCOL.json",
+        "COMPLEXITY_GOVERNOR.json",
+        "PRODUCT_SAFETY_RELEASE_CLOSURE_GRAPH.json",
+        "EVIDENCE_LIFECYCLE_AND_PROJECTION_CONTRACT.json",
+        "canonical_sources/RELEASE_CLOSURE_CORRECTION_COVERAGE_MATRIX.json",
+        "contracts/v2_9_release_closure/IDENTITY_DERIVATION_INPUT.schema.json",
+        "contracts/v2_9_release_closure/IDENTITY_BUNDLE.schema.json",
+        "contracts/v2_9_release_closure/MACHINE_GRANT_BINDING.schema.json",
+        "contracts/v2_9_release_closure/RECOVERY_DECISION.schema.json",
+        "contracts/v2_9_release_closure/COMPLEXITY_DECISION.schema.json",
+        "contracts/v2_9_release_closure/CLOSURE_RECEIPT.schema.json",
+        "contracts/v2_9_release_closure/COMPATIBILITY_LINKAGE_RECEIPT.schema.json",
+        "contracts/v2_9_release_closure/TRUSTED_RELEASE_CONTEXT.schema.json",
+        "contracts/v2_9_release_closure/FINAL_RELEASE_DECISION.schema.json",
+        "contracts/v2_9_release_closure/EVIDENCE_INDEX_ENTRY.schema.json",
+        "tools/harness_foundry_runtime/identity_derivation.py",
+        "tools/harness_foundry_runtime/recovery_decision.py",
+        "tools/harness_foundry_runtime/complexity_governor.py",
+        "tools/harness_foundry_runtime/closure_lanes.py",
+        "tools/harness_foundry_runtime/evidence_projection.py",
+        "EVENT_STORE_AUTHORITY_ADAPTER_CONTRACT.json",
+        "contracts/v2_9_release_closure/EVENT_STORE_AUTHORITY_ADAPTER_BINDING.schema.json",
+        "tools/harness_foundry_runtime/authority_adapter.py",
+        "contracts/v2_9_release_closure/SOURCE_AUTHORITY_POLICY_LOCK.schema.json",
+        "tools/harness_foundry_runtime/store.py",
+        "tools/harness_foundry_runtime/models.py",
+        "tools/harness_foundry_runtime/constants.py",
+    ]
+    if epoch30_remediation is not None:
+        expected_artifacts.append(VALIDATION_REPORT_RECEIPT_SCHEMA_REF)
+    if (
+        not isinstance(remediation, Mapping)
+        or not isinstance(alignment, Mapping)
+        or not isinstance(human_review_remediation, Mapping)
+        or not isinstance(epoch17_remediation, Mapping)
+        or not isinstance(epoch18_remediation, Mapping)
+        or not isinstance(epoch20_remediation, Mapping)
+        or not isinstance(epoch22_remediation, Mapping)
+        or not isinstance(epoch24_remediation, Mapping)
+        or remediation.get("architecture_epoch") != 2
+        or remediation.get("control_plane_epoch") != 2
+        or alignment.get("status") != "REQUIRED_IN_REPLACEMENT_CANDIDATE"
+        or alignment.get("producer_first") is not True
+        or alignment.get("correction_ids") != expected_ids
+        or not set(human_review_remediation.get("required_epoch2_artifacts") or [])
+        .issubset(set(expected_artifacts))
+        or human_review_remediation.get("active_epochs")
+        != {
+            "architecture_epoch": 2,
+            "control_plane_epoch": 2,
+            "requirement_epoch": 16,
+        }
+        or human_review_remediation.get("status")
+        != "REQUIRED_IN_REPLACEMENT_CANDIDATE"
+        or epoch17_remediation.get("status")
+        != "REQUIRED_IN_REPLACEMENT_CANDIDATE"
+        or epoch17_remediation.get("active_epochs")
+        != {
+            "architecture_epoch": 2,
+            "control_plane_epoch": 2,
+            "requirement_epoch": 17,
+        }
+        or epoch18_remediation.get("status")
+        != "REQUIRED_IN_REPLACEMENT_CANDIDATE"
+        or epoch18_remediation.get("active_epochs")
+        != {
+            "architecture_epoch": 2,
+            "control_plane_epoch": 2,
+            "requirement_epoch": 18,
+        }
+        or epoch20_remediation.get("status")
+        != "REQUIRED_IN_REPLACEMENT_CANDIDATE"
+        or epoch20_remediation.get("active_epochs")
+        != {
+            "architecture_epoch": 2,
+            "control_plane_epoch": 2,
+            "requirement_epoch": 20,
+        }
+        or epoch20_remediation.get("independent_oracle_contract", {}).get(
+            "factory_imports_candidate_production_adapter"
+        ) is not False
+        or epoch22_remediation.get("status")
+        != "REQUIRED_IN_REPLACEMENT_CANDIDATE"
+        or epoch22_remediation.get("active_epochs")
+        != {
+            "architecture_epoch": 2,
+            "control_plane_epoch": 2,
+            "requirement_epoch": 22,
+        }
+        or epoch22_remediation.get("release_commit_actual_hash_contract", {}).get(
+            "compare_inside_begin_immediate"
+        ) is not True
+        or epoch24_remediation.get("status")
+        != "REQUIRED_IN_REPLACEMENT_CANDIDATE"
+        or epoch24_remediation.get("active_epochs")
+        != {
+            "architecture_epoch": 2,
+            "control_plane_epoch": 2,
+            "requirement_epoch": 24,
+        }
+        or epoch24_remediation.get("producer_validator_route_contract", {}).get(
+            "epoch23_requirements_consumed_by_factory_validator"
+        ) is not True
+        or epoch24_remediation.get("receiver_trust_anchor_contract", {}).get(
+            "candidate_local_anchor_establishes_authority"
+        ) is not False
+        or epoch24_remediation.get(
+            "authority_normalization_oracle_contract", {}
+        ).get("factory_uses_event_store_source_registry") is not True
+        or (
+            epoch25_remediation is not None
+            and (
+                not isinstance(epoch25_remediation, Mapping)
+                or epoch25_remediation.get("status")
+                != "REQUIRED_IN_REPLACEMENT_CANDIDATE"
+                or epoch25_remediation.get("active_epochs")
+                != {
+                    "architecture_epoch": 2,
+                    "control_plane_epoch": 2,
+                    "requirement_epoch": 25,
+                }
+                or epoch25_remediation.get(
+                    "producer_validator_route_contract", {}
+                ).get("portable_uri_projection_consumed_by_factory_validator")
+                is not True
+                or epoch25_remediation.get(
+                    "source_authority_semantic_projection_contract", {}
+                ).get("receiver_local_locator_fields_compared") is not False
+                or epoch25_remediation.get(
+                    "portable_uri_projection_contract", {}
+                ).get("independent_mapping_validation_required") is not True
+            )
+        )
+        or (
+            epoch26_remediation is not None
+            and (
+                not isinstance(epoch26_remediation, Mapping)
+                or epoch26_remediation.get("status")
+                != "REQUIRED_IN_REPLACEMENT_CANDIDATE"
+                or epoch26_remediation.get("active_epochs")
+                != {
+                    "architecture_epoch": 2,
+                    "control_plane_epoch": 2,
+                    "requirement_epoch": 26,
+                }
+                or epoch26_remediation.get(
+                    "portable_source_index_contract", {}
+                ).get("factory_independent_semantic_validation_required")
+                is not True
+                or epoch26_remediation.get(
+                    "source_authority_policy_lock_contract", {}
+                ).get("receiver_pinned_ed25519_signature_required") is not True
+                or epoch26_remediation.get(
+                    "closure_identity_contract", {}
+                ).get("successor_package_epoch_cross_check_required") is not True
+            )
+        )
+        or (
+            epoch28_remediation is not None
+            and (
+                not isinstance(epoch28_remediation, Mapping)
+                or epoch28_remediation.get("status")
+                != "REQUIRED_IN_REPLACEMENT_CANDIDATE"
+                or epoch28_remediation.get("active_epochs")
+                != {
+                    "architecture_epoch": 2,
+                    "control_plane_epoch": 2,
+                    "requirement_epoch": 28,
+                }
+                or epoch28_remediation.get(
+                    "receiver_release_history_authority_contract", {}
+                ).get("receiver_pinned_ed25519_signature_required") is not True
+                or epoch28_remediation.get(
+                    "producer_history_authority_contract", {}
+                ).get("source_authority_policy_version")
+                != "V29_SOURCE_AUTHORITY_POLICY_LOCK_V4"
+                or epoch28_remediation.get(
+                    "dual_oracle_history_contract", {}
+                ).get("factory_authority_input")
+                != "FACTORY_EVENT_STORE_REQUIREMENT_IR"
+            )
+        )
+        or (
+            epoch29_remediation is not None
+            and (
+                not isinstance(epoch29_remediation, Mapping)
+                or epoch29_remediation.get("status")
+                != "REQUIRED_IN_REPLACEMENT_CANDIDATE"
+                or epoch29_remediation.get("active_epochs")
+                != {
+                    "architecture_epoch": 2,
+                    "control_plane_epoch": 2,
+                    "requirement_epoch": 29,
+                }
+                or epoch29_remediation.get(
+                    "external_authority_fail_closed_contract", {}
+                ).get("missing_authoritative_sources_overall_status")
+                != "FAIL"
+                or epoch29_remediation.get(
+                    "external_authority_fail_closed_contract", {}
+                ).get("missing_authoritative_requirement_ir_overall_status")
+                != "FAIL"
+                or epoch29_remediation.get(
+                    "validation_report_authority_provenance_contract", {}
+                ).get("authority_input_preserved") is not True
+                or epoch29_remediation.get(
+                    "validation_report_authority_provenance_contract", {}
+                ).get("event_store_revision_tip_and_content_hashes_required")
+                is not True
+            )
+        )
+        or (
+            epoch30_remediation is not None
+            and (
+                not isinstance(epoch30_remediation, Mapping)
+                or epoch30_remediation.get("status")
+                != "REQUIRED_IN_REPLACEMENT_CANDIDATE"
+                or epoch30_remediation.get("active_epochs")
+                != {
+                    "architecture_epoch": 2,
+                    "control_plane_epoch": 2,
+                    "requirement_epoch": 30,
+                }
+                or any(
+                    epoch30_remediation.get(
+                        "validation_report_integrity_contract", {}
+                    ).get(field) is not True
+                    for field in (
+                        "factory_compares_embedded_external_checks_to_recomputed_checks",
+                        "detached_report_receipt_required",
+                        "receiver_signed_policy_binds_report_and_receipt_hashes",
+                        "standalone_verifies_signed_report_binding",
+                    )
+                )
+            )
+        )
+        or (
+            epoch31_remediation is not None
+            and (
+                not isinstance(epoch31_remediation, Mapping)
+                or epoch31_remediation.get("status")
+                != "REQUIRED_IN_REPLACEMENT_CANDIDATE"
+                or epoch31_remediation.get("active_epochs")
+                != {
+                    "architecture_epoch": 2,
+                    "control_plane_epoch": 2,
+                    "requirement_epoch": 31,
+                }
+                or any(
+                    epoch31_remediation.get(
+                        "validation_basis_current_head_contract", {}
+                    ).get(field) is not True
+                    for field in (
+                        "immutable_basis_must_be_verified_ancestor",
+                        "current_head_may_advance_after_candidate_commit",
+                    )
+                )
+                or epoch31_remediation.get(
+                    "validation_basis_current_head_contract", {}
+                ).get("basis_equals_mutable_head_required") is not False
+                or epoch31_remediation.get(
+                    "validation_basis_current_head_contract", {}
+                ).get("forked_or_unrelated_basis_behavior") != "FAIL_CLOSED"
+                or epoch31_remediation.get(
+                    "candidate_generation_commit_contract", {}
+                ).get("authority_source") != "FACTORY_APPEND_ONLY_EVENT_STORE"
+                or epoch31_remediation.get(
+                    "candidate_generation_commit_contract", {}
+                ).get("event_type")
+                != "START_PACKAGE_CANDIDATE_READY_FOR_HUMAN_REVIEW"
+                or any(
+                    epoch31_remediation.get(
+                        "candidate_generation_commit_contract", {}
+                    ).get(field) is not True
+                    for field in (
+                        "unique_matching_commit_required",
+                        "commit_directly_descends_from_validation_basis",
+                        "commit_binds_candidate_content_sha256",
+                        "commit_binds_validation_report_sha256",
+                        "commit_binds_validation_report_receipt_sha256",
+                        "commit_binds_requirement_ir_sha256",
+                        "commit_binds_validation_basis_revision_and_tip",
+                    )
+                )
+                or epoch31_remediation.get(
+                    "candidate_generation_commit_contract", {}
+                ).get("replay_or_duplicate_commit_behavior") != "FAIL_CLOSED"
+            )
+        )
+        or (
+            epoch32_remediation is not None
+            and (
+                not isinstance(epoch32_remediation, Mapping)
+                or epoch32_remediation.get("status")
+                != "REQUIRED_IN_REPLACEMENT_CANDIDATE"
+                or epoch32_remediation.get("active_epochs")
+                != {
+                    "architecture_epoch": 2,
+                    "control_plane_epoch": 2,
+                    "requirement_epoch": 32,
+                }
+                or epoch32_remediation.get("closure_receipt_required") is not True
+                or any(
+                    epoch32_remediation.get(
+                        "candidate_resource_uri_closure_contract", {}
+                    ).get(field) is not True
+                    for field in (
+                        "scan_all_portable_text_resources",
+                        "candidate_root_uri_may_resolve_to_root_directory",
+                        "non_root_candidate_uri_must_resolve_to_physical_file",
+                        "target_must_be_in_portable_manifest_files_or_declared_exclusions",
+                    )
+                )
+                or epoch32_remediation.get(
+                    "candidate_resource_uri_closure_contract", {}
+                ).get("missing_or_uninventoried_behavior")
+                != "FAIL_CLOSED_BEFORE_PUBLICATION_OR_BINDING"
+                or epoch32_remediation.get(
+                    "runtime_dependency_closure_contract", {}
+                ).get("retained_store_contract") is not True
+                or epoch32_remediation.get(
+                    "runtime_dependency_closure_contract", {}
+                ).get("relative_import_dependency_scan_required") is not True
+                or tuple(
+                    epoch32_remediation.get(
+                        "runtime_dependency_closure_contract", {}
+                    ).get("required_runtime_module_refs") or ()
+                )
+                != (
+                    "tools/harness_foundry_runtime/store.py",
+                    "tools/harness_foundry_runtime/models.py",
+                    "tools/harness_foundry_runtime/constants.py",
+                )
+                or epoch32_remediation.get(
+                    "runtime_dependency_closure_contract", {}
+                ).get("missing_dependency_behavior") != "FAIL_CLOSED"
+                or any(
+                    epoch32_remediation.get(
+                        "runtime_binder_atomicity_contract", {}
+                    ).get(field) is not True
+                    for field in (
+                        "validate_complete_uri_and_inventory_before_first_execution_root_write",
+                        "fresh_root_same_parent_staging_required",
+                        "fresh_root_atomic_publish_required",
+                        "failure_cleanup_keeps_fresh_root_absent",
+                    )
+                )
+                or epoch32_remediation.get(
+                    "runtime_binder_atomicity_contract", {}
+                ).get("candidate_write_allowed") is not False
+                or epoch32_remediation.get(
+                    "runtime_binder_atomicity_contract", {}
+                ).get("human_gate_consumption_before_binding_success_allowed")
+                is not False
+                or epoch32_remediation.get(
+                    "independent_oracle_contract", {}
+                ).get("factory_validator_full_uri_closure_required") is not True
+                or epoch32_remediation.get(
+                    "independent_oracle_contract", {}
+                ).get("standalone_full_uri_closure_required") is not True
+                or epoch32_remediation.get(
+                    "independent_oracle_contract", {}
+                ).get("factory_validator_calls_standalone") is not False
+                or epoch32_remediation.get(
+                    "independent_oracle_contract", {}
+                ).get("standalone_calls_factory_validator") is not False
+                or set(epoch32_remediation.get("required_adversarial_cases") or ())
+                != {
+                    "DANGLING_CANDIDATE_RESOURCE_URI",
+                    "CANDIDATE_RESOURCE_URI_OUTSIDE_PORTABLE_INVENTORY",
+                    "MISSING_PACKAGED_RUNTIME_RELATIVE_IMPORT",
+                    "BINDER_FAILURE_LEAVES_FRESH_EXECUTION_ROOT_ABSENT",
+                }
+            )
+        )
+        or (
+            epoch33_remediation is not None
+            and not _epoch33_runtime_binding_review_is_complete(
+                epoch33_remediation
+            )
+        )
+        or (
+            epoch34_remediation is not None
+            and not _epoch34_runtime_binding_review_is_complete(
+                epoch34_remediation
+            )
+        )
+        or (
+            epoch35_remediation is not None
+            and not _epoch35_runtime_binding_path_atomicity_is_complete(
+                epoch35_remediation
+            )
+        )
+        or epoch18_remediation.get("independent_oracle_contract", {}).get(
+            "factory_oracle_imports_candidate_production_module"
+        ) is not False
+        or epoch18_remediation.get("independent_oracle_contract", {}).get(
+            "factory_oracle_uses_independent_event_chain_and_schema_logic"
+        ) is not True
+        or epoch17_remediation.get("independent_oracles")
+        != {
+            "factory_oracle_imports_candidate_production_module": False,
+            "factory_validator_calls_standalone": False,
+            "factory_validator_required": True,
+            "shared_source_equality_is_semantic_proof": False,
+            "standalone_calls_factory_validator": False,
+            "standalone_oracle_imports_factory_reference_oracle": False,
+            "standalone_self_check_required": True,
+        }
+        or human_review_remediation.get("independent_oracles")
+        != {
+            "factory_validator_calls_standalone": False,
+            "factory_validator_required": True,
+            "standalone_calls_factory_validator": False,
+            "standalone_self_check_required": True,
+        }
+        or alignment.get("active_epoch_dispatch", {}).get("epoch_2_mode")
+        != "EPOCH2_RELEASE_CLOSURE_CONTROL_PLANE"
+        or alignment.get("factory_validator", {}).get(
+            "independent_implementation_required"
+        )
+        is not True
+        or alignment.get("factory_validator", {}).get(
+            "calls_standalone_self_check_as_verdict_source"
+        )
+        is not False
+    ):
+        findings.append(
+            _finding(
+                "V2_9_EPOCH2_DESCRIPTOR_INVALID",
+                "active Epoch 2 descriptor or independent-validator contract drifted",
+            )
+        )
+        return findings
+
+    base_cases = set(epoch20_remediation["required_adversarial_cases"])
+    base_cases.update(epoch22_remediation["required_adversarial_cases"])
+    if _factory_epoch18_adversarial_oracle(True) != base_cases:
+        findings.append(
+            _finding(
+                "V2_9_EPOCH18_INDEPENDENT_ORACLE_INVALID",
+                "Factory independent adversarial verdict set drifted",
+            )
+        )
+        return findings
+    expected_cases = base_cases | set(epoch24_remediation["required_adversarial_cases"])
+    source_authority_expected_cases = sorted({
+        *((epoch26_remediation.get("required_adversarial_cases") or [])
+        if isinstance(epoch26_remediation, Mapping) else ()),
+        *((epoch28_remediation.get("required_adversarial_cases") or [])
+        if isinstance(epoch28_remediation, Mapping) else ()),
+        *((epoch29_remediation.get("required_adversarial_cases") or [])
+        if isinstance(epoch29_remediation, Mapping) else ()),
+        *((epoch30_remediation.get("required_adversarial_cases") or [])
+        if isinstance(epoch30_remediation, Mapping) else ()),
+        *((epoch31_remediation.get("required_adversarial_cases") or [])
+        if isinstance(epoch31_remediation, Mapping) else ()),
+    })
+    runtime_binder_expected_cases = sorted({
+        *((
+            epoch33_remediation.get("adversarial_domain_contract", {}).get(
+                "runtime_binder_required_adversarial_cases"
+            )
+            if isinstance(epoch33_remediation, Mapping)
+            else None
+        ) or epoch32_remediation.get("required_adversarial_cases") or []),
+        *((epoch35_remediation.get("required_adversarial_cases") or [])
+        if isinstance(epoch35_remediation, Mapping) else ()),
+    }) if isinstance(epoch32_remediation, Mapping) else []
+    factory_required_regression_tests = list(
+        (
+            epoch35_remediation.get("required_regression_tests")
+            if isinstance(epoch35_remediation, Mapping)
+            else epoch34_remediation.get("required_regression_tests")
+            if isinstance(epoch34_remediation, Mapping)
+            else []
+        )
+        or []
+    )
+
+    for relative in expected_artifacts:
+        if not (root / relative).is_file():
+            findings.append(
+                _finding("V2_9_EPOCH2_ARTIFACT_MISSING", relative)
+            )
+    if findings:
+        return findings
+
+    manifest_path = root / expected_artifacts[0]
+    manifest = _read_json(manifest_path, findings)
+    identity_path = root / expected_artifacts[1]
+    identity = _read_json(identity_path, findings)
+    recovery_path = root / expected_artifacts[2]
+    recovery = _read_json(recovery_path, findings)
+    complexity_path = root / expected_artifacts[3]
+    complexity = _read_json(complexity_path, findings)
+    closure_path = root / expected_artifacts[4]
+    closure = _read_json(closure_path, findings)
+    evidence_path = root / expected_artifacts[5]
+    evidence = _read_json(evidence_path, findings)
+    matrix_path = root / expected_artifacts[6]
+    matrix = _read_json(matrix_path, findings)
+    adapter_path = root / expected_artifacts[22]
+    adapter_contract = _read_json(adapter_path, findings)
+    trust_root_path = root / "AUTHORITY_TRUST_ROOT.json"
+    trust_root = _read_json(trust_root_path, findings)
+    documents = (
+        manifest, identity, recovery, complexity, closure, evidence, matrix,
+        adapter_contract, trust_root,
+    )
+    if not all(isinstance(value, Mapping) for value in documents):
+        return findings
+
+    contract_paths = {
+        *[expected_artifacts[index] for index in range(1, 6)],
+        expected_artifacts[22],
+        "AUTHORITY_TRUST_ROOT.json",
+    }
+    module_paths = {
+        "tools/harness_foundry_runtime/__init__.py",
+        *expected_artifacts[17:22],
+        expected_artifacts[24],
+        "tools/harness_foundry_runtime/store.py",
+        "tools/harness_foundry_runtime/models.py",
+        "tools/harness_foundry_runtime/constants.py",
+    }
+    schema_paths = {
+        *expected_artifacts[7:17],
+        expected_artifacts[23],
+        expected_artifacts[25],
+    }
+    if epoch30_remediation is not None:
+        schema_paths.add(VALIDATION_REPORT_RECEIPT_SCHEMA_REF)
+    module_hashes = manifest.get("runtime_module_sha256")
+    schema_hashes = manifest.get("schema_sha256")
+    contract_hashes = manifest.get("contract_sha256")
+    if (
+        manifest.get("manifest_sha256")
+        != _hash_without_field(manifest, "manifest_sha256")
+        or manifest.get("manifest_id")
+        != "V29_RELEASE_CLOSURE_CONTROL_PLANE_EPOCH2"
+        or manifest.get("architecture_epoch") != 2
+        or manifest.get("control_plane_epoch") != 2
+        or manifest.get("requirement_epoch") != expected_requirement_epoch
+        or manifest.get("active_generation_mode")
+        != "EPOCH2_RELEASE_CLOSURE_CONTROL_PLANE"
+        or manifest.get("status")
+        != "FROZEN_IMPLEMENTATION_READY_NOT_AUTHORIZED"
+        or manifest.get("correction_ids") != expected_ids
+        or manifest.get("correction_coverage_ref") != expected_artifacts[6]
+        or manifest.get("correction_coverage_sha256") != _file_hash(matrix_path)
+        or manifest.get("legacy_epoch1_authority") is not False
+        or manifest.get("legacy_v2_8_topology_role")
+        != "COMPATIBILITY_ADAPTER_ONLY"
+        or manifest.get("persistent_fact_authority")
+        != "SINGLE_APPEND_ONLY_EVENT_STORE"
+        or manifest.get("human_authorization_status") != "NOT_GRANTED"
+        or manifest.get("machine_grant_count") != 0
+        or manifest.get("driver_started") is not False
+        or manifest.get("active_workpack") is not None
+        or manifest.get("execution_started") is not False
+        or set(manifest.get("required_adversarial_cases") or []) != expected_cases
+        or manifest.get("source_authority_required_adversarial_cases")
+        != source_authority_expected_cases
+        or manifest.get("runtime_binder_required_adversarial_cases")
+        != runtime_binder_expected_cases
+        or manifest.get("factory_required_regression_tests")
+        != factory_required_regression_tests
+        or manifest.get("factory_oracle_imports_candidate_production_module") is not False
+        or manifest.get("standalone_oracle_imports_factory_reference_oracle") is not False
+        or not isinstance(module_hashes, Mapping)
+        or set(module_hashes) != module_paths
+        or not isinstance(schema_hashes, Mapping)
+        or set(schema_hashes) != schema_paths
+        or not isinstance(contract_hashes, Mapping)
+        or set(contract_hashes) != contract_paths
+    ):
+        findings.append(
+            _finding(
+                "V2_9_EPOCH2_MANIFEST_INVALID",
+                "Epoch 2 identity, exact inventory, or non-authority lifecycle drifted",
+            )
+        )
+    for bindings, expected_paths, code in (
+        (module_hashes, module_paths, "V2_9_EPOCH2_MODULE_HASH_INVALID"),
+        (schema_hashes, schema_paths, "V2_9_EPOCH2_SCHEMA_HASH_INVALID"),
+        (contract_hashes, contract_paths, "V2_9_EPOCH2_CONTRACT_HASH_INVALID"),
+    ):
+        if isinstance(bindings, Mapping):
+            for relative in expected_paths:
+                path = root / relative
+                if not path.is_file() or bindings.get(relative) != _file_hash(path):
+                    findings.append(_finding(code, relative))
+
+    declared_contracts = (
+        (identity, remediation.get("identity_contract"), "contract_sha256"),
+        (recovery, remediation.get("generic_recovery_protocol"), "contract_sha256"),
+        (complexity, remediation.get("complexity_governor"), "contract_sha256"),
+        (closure, remediation.get("closure_lanes"), "graph_sha256"),
+        (evidence, remediation.get("evidence_and_projection"), "contract_sha256"),
+    )
+    for document, declaration, hash_field in declared_contracts:
+        if (
+            not isinstance(declaration, Mapping)
+            or document.get(hash_field) != _hash_without_field(document, hash_field)
+            or any(document.get(key) != value for key, value in declaration.items())
+            or document.get("status") != "FROZEN_NOT_EXECUTED"
+            or document.get("creates_authority") is not False
+            or document.get("execution_started") is not False
+        ):
+            findings.append(
+                _finding(
+                    "V2_9_EPOCH2_CONTRACT_SEMANTICS_INVALID",
+                    str(
+                        document.get("contract_id")
+                        or document.get("protocol_id")
+                        or document.get("governor_id")
+                        or document.get("graph_id")
+                    ),
+                )
+            )
+
+    adapter_declaration = epoch18_remediation.get(
+        "event_store_authority_adapter_contract"
+    )
+    adapter_entrypoint_descriptor = {
+        "module": "tools.harness_foundry_runtime.authority_adapter",
+        "class": "SQLiteEventStoreAuthorityAdapter",
+        "required_methods": [
+            "read_current_state",
+            "read_release_context",
+            "assert_receipt_issued",
+            "validate_precommit",
+            "atomic_commit_release_ready",
+        ],
+    }
+    if (
+        not isinstance(adapter_declaration, Mapping)
+        or adapter_contract.get("contract_sha256")
+        != _hash_without_field(adapter_contract, "contract_sha256")
+        or any(
+            adapter_contract.get(key) != value
+            for key, value in adapter_declaration.items()
+        )
+        or any(
+            adapter_contract.get(key) != value
+            for declaration_key in (
+                "trust_root_contract",
+                "release_commit_authorization_contract",
+                "independent_oracle_contract",
+            )
+            for key, value in epoch20_remediation[declaration_key].items()
+        )
+        or any(
+            adapter_contract.get(key) != value
+            for declaration_key in (
+                "artifact_bytes_resolver_contract",
+                "receiver_trust_anchor_contract",
+            )
+            for key, value in epoch24_remediation[declaration_key].items()
+        )
+        or any(
+            adapter_contract.get(key) != value
+            for key, value in epoch22_remediation[
+                "release_commit_actual_hash_contract"
+            ].items()
+        )
+        or adapter_contract.get("status")
+        != "FROZEN_NOT_ACTIVATED_NOT_AUTHORIZED"
+        or adapter_contract.get("implementation_ref") != expected_artifacts[24]
+        or adapter_contract.get("implementation_sha256")
+        != _file_hash(root / expected_artifacts[24])
+        or adapter_contract.get("binding_schema_ref") != expected_artifacts[23]
+        or adapter_contract.get("binding_schema_sha256")
+        != _file_hash(root / expected_artifacts[23])
+        or adapter_contract.get("trust_root_ref") != "AUTHORITY_TRUST_ROOT.json"
+        or adapter_contract.get("trust_root_file_sha256")
+        != _file_hash(trust_root_path)
+        or adapter_contract.get("trust_root_sha256")
+        != trust_root.get("trust_root_sha256")
+        or adapter_contract.get("candidate_local_trust_root_role")
+        != "UNTRUSTED_DISTRIBUTION_METADATA_ONLY"
+        or adapter_contract.get("runtime_trust_anchor_source")
+        != "RECEIVER_CONTROL_PLANE_ARGUMENT_ONLY"
+        or adapter_contract.get("artifact_resolver_class")
+        != "ReleaseArtifactBytesResolver"
+        or adapter_contract.get("artifact_resolver_runtime_paths_persisted_in_candidate")
+        is not False
+        or adapter_contract.get("signature_algorithm") != "ED25519"
+        or adapter_contract.get("authority_binding_signature_required") is not True
+        or adapter_contract.get("release_commit_signature_required") is not True
+        or adapter_contract.get("release_commit_authorization_one_shot") is not True
+        or adapter_contract.get("release_commit_authorization_consumed_atomically") is not True
+        or adapter_contract.get("release_artifact_hash_authority_event")
+        != "CURRENT_STATE_COMMITTED"
+        or adapter_contract.get("release_artifact_hash_fields")
+        != [
+            "candidate_content_sha256",
+            "requirement_ir_sha256",
+            "executor_release_sha256",
+            "human_gate_receipt_sha256",
+        ]
+        or adapter_contract.get(
+            "release_artifact_hashes_read_and_compared_inside_begin_immediate"
+        ) is not True
+        or adapter_contract.get(
+            "valid_signature_with_wrong_release_artifact_hash_behavior"
+        ) != "FAIL_CLOSED"
+        or adapter_contract.get("unsigned_or_attacker_signed_authority_behavior")
+        != "FAIL_CLOSED"
+        or adapter_contract.get("entrypoint_descriptor")
+        != adapter_entrypoint_descriptor
+        or adapter_contract.get("entrypoint_sha256")
+        != _json_hash(adapter_entrypoint_descriptor)
+        or adapter_contract.get("database_path_in_shareable_contract") is not False
+        or adapter_contract.get("event_store_activated") is not False
+        or adapter_contract.get("authority_granted") is not False
+        or adapter_contract.get("execution_started") is not False
+    ):
+        findings.append(
+            _finding(
+                "V2_9_EVENT_STORE_AUTHORITY_ADAPTER_CONTRACT_INVALID",
+                "Hash-bound adapter contract or non-authority lifecycle drifted",
+            )
+        )
+    if (
+        not isinstance(trust_root, Mapping)
+        or trust_root.get("trust_root_sha256")
+        != _hash_without_field(trust_root, "trust_root_sha256")
+        or trust_root.get("algorithm") != "ED25519"
+        or trust_root.get("private_key_packaged") is not False
+        or trust_root.get("creates_authority") is not False
+    ):
+        findings.append(
+            _finding(
+                "V2_9_AUTHORITY_TRUST_ROOT_INVALID",
+                "pinned verification root is missing, mutable, or packages private authority",
+            )
+        )
+
+    implementation_bindings = (
+        (
+            identity,
+            expected_artifacts[17],
+            expected_artifacts[8],
+            "identity_bundle_schema_ref",
+            "identity_bundle_schema_sha256",
+        ),
+        (
+            recovery,
+            expected_artifacts[18],
+            expected_artifacts[10],
+            "decision_schema_ref",
+            "decision_schema_sha256",
+        ),
+        (
+            complexity,
+            expected_artifacts[19],
+            expected_artifacts[11],
+            "decision_schema_ref",
+            "decision_schema_sha256",
+        ),
+        (
+            closure,
+            expected_artifacts[20],
+            expected_artifacts[12],
+            "closure_receipt_schema_ref",
+            "closure_receipt_schema_sha256",
+        ),
+        (
+            evidence,
+            expected_artifacts[21],
+            expected_artifacts[16],
+            "evidence_index_entry_schema_ref",
+            "evidence_index_entry_schema_sha256",
+        ),
+    )
+    for document, implementation_ref, schema_ref, schema_field, hash_field in implementation_bindings:
+        if (
+            document.get("implementation_ref") != implementation_ref
+            or document.get("implementation_sha256")
+            != _file_hash(root / implementation_ref)
+            or document.get(schema_field) != schema_ref
+            or document.get(hash_field) != _file_hash(root / schema_ref)
+        ):
+            findings.append(
+                _finding(
+                    "V2_9_EPOCH2_IMPLEMENTATION_BINDING_INVALID",
+                    implementation_ref,
+                )
+            )
+
+    if (
+        identity.get("identity_derivation_input_schema_ref") != expected_artifacts[7]
+        or identity.get("identity_derivation_input_schema_sha256")
+        != _file_hash(root / expected_artifacts[7])
+        or identity.get("machine_grant_binding_schema_ref") != expected_artifacts[9]
+        or identity.get("machine_grant_binding_schema_sha256")
+        != _file_hash(root / expected_artifacts[9])
+        or identity.get("authority_adapter_contract_ref")
+        != expected_artifacts[22]
+        or identity.get("authority_adapter_contract_sha256")
+        != adapter_contract.get("contract_sha256")
+        or identity.get("authority_adapter_implementation_ref")
+        != expected_artifacts[24]
+        or identity.get("authority_adapter_implementation_sha256")
+        != _file_hash(root / expected_artifacts[24])
+        or identity.get("change_classes")
+        != [
+            "NO_REBIND_REQUIRED",
+            "MACHINE_GRANT_REBIND_REQUIRED",
+            "HUMAN_REAUTHORIZATION_REQUIRED",
+        ]
+        or identity.get("machine_grant_binding_creates_authority") is not False
+    ):
+        findings.append(
+            _finding(
+                "V2_9_EPOCH2_IDENTITY_IMPLEMENTATION_INVALID",
+                "CORR-29-009 implementation or Machine Grant schema drifted",
+            )
+        )
+    if (
+        closure.get("compatibility_linkage_receipt_schema_ref")
+        != expected_artifacts[13]
+        or closure.get("compatibility_linkage_receipt_schema_sha256")
+        != _file_hash(root / expected_artifacts[13])
+        or closure.get("trusted_release_context_schema_ref")
+        != expected_artifacts[14]
+        or closure.get("trusted_release_context_schema_sha256")
+        != _file_hash(root / expected_artifacts[14])
+        or closure.get("final_release_decision_schema_ref")
+        != expected_artifacts[15]
+        or closure.get("final_release_decision_schema_sha256")
+        != _file_hash(root / expected_artifacts[15])
+        or closure.get("evaluator_output")
+        != "RELEASE_ELIGIBILITY_PROPOSAL_NOT_AUTHORITY"
+        or closure.get("candidate_may_commit_release_ready") is not False
+        or closure.get("authority_adapter_contract_ref")
+        != expected_artifacts[22]
+        or closure.get("authority_adapter_contract_sha256")
+        != adapter_contract.get("contract_sha256")
+        or closure.get("authority_adapter_implementation_ref")
+        != expected_artifacts[24]
+        or closure.get("authority_adapter_implementation_sha256")
+        != _file_hash(root / expected_artifacts[24])
+        or closure.get("release_ready_binding_fields")
+        != [
+            "authority_scope",
+            "instance_id",
+            "requirement_epoch",
+            "semantic_contract_identity_sha256",
+            "authorization_risk_identity_sha256",
+            "candidate_content_sha256",
+            "requirement_ir_sha256",
+            "executor_release_sha256",
+            "human_gate_receipt_sha256",
+        ]
+    ):
+        findings.append(
+            _finding(
+                "V2_9_EPOCH2_CLOSURE_BINDING_INVALID",
+                "Closure Lane linkage schema or common identity tuple drifted",
+            )
+        )
+    if (
+        complexity.get("aggregate_output_id") != "COMPLEXITY_ASSESSMENT"
+        or complexity.get("required_machine_outputs")
+        != [
+            "COMPLEXITY_BASELINE",
+            "COMPLEXITY_DELTA",
+            "RETIREMENT_MANIFEST",
+            "HUMAN_COST_RESULT",
+            "CIRCUIT_BREAKER_DECISION_RECEIPT",
+        ]
+        or complexity.get("aggregate_schema_required") is not True
+        or complexity.get("canonical_assessment_hash_required") is not True
+    ):
+        findings.append(
+            _finding(
+                "V2_9_EPOCH2_COMPLEXITY_OUTPUT_CONTRACT_INVALID",
+                "CORR-29-011 aggregate output declaration drifted",
+            )
+        )
+
+    source_contracts = {
+        expected_artifacts[17]: (
+            {
+                "derive_identity_bundle",
+                "classify_identity_change",
+                "build_machine_grant_binding",
+            },
+            {"IdentityDerivationError"},
+            {
+                "SEMANTIC_CONTRACT_IDENTITY",
+                "IMPLEMENTATION_RELEASE_IDENTITY",
+                "AUTHORIZATION_RISK_IDENTITY",
+                "MACHINE_GRANT_REBIND_REQUIRED",
+                "HUMAN_REAUTHORIZATION_REQUIRED",
+            },
+        ),
+        expected_artifacts[18]: (
+            {"decide_recovery"},
+            {"RecoveryDecisionError"},
+            {
+                "RESULT_VALIDATION_ONLY",
+                "FINALIZATION_ONLY",
+                "RETRY_EXECUTOR",
+                "HUMAN_RISK_REVIEW",
+            },
+        ),
+        expected_artifacts[19]: (
+            {"evaluate_complexity"},
+            {"ComplexityGovernorError"},
+            {
+                "ACTIVE_BESPOKE_PATH_DELTA_NOT_NEGATIVE",
+                "complexity_baseline",
+                "complexity_delta",
+                "retirement_manifest",
+                "human_cost_result",
+                "circuit_breaker_decision_receipt",
+                "ARCHITECTURE_REVIEW_REQUIRED",
+            },
+        ),
+        expected_artifacts[20]: (
+            {
+                "evaluate_final_release",
+                "seal_receipt",
+                "derive_anti_replay_token",
+            },
+            {"ClosureLaneError"},
+            {
+                "PRODUCT",
+                "SAFETY",
+                "RELEASE",
+                "RELEASE_ELIGIBILITY_PROPOSAL_NOT_AUTHORITY",
+                "requirement_epoch",
+                "semantic_contract_identity_sha256",
+                "authorization_risk_identity_sha256",
+                "exact Hash-bound authority adapter type is required",
+            },
+        ),
+        expected_artifacts[21]: (
+            {"rebuild_projection"},
+            {"ProjectionConflictError"},
+            {
+                "ACTIVE_BASELINE",
+                "HISTORICAL_REGRESSION",
+                "SUPERSEDED",
+                "ARCHIVED",
+                "PROJECTION_CONFLICT",
+            },
+        ),
+        expected_artifacts[24]: (
+            {
+                "build_adapter_binding",
+                "adapter_entrypoint_sha256",
+                "read_current_state",
+                "read_release_context",
+                "assert_receipt_issued",
+                "validate_precommit",
+                "atomic_commit_release_ready",
+            },
+            {
+                "AuthorityAdapterError",
+                "ReleaseArtifactBytesResolver",
+                "SQLiteEventStoreAuthorityAdapter",
+            },
+            {
+                "V29_SQLITE_EVENT_STORE_AUTHORITY_ADAPTER_V1",
+                "BEGIN IMMEDIATE",
+                'mode = "rw" if writable else "ro"',
+                "control_events_reject_update",
+                "CLOSURE_RECEIPT_SET_CONSUMED",
+                "RELEASE_READY_COMMITTED",
+                "receiver_trust_anchor",
+                "actual release artifact bytes do not match authority",
+            },
+        ),
+    }
+    for relative, (expected_functions, expected_classes, required_tokens) in source_contracts.items():
+        try:
+            source = (root / relative).read_text(encoding="utf-8")
+            tree = ast.parse(source)
+        except (OSError, UnicodeError, SyntaxError) as exc:
+            findings.append(_finding("V2_9_EPOCH2_SOURCE_INVALID", f"{relative}: {exc}"))
+            continue
+        functions = {
+            node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+        }
+        classes = {
+            node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)
+        }
+        top_level_functions = {
+            node.name: node
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        forbidden_api = False
+        if relative == expected_artifacts[20]:
+            evaluate_node = top_level_functions.get("evaluate_final_release")
+            evaluate_arguments = {
+                argument.arg
+                for argument in [
+                    *(evaluate_node.args.args if evaluate_node else []),
+                    *(evaluate_node.args.kwonlyargs if evaluate_node else []),
+                ]
+            }
+            forbidden_api = (
+                "seal_release_context" in top_level_functions
+                or evaluate_arguments
+                != {
+                    "receipts",
+                    "compatibility_linkage_receipt",
+                    "authority_adapter",
+                }
+            )
+        elif relative == expected_artifacts[17]:
+            derive_node = top_level_functions.get("derive_identity_bundle")
+            binding_node = top_level_functions.get("build_machine_grant_binding")
+            derive_arguments = {
+                argument.arg
+                for argument in [
+                    *(derive_node.args.args if derive_node else []),
+                    *(derive_node.args.kwonlyargs if derive_node else []),
+                ]
+            }
+            binding_arguments = {
+                argument.arg
+                for argument in [
+                    *(binding_node.args.args if binding_node else []),
+                    *(binding_node.args.kwonlyargs if binding_node else []),
+                ]
+            }
+            forbidden_api = (
+                "current_state" in derive_arguments
+                or "authoritative_current_state" in binding_arguments
+                or "authority_adapter" not in derive_arguments
+                or "authority_adapter" not in binding_arguments
+            )
+        elif relative == expected_artifacts[24]:
+            build_node = top_level_functions.get("build_adapter_binding")
+            build_arguments = {
+                argument.arg
+                for argument in [
+                    *(build_node.args.args if build_node else []),
+                    *(build_node.args.kwonlyargs if build_node else []),
+                ]
+            }
+            adapter_class = next(
+                (
+                    node
+                    for node in tree.body
+                    if isinstance(node, ast.ClassDef)
+                    and node.name == "SQLiteEventStoreAuthorityAdapter"
+                ),
+                None,
+            )
+            adapter_methods = {
+                node.name: node
+                for node in (adapter_class.body if adapter_class else [])
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            }
+            init_node = adapter_methods.get("__init__")
+            init_arguments = {
+                argument.arg
+                for argument in [
+                    *(init_node.args.args if init_node else []),
+                    *(init_node.args.kwonlyargs if init_node else []),
+                ]
+            }
+            forbidden_api = (
+                "_authority_trust_root" in functions
+                or "receiver_trust_anchor" not in build_arguments
+                or not {"receiver_trust_anchor", "artifact_resolver"}.issubset(
+                    init_arguments
+                )
+                or "resolve_hashes" not in functions
+            )
+        if (
+            not expected_functions.issubset(functions)
+            or not expected_classes.issubset(classes)
+            or any(token not in source for token in required_tokens)
+            or forbidden_api
+            or source.rstrip()
+            != Path(__file__).with_name(Path(relative).name).read_text(
+                encoding="utf-8"
+            ).rstrip()
+        ):
+            findings.append(
+                _finding(
+                    "V2_9_EPOCH2_SOURCE_INVALID",
+                    f"{relative}: production API or semantic constants drifted",
+                )
+            )
+
+    schema_expectations = {
+        expected_artifacts[7]: {
+            "semantic_contract",
+            "implementation_release",
+            "authorization_risk",
+            "authority_adapter_binding_sha256",
+        },
+        expected_artifacts[8]: {
+            "schema_version",
+            "identity_derivation_id",
+            "input_sha256",
+            "semantic_contract_identity_sha256",
+            "implementation_release_identity_sha256",
+            "authorization_risk_identity_sha256",
+            "authority_scope",
+            "instance_id",
+            "state_revision",
+            "current_state_sha256",
+            "event_store_tip_sha256",
+            "creates_authority",
+            "identity_bundle_sha256",
+        },
+        expected_artifacts[9]: {
+            "schema_version",
+            "binding_id",
+            "binding_status",
+            "authorization_risk_identity_sha256",
+            "semantic_contract_identity_sha256",
+            "implementation_release_identity_sha256",
+            "exact_executor_release_sha256",
+            "exact_artifact_release_sha256",
+            "authority_scope",
+            "instance_id",
+            "state_revision",
+            "current_state_sha256",
+            "event_store_tip_sha256",
+            "authoritative_adapter_checked",
+            "authority_adapter_binding_sha256",
+            "human_authorization_granted",
+            "machine_grant_issued",
+            "creates_authority",
+            "binding_sha256",
+        },
+        expected_artifacts[11]: {
+            "schema_version",
+            "governor_id",
+            "input_sha256",
+            "decision",
+            "reason_code",
+            "violations",
+            "outputs",
+            "creates_authority",
+            "assessment_sha256",
+        },
+        expected_artifacts[12]: {
+            "schema_version",
+            "lane_id",
+            "status",
+            "authority_scope",
+            "instance_id",
+            "requirement_epoch",
+            "semantic_contract_identity_sha256",
+            "authorization_risk_identity_sha256",
+            "receipt_id",
+            "issuer_control_domain_id",
+            "issuance_event_id",
+            "issuance_event_revision",
+            "issuance_event_sha256",
+            "release_context_sha256",
+            "anti_replay_token",
+            "creates_authority",
+            "receipt_sha256",
+        },
+        expected_artifacts[13]: {
+            "schema_version",
+            "status",
+            "authority_scope",
+            "instance_id",
+            "requirement_epoch",
+            "semantic_contract_identity_sha256",
+            "authorization_risk_identity_sha256",
+            "receipt_id",
+            "issuer_control_domain_id",
+            "issuance_event_id",
+            "issuance_event_revision",
+            "issuance_event_sha256",
+            "release_context_sha256",
+            "anti_replay_token",
+            "creates_authority",
+            "receipt_sha256",
+        },
+        expected_artifacts[14]: {
+            "schema_version",
+            "authority_scope",
+            "instance_id",
+            "requirement_epoch",
+            "semantic_contract_identity_sha256",
+            "authorization_risk_identity_sha256",
+            "state_revision",
+            "current_state_sha256",
+            "event_store_tip_sha256",
+            "candidate_content_sha256",
+            "requirement_ir_sha256",
+            "executor_release_sha256",
+            "human_gate_receipt_sha256",
+            "authorized_issuers",
+            "consumed_receipt_ids",
+            "release_context_sha256",
+        },
+        expected_artifacts[15]: {
+            "schema_version",
+            "decision_id",
+            "decision",
+            "release_context_sha256",
+            "expected_event_store_tip_sha256",
+            "lane_receipt_ids",
+            "lane_receipt_sha256",
+            "compatibility_linkage_receipt_id",
+            "compatibility_linkage_receipt_sha256",
+            "atomic_event_store_commit_required",
+            "receipt_set_consumed",
+            "release_ready_committed",
+            "creates_authority",
+            "decision_sha256",
+        },
+        expected_artifacts[23]: {
+            "schema_version",
+            "adapter_id",
+            "program_id",
+            "authority_scope",
+            "instance_id",
+            "requirement_epoch",
+            "database_identity_sha256",
+            "logical_database_ref",
+            "adapter_implementation_sha256",
+            "adapter_entrypoint_sha256",
+            "adapter_contract_sha256",
+            "authority_binding_receipt",
+            "binding_sha256",
+        },
+        expected_artifacts[25]: {
+            "schema_version",
+            "lock_id",
+            "authority_source",
+            "trust_anchor_id",
+            "issuer_binding",
+            "authority_normalization",
+            "canonical_authority_levels",
+            "semantic_projection_fields",
+            "sources",
+            "release_history_tip_sha256",
+            "release_history",
+            "validation_report_binding",
+            "policy_payload_sha256",
+            "signature_algorithm",
+            "signature_base64",
+            "lock_sha256",
+        },
+    }
+    if epoch30_remediation is None:
+        schema_expectations[expected_artifacts[25]].remove(
+            "validation_report_binding"
+        )
+    else:
+        schema_expectations[VALIDATION_REPORT_RECEIPT_SCHEMA_REF] = {
+            "schema_version", "receipt_id", "report_ref", "report_sha256",
+            "report_id", "program_id", "package_id", "candidate_version",
+            "requirement_epoch", "requirement_ir_sha256",
+            "authority_provenance", "external_authority_checks_sha256",
+            "binding_authority", "receipt_sha256",
+        }
+    for relative, exact_fields in schema_expectations.items():
+        schema = _read_json(root / relative, findings)
+        properties = schema.get("properties") if isinstance(schema, Mapping) else None
+        required = schema.get("required") if isinstance(schema, Mapping) else None
+        invalid = (
+            not isinstance(schema, Mapping)
+            or schema.get("additionalProperties") is not False
+            or not isinstance(properties, Mapping)
+            or set(properties) != exact_fields
+            or not isinstance(required, list)
+            or set(required) != exact_fields
+            or len(required) != len(exact_fields)
+        )
+        if relative in {expected_artifacts[8], expected_artifacts[9]}:
+            invalid = invalid or any(
+                properties.get(field) != {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$",
+                }
+                for field in exact_fields
+                if field.endswith("sha256")
+            )
+        if relative in {expected_artifacts[12], expected_artifacts[13]}:
+            invalid = invalid or (
+                properties.get("requirement_epoch")
+                != {"type": "integer", "minimum": 0}
+                or properties.get("semantic_contract_identity_sha256")
+                != {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                or properties.get("authorization_risk_identity_sha256")
+                != {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                or properties.get("receipt_sha256")
+                != {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+            )
+        if relative == expected_artifacts[11]:
+            outputs = properties.get("outputs") if isinstance(properties, Mapping) else None
+            output_properties = outputs.get("properties") if isinstance(outputs, Mapping) else None
+            output_required = outputs.get("required") if isinstance(outputs, Mapping) else None
+            exact_outputs = {
+                "complexity_baseline",
+                "complexity_delta",
+                "retirement_manifest",
+                "human_cost_result",
+                "circuit_breaker_decision_receipt",
+            }
+            invalid = invalid or (
+                not isinstance(outputs, Mapping)
+                or outputs.get("additionalProperties") is not False
+                or not isinstance(output_properties, Mapping)
+                or set(output_properties) != exact_outputs
+                or not isinstance(output_required, list)
+                or set(output_required) != exact_outputs
+                or len(output_required) != len(exact_outputs)
+                or properties.get("assessment_sha256")
+                != {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+            )
+        if invalid:
+            findings.append(
+                _finding(
+                    "V2_9_EPOCH2_OUTPUT_SCHEMA_INVALID",
+                    f"{relative}: exact runtime output contract drifted",
+                )
+            )
+
+    declarations = remediation.get("correction_requirements")
+    declaration_by_id = {
+        str(item.get("correction_id")): item
+        for item in declarations or []
+        if isinstance(item, Mapping) and item.get("correction_id")
+    }
+    rows = matrix.get("rows")
+    row_by_id = {
+        str(item.get("correction_id")): item
+        for item in rows or []
+        if isinstance(item, Mapping) and item.get("correction_id")
+    }
+    atom_catalog = _read_json(
+        root / "canonical_sources/NORMATIVE_ATOM_CATALOG.json", findings
+    )
+    atom_coverage = _read_json(
+        root / "canonical_sources/ATOM_COVERAGE_MATRIX.json", findings
+    )
+    if not isinstance(atom_catalog, Mapping) or not isinstance(
+        atom_coverage, Mapping
+    ):
+        return findings
+    atom_ids = {
+        str(item.get("atom_id"))
+        for item in atom_catalog.get("atoms", [])
+        if isinstance(item, Mapping) and item.get("atom_id")
+    }
+    coverage_by_atom = {
+        str(item.get("atom_id")): item
+        for item in atom_coverage.get("coverage", [])
+        if isinstance(item, Mapping) and item.get("atom_id")
+    }
+    matrix_invalid = (
+        not isinstance(declarations, list)
+        or list(declaration_by_id) != expected_ids
+        or not isinstance(rows, list)
+        or list(row_by_id) != expected_ids
+        or matrix.get("expected_correction_ids") != expected_ids
+        or matrix.get("correction_count") != 5
+        or matrix.get("candidate_static_status") != "PASS"
+        or matrix.get("runtime_evidence_status")
+        != "PENDING_UNTIL_AUTHORIZED_EXECUTION"
+        or matrix.get("execution_started") is not False
+        or matrix.get("matrix_sha256")
+        != _hash_without_field(matrix, "matrix_sha256")
+    )
+    for correction_id in expected_ids:
+        declaration = declaration_by_id.get(correction_id, {})
+        row = row_by_id.get(correction_id, {})
+        maps_to = [str(value) for value in declaration.get("maps_to", [])]
+        expected_coverage = []
+        for atom_id in maps_to:
+            edge = coverage_by_atom.get(atom_id, {})
+            expected_coverage.append(
+                {
+                    "atom_id": atom_id,
+                    "workpack_ids": list(edge.get("workpack_ids") or []),
+                    "stage_ids": list(edge.get("stage_ids") or []),
+                    "release_step_ids": list(edge.get("release_step_ids") or []),
+                    "owner_project_ids": list(edge.get("owner_project_ids") or []),
+                    "coverage_status": edge.get("status"),
+                }
+            )
+        refs = _epoch2_implementation_refs(correction_id)
+        matrix_invalid = matrix_invalid or (
+            not maps_to
+            or len(set(maps_to)) != len(maps_to)
+            or any(atom not in atom_ids or atom not in coverage_by_atom for atom in maps_to)
+            or row.get("requirement") != declaration.get("requirement")
+            or row.get("maps_to") != maps_to
+            or row.get("mapped_atom_coverage") != expected_coverage
+            or row.get("implementation_artifact_refs") != refs
+            or any(not (root / relative).is_file() for relative in refs)
+            or row.get("candidate_static_lifecycle")
+            != "MATERIALIZED_AND_HASH_BOUND"
+            or row.get("runtime_lifecycle")
+            != "PENDING_UNTIL_AUTHORIZED_EXECUTION"
+            or row.get("runtime_evidence_refs") != []
+            or row.get("runtime_claims_verified") is not False
+            or row.get("row_sha256")
+            != _hash_without_field(row, "row_sha256")
+        )
+    if matrix_invalid:
+        findings.append(
+            _finding(
+                "V2_9_EPOCH2_CORRECTION_COVERAGE_INVALID",
+                "CORR-29-009 through CORR-29-013 mapping or lifecycle drifted",
+            )
+        )
+
+    closure_receipt = _read_json(
+        root / "validation/HUMAN_REVIEW_CLOSURE_RECEIPT.json", findings
+    )
+    closure_by_key = {
+        str(item.get("requirement_key")): item
+        for item in (closure_receipt or {}).get("closures", [])
+        if isinstance(item, Mapping)
+    }
+    v0_17_closure = closure_by_key.get("human_review_v0_17_closure")
+    if not isinstance(v0_17_closure, Mapping):
+        findings.append(
+            _finding(
+                "V2_9_EPOCH2_HUMAN_REVIEW_CLOSURE_INVALID",
+                "human_review_v0_17_closure is missing",
+            )
+        )
+    else:
+        evidence_refs = set(v0_17_closure.get("evidence_refs") or [])
+        evidence_hashes = v0_17_closure.get("evidence_sha256")
+        if (
+            not set(expected_artifacts).issubset(evidence_refs)
+            or not isinstance(evidence_hashes, Mapping)
+            or any(
+                evidence_hashes.get(relative) != _file_hash(root / relative)
+                for relative in expected_artifacts
+            )
+        ):
+            findings.append(
+                _finding(
+                    "V2_9_EPOCH2_HUMAN_REVIEW_CLOSURE_INVALID",
+                    "v0.17 Human Review closure does not bind every replacement artifact",
+                )
+            )
+
+    legacy_dag = _read_json(root / "ENGINEERING_PROJECT_DAG.json", findings)
+    legacy_manifest = _read_json(
+        root / "THREE_PROJECT_PROGRAM_MANIFEST.json", findings
+    )
+    if (
+        not isinstance(legacy_dag, Mapping)
+        or not isinstance(legacy_manifest, Mapping)
+        or legacy_dag.get("authority_role")
+        != "V28_COMPATIBILITY_ADAPTER_ONLY"
+        or legacy_manifest.get("authority_role")
+        != "V28_COMPATIBILITY_ADAPTER_ONLY"
+        or legacy_dag.get("active_control_plane_ref") != expected_artifacts[0]
+        or legacy_manifest.get("active_control_plane_ref")
+        != expected_artifacts[0]
+        or legacy_dag.get("successor_execution_allowed") is not False
+        or legacy_manifest.get("successor_execution_allowed") is not False
+        or (root / "V2_9_CONTROL_KERNEL_MANIFEST.json").exists()
+    ):
+        findings.append(
+            _finding(
+                "V2_9_EPOCH1_AUTHORITY_REACTIVATED",
+                "legacy topology or Epoch 1 descriptor regained active authority",
+            )
+        )
+    return findings
+
+
+def _human_review_closure_requirements(
+    frozen_ir: Mapping[str, Any],
+) -> list[tuple[str, Mapping[str, Any]]]:
+    target = frozen_ir.get("target")
+    if not isinstance(target, Mapping):
+        return []
+    return sorted(
+        (str(key), value)
+        for key, value in target.items()
+        if isinstance(value, Mapping)
+        and (
+            (
+                str(key).startswith("human_review_")
+                and str(key).endswith("_closure")
+            )
+            or value.get("closure_receipt_required") is True
+        )
+    )
+
+
+def _closure_requirement_status(closure: Mapping[str, Any]) -> Any:
+    if closure.get("closure_receipt_required") is True:
+        return closure.get("closure_receipt_status")
+    return closure.get("status")
+
+
+def _closure_finding_ids(closure: Mapping[str, Any]) -> list[str]:
+    finding_ids = closure.get("finding_ids")
+    if isinstance(finding_ids, list):
+        return [str(value) for value in finding_ids]
+    finding_id = closure.get("finding_id")
+    return [str(finding_id)] if finding_id else []
+
+
+def _check_dag_containment_and_closure(
+    root: Path,
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    dag_path = root / "ENGINEERING_PROJECT_DAG.json"
+    matrix_path = root / "validation/DAG_PATH_CONTAINMENT_MATRIX.json"
+    receipt_path = root / "validation/HUMAN_REVIEW_CLOSURE_RECEIPT.json"
+    frozen_path = root / "canonical_sources/FROZEN_REQUIREMENT_IR.json"
+    provenance_path = root / "FACTORY_PROVENANCE.json"
+    package_identity_path = root / "PACKAGE_MANIFEST.json"
+    for path, code in (
+        (matrix_path, "DAG_PATH_CONTAINMENT_MATRIX_MISSING"),
+        (receipt_path, "HUMAN_REVIEW_CLOSURE_RECEIPT_MISSING"),
+    ):
+        if not path.is_file():
+            findings.append(_finding(code, path.relative_to(root).as_posix()))
+    if findings:
+        return findings
+    dag = _read_json(dag_path, findings)
+    matrix = _read_json(matrix_path, findings)
+    receipt = _read_json(receipt_path, findings)
+    frozen_ir = _read_json(frozen_path, findings)
+    provenance = _read_json(provenance_path, findings)
+    package_identity = _read_json(package_identity_path, findings)
+    if not all(
+        isinstance(value, dict)
+        for value in (
+            dag, matrix, receipt, frozen_ir, provenance, package_identity
+        )
+    ):
+        return findings
+
+    expected_matrix = _expected_dag_path_containment_matrix(dag_path, dag)
+    outside = [
+        {
+            "node_id": row["node_id"],
+            "outside": row["outside_success_output_refs"],
+        }
+        for row in expected_matrix["rows"]
+        if row["outside_success_output_refs"]
+    ]
+    if outside:
+        findings.append(
+            _finding(
+                "ENGINEERING_DAG_SUCCESS_OUTPUT_OUTSIDE_ALLOWED_WRITE_PATHS",
+                str(outside),
+            )
+        )
+    if matrix != expected_matrix:
+        findings.append(
+            _finding(
+                "DAG_PATH_CONTAINMENT_MATRIX_INVALID",
+                "persisted matrix does not equal independent recomputation",
+            )
+        )
+
+    requirements = _human_review_closure_requirements(frozen_ir)
+    epoch38_local_profile = _is_epoch38_local_profile_requirement(frozen_ir)
+    expected_keys = [key for key, _closure in requirements]
+    entries = receipt.get("closures")
+    if not isinstance(entries, list):
+        findings.append(
+            _finding(
+                "HUMAN_REVIEW_CLOSURE_RECEIPT_INVALID",
+                "closures must be a list",
+            )
+        )
+        return findings
+    by_key = {
+        str(entry.get("requirement_key")): entry
+        for entry in entries
+        if isinstance(entry, Mapping)
+    }
+    if (
+        receipt.get("receipt_id") != "HUMAN_REVIEW_CLOSURE_RECEIPT"
+        or receipt.get("closure_scope") != "CANDIDATE_STATIC_CONTRACT"
+        or receipt.get("lifecycle_status_source")
+        != "THIS_RECEIPT_NOT_IMMUTABLE_REQUIREMENT_DECLARATION"
+        or receipt.get("source_requirement_ir_sha256")
+        != provenance.get("requirement_ir_sha256")
+        or receipt.get("portable_requirement_ir_sha256")
+        != _json_hash(frozen_ir)
+        or receipt.get("closure_count") != len(requirements)
+        or sorted(by_key) != expected_keys
+        or receipt.get("status")
+        != (
+            "NOT_APPLICABLE_NO_CLOSURES"
+            if epoch38_local_profile
+            else "PASS"
+        )
+        or (
+            epoch38_local_profile
+            and (
+                requirements
+                or receipt.get("closure_claimed") is not False
+                or receipt.get("human_review_approved") is not False
+            )
+        )
+        or receipt.get("runtime_claims_verified") is not False
+        or receipt.get("workpack_execution_authorized") is not False
+        or receipt.get("program_driver_started") is not False
+        or expected_matrix.get("status") != "PASS"
+    ):
+        findings.append(
+            _finding(
+                "HUMAN_REVIEW_CLOSURE_RECEIPT_INVALID",
+                "identity, requirement binding, nonclaims, or DAG gate is invalid",
+            )
+        )
+    for requirement_key, closure in requirements:
+        if _closure_requirement_status(closure) != CLOSURE_DECLARATION_STATUS:
+            findings.append(
+                _finding(
+                    "HUMAN_REVIEW_LIFECYCLE_STATE_IN_FROZEN_IR",
+                    requirement_key,
+                )
+            )
+        entry = by_key.get(requirement_key)
+        required_closures = list(closure.get("required_closures") or [])
+        finding_ids = _closure_finding_ids(closure)
+        successor = closure.get("successor_binding")
+        successor_version = (
+            successor.get("candidate_version")
+            if isinstance(successor, Mapping)
+            else None
+        )
+        active_epochs = closure.get("active_epochs")
+        closure_epoch = (
+            active_epochs.get("requirement_epoch")
+            if isinstance(active_epochs, Mapping)
+            else None
+        )
+        identity_cross_check = closure.get(
+            "replacement_identity_cross_check_required"
+        ) is True
+        replacement_identity_invalid = identity_cross_check and (
+            not isinstance(entry, Mapping)
+            or not isinstance(successor_version, str)
+            or closure.get("replacement_candidate")
+            != f"candidate-{successor_version}"
+            or not isinstance(closure_epoch, int)
+            or entry.get("replacement_candidate_version") != successor_version
+            or entry.get("closure_requirement_epoch") != closure_epoch
+            or entry.get("current_package_id")
+            != package_identity.get("package_id")
+            or entry.get("current_package_candidate_version")
+            != package_identity.get("candidate_version")
+            or entry.get("current_package_requirement_epoch")
+            != package_identity.get("requirement_epoch")
+            or not isinstance(package_identity.get("requirement_epoch"), int)
+            or package_identity.get("requirement_epoch") < closure_epoch
+        )
+        if (
+            not isinstance(entry, Mapping)
+            or entry.get("finding_ids") != finding_ids
+            or entry.get("superseded_candidate")
+            != closure.get("superseded_candidate")
+            or entry.get("replacement_candidate")
+            != closure.get("replacement_candidate")
+            or entry.get("required_closures") != required_closures
+            or entry.get("required_closures_sha256")
+            != _json_hash(required_closures)
+            or entry.get("closure_requirement_kind")
+            != closure.get("closure_requirement_kind", "HUMAN_REVIEW_REMEDIATION")
+            or entry.get("requirement_sha256") != _json_hash(closure)
+            or entry.get("status") != "PASS"
+            or replacement_identity_invalid
+        ):
+            findings.append(
+                _finding(
+                    "HUMAN_REVIEW_CLOSURE_RECEIPT_INVALID",
+                    requirement_key,
+                )
+            )
+            continue
+        evidence_refs = entry.get("evidence_refs")
+        evidence_hashes = entry.get("evidence_sha256")
+        if not isinstance(evidence_refs, list) or not isinstance(
+            evidence_hashes, Mapping
+        ):
+            findings.append(
+                _finding(
+                    "HUMAN_REVIEW_CLOSURE_RECEIPT_INVALID",
+                    f"{requirement_key}: evidence bindings missing",
+                )
+            )
+            continue
+        if any("DAG" in finding_id for finding_id in finding_ids) and not {
+            "ENGINEERING_PROJECT_DAG.json",
+            "validation/DAG_PATH_CONTAINMENT_MATRIX.json",
+        }.issubset(set(evidence_refs)):
+            findings.append(
+                _finding(
+                    "HUMAN_REVIEW_CLOSURE_RECEIPT_INVALID",
+                    f"{requirement_key}: DAG evidence missing",
+                )
+            )
+        if any(
+            "BINDER" in finding_id or "SETUP_RUNTIME" in finding_id
+            for finding_id in finding_ids
+        ) and not {
+            "tools/setup_runtime.py",
+            "validation/RUNTIME_BINDING_CONTRACT.json",
+        }.issubset(set(evidence_refs)):
+            findings.append(
+                _finding(
+                    "HUMAN_REVIEW_CLOSURE_RECEIPT_INVALID",
+                    f"{requirement_key}: Runtime Binder evidence missing",
+                )
+            )
+        for relative in evidence_refs:
+            relative_path = Path(str(relative))
+            path = root / relative_path
+            if (
+                relative_path.is_absolute()
+                or ".." in relative_path.parts
+                or not path.is_file()
+                or evidence_hashes.get(relative) != _file_hash(path)
+            ):
+                findings.append(
+                    _finding(
+                        "HUMAN_REVIEW_CLOSURE_RECEIPT_INVALID",
+                        f"{requirement_key}: {relative}",
+                    )
+                )
+    return findings
+
+
+def _external_authority_requirement_epoch(
+    requirement_ir: Mapping[str, Any] | None,
+) -> int:
+    if _is_epoch38_local_profile_requirement(requirement_ir):
+        return 0
+    target = requirement_ir.get("target") if isinstance(requirement_ir, Mapping) else None
+    if not isinstance(target, Mapping):
+        return 0
+    epochs = [
+        int(active["requirement_epoch"])
+        for value in target.values()
+        if isinstance(value, Mapping)
+        and isinstance((active := value.get("active_epochs")), Mapping)
+        and isinstance(active.get("requirement_epoch"), int)
+    ]
+    return max(epochs, default=0)
+
+
+def _is_epoch38_local_profile_requirement(
+    requirement_ir: Mapping[str, Any] | None,
+) -> bool:
+    target = (
+        requirement_ir.get("target")
+        if isinstance(requirement_ir, Mapping)
+        else None
+    )
+    return bool(
+        isinstance(target, Mapping)
+        and target.get("requirement_epoch") == 38
+        and target.get("architecture_epoch") == 4
+        and target.get("control_plane_epoch") == 4
+        and target.get("assurance_profile_id")
+        == "SELF_USE_LOCAL_TRUSTED_OPERATOR"
+        and target.get("operating_assurance_profile")
+        == "SELF_USE_LOCAL_TRUSTED_OPERATOR"
+    )
+
+
+def _check_external_authority_provenance(
+    authority_provenance: Mapping[str, Any] | None,
+    *,
+    authoritative_sources: Sequence[Mapping[str, Any]] | None,
+    authoritative_requirement_ir: Mapping[str, Any] | None,
+    requirement_epoch: int,
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    if not isinstance(authority_provenance, Mapping):
+        return None, [
+            _finding(
+                "EXTERNAL_AUTHORITY_PROVENANCE_REQUIRED",
+                "Factory Event Store revision, tip and content Hash provenance is required",
+            )
+        ]
+    normalized = dict(authority_provenance)
+    required_fields = {
+        "event_store_revision",
+        "event_store_tip_sha256",
+        "requirement_epoch",
+        "source_registry_sha256",
+        "requirement_ir_sha256",
+    }
+    invalid = (
+        set(normalized) != required_fields
+        or not isinstance(normalized.get("event_store_revision"), int)
+        or normalized.get("event_store_revision", -1) < 0
+        or normalized.get("requirement_epoch") != requirement_epoch
+        or any(
+            SHA256_RE.fullmatch(str(normalized.get(field) or "")) is None
+            for field in (
+                "event_store_tip_sha256",
+                "source_registry_sha256",
+                "requirement_ir_sha256",
+            )
+        )
+        or (
+            authoritative_sources is not None
+            and normalized.get("source_registry_sha256")
+            != _json_hash([dict(item) for item in authoritative_sources])
+        )
+        or (
+            authoritative_requirement_ir is not None
+            and normalized.get("requirement_ir_sha256")
+            != _json_hash(authoritative_requirement_ir)
+        )
+    )
+    if invalid:
+        return normalized, [
+            _finding(
+                "EXTERNAL_AUTHORITY_PROVENANCE_INVALID",
+                "Factory Event Store authority provenance is incomplete or does not bind the supplied authority content",
+            )
+        ]
+    return normalized, []
+
+
+def _validation_report_check_projection(
+    check: Mapping[str, Any],
+) -> dict[str, Any]:
+    evidence_refs = [
+        "PACKAGE_MANIFEST.json",
+        "START_CONTEXT.json",
+        "canonical_sources/ATOM_COVERAGE_MATRIX.json",
+        "PHASE_DEPENDENCY_MANIFEST.json",
+        "ENGINEERING_PROJECT_DAG.json",
+        "AUTHORING_HANDOFF.md",
+    ]
+    return {
+        "check_id": check.get("check_id"),
+        "status": check.get("status"),
+        "finding_count": len(check.get("findings", [])),
+        "evidence_refs": evidence_refs,
+        "authority_input": check.get("authority_input"),
+        "authority_provenance": check.get("authority_provenance"),
+    }
+
+
+def _check_candidate_generation_commit_authority(
+    root: Path,
+    *,
+    authority_events: Sequence[Mapping[str, Any]] | None,
+    current_authority_provenance: Mapping[str, Any] | None,
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    """Verify one authoritative generation commit from basis to current head."""
+
+    if not isinstance(authority_events, Sequence) or not authority_events:
+        return None, [_finding(
+            "CANDIDATE_GENERATION_COMMIT_REQUIRED",
+            "post-publication validation requires the authoritative Factory event chain",
+        )]
+    if not isinstance(current_authority_provenance, Mapping):
+        return None, [_finding(
+            "FACTORY_EVENT_CHAIN_INVALID",
+            "current Event Store authority provenance is required",
+        )]
+    event_fields = {
+        "schema_version", "event_id", "program_id", "revision",
+        "event_type", "request_id", "idempotency_key", "actor", "payload",
+        "resulting_snapshot", "previous_state_hash", "new_state_hash",
+        "previous_event_hash", "created_at", "event_hash",
+    }
+    events = [dict(event) for event in authority_events if isinstance(event, Mapping)]
+    if len(events) != len(authority_events):
+        return None, [_finding(
+            "FACTORY_EVENT_CHAIN_INVALID", "event chain contains a non-object event"
+        )]
+    previous_event_hash: str | None = None
+    previous_state_hash: str | None = None
+    seen_event_ids: set[str] = set()
+    seen_request_ids: set[str] = set()
+    seen_idempotency_keys: set[str] = set()
+    chain_invalid = False
+    for expected_revision, event in enumerate(events, 1):
+        event_hash = str(event.get("event_hash") or "")
+        event_id = str(event.get("event_id") or "")
+        request_id = str(event.get("request_id") or "")
+        idempotency_key = str(event.get("idempotency_key") or "")
+        chain_invalid = chain_invalid or (
+            set(event) != event_fields
+            or event.get("revision") != expected_revision
+            or event.get("previous_event_hash") != previous_event_hash
+            or event.get("previous_state_hash") != previous_state_hash
+            or SHA256_RE.fullmatch(str(event.get("new_state_hash") or "")) is None
+            or SHA256_RE.fullmatch(event_hash) is None
+            or event_hash != _json_hash({
+                key: value for key, value in event.items() if key != "event_hash"
+            })
+            or not event_id
+            or not request_id
+            or not idempotency_key
+            or event_id in seen_event_ids
+            or request_id in seen_request_ids
+            or idempotency_key in seen_idempotency_keys
+        )
+        seen_event_ids.add(event_id)
+        seen_request_ids.add(request_id)
+        seen_idempotency_keys.add(idempotency_key)
+        previous_event_hash = event_hash
+        previous_state_hash = str(event.get("new_state_hash") or "")
+    current_revision = current_authority_provenance.get("event_store_revision")
+    current_tip = current_authority_provenance.get("event_store_tip_sha256")
+    chain_invalid = chain_invalid or (
+        not isinstance(current_revision, int)
+        or current_revision != len(events)
+        or not events
+        or events[-1].get("new_state_hash") != current_tip
+    )
+    if chain_invalid:
+        return None, [_finding(
+            "FACTORY_EVENT_CHAIN_INVALID",
+            "the supplied Factory event chain does not reach the authoritative current head",
+        )]
+
+    report_path = root / VALIDATION_REPORT_REF
+    receipt_path = root / VALIDATION_REPORT_RECEIPT_REF
+    try:
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        package = json.loads(
+            (root / "PACKAGE_MANIFEST.json").read_text(encoding="utf-8")
+        )
+        frozen_ir = json.loads(
+            (root / "canonical_sources/FROZEN_REQUIREMENT_IR.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        factory_provenance = json.loads(
+            (root / "FACTORY_PROVENANCE.json").read_text(encoding="utf-8")
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        return None, [_finding("CANDIDATE_GENERATION_COMMIT_INVALID", str(exc))]
+    basis = receipt.get("authority_provenance") if isinstance(receipt, Mapping) else None
+    if not isinstance(basis, Mapping):
+        return None, [_finding(
+            "VALIDATION_BASIS_ANCESTRY_INVALID",
+            "detached report receipt does not contain a validation basis",
+        )]
+    normalized_basis = dict(basis)
+    basis_revision = normalized_basis.get("event_store_revision")
+    basis_invalid = (
+        not isinstance(basis_revision, int)
+        or basis_revision < 1
+        or basis_revision >= len(events)
+        or events[basis_revision - 1].get("new_state_hash")
+        != normalized_basis.get("event_store_tip_sha256")
+        or normalized_basis.get("requirement_epoch")
+        != package.get("requirement_epoch")
+        or not isinstance(factory_provenance, Mapping)
+        or normalized_basis.get("requirement_ir_sha256")
+        != factory_provenance.get("authority_requirement_ir_sha256")
+        or factory_provenance.get("portable_requirement_ir_sha256")
+        != _json_hash(frozen_ir)
+        or normalized_basis.get("requirement_ir_sha256")
+        != current_authority_provenance.get("requirement_ir_sha256")
+        or normalized_basis.get("source_registry_sha256")
+        != current_authority_provenance.get("source_registry_sha256")
+    )
+    if basis_invalid:
+        return normalized_basis, [_finding(
+            "VALIDATION_BASIS_ANCESTRY_INVALID",
+            "validation basis is not an immutable authority ancestor for this Candidate",
+        )]
+
+    candidate_version = package.get("candidate_version")
+    program_id = frozen_ir.get("program_id")
+    matching_events: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for event in events:
+        if event.get("event_type") != "START_PACKAGE_CANDIDATE_READY_FOR_HUMAN_REVIEW":
+            continue
+        snapshot = event.get("resulting_snapshot")
+        candidate = snapshot.get("candidate") if isinstance(snapshot, Mapping) else None
+        binding = (
+            candidate.get("generation_commit_binding")
+            if isinstance(candidate, Mapping) else None
+        )
+        if (
+            isinstance(binding, Mapping)
+            and binding.get("program_id") == program_id
+            and binding.get("candidate_version") == candidate_version
+        ):
+            matching_events.append((event, dict(binding)))
+    if len(matching_events) > 1:
+        return normalized_basis, [_finding(
+            "CANDIDATE_GENERATION_COMMIT_REPLAYED",
+            "more than one authoritative generation commit claims this Candidate identity",
+        )]
+    if not matching_events:
+        return normalized_basis, [_finding(
+            "CANDIDATE_GENERATION_COMMIT_REQUIRED",
+            "no authoritative generation commit binds this Candidate identity",
+        )]
+
+    commit_event, binding = matching_events[0]
+    binding_fields = {
+        "schema_version", "binding_kind", "program_id", "candidate_version",
+        "candidate_content_sha256", "candidate_file_count",
+        "validation_report_ref", "validation_report_sha256",
+        "validation_report_receipt_ref",
+        "validation_report_receipt_sha256", "requirement_epoch",
+        "requirement_ir_sha256", "validation_basis",
+        "generation_request_id", "generation_idempotency_key",
+        "binding_sha256",
+    }
+    actual_candidate_hash = _candidate_tree_hash(root)
+    actual_file_count = sum(1 for path in root.rglob("*") if path.is_file())
+    invalid = (
+        set(binding) != binding_fields
+        or binding.get("schema_version") != "1.0"
+        or binding.get("binding_kind")
+        != "FACTORY_CANDIDATE_GENERATION_COMMIT"
+        or binding.get("candidate_content_sha256") != actual_candidate_hash
+        or binding.get("candidate_file_count") != actual_file_count
+        or binding.get("validation_report_ref") != VALIDATION_REPORT_REF
+        or binding.get("validation_report_sha256") != _file_hash(report_path)
+        or binding.get("validation_report_receipt_ref")
+        != VALIDATION_REPORT_RECEIPT_REF
+        or binding.get("validation_report_receipt_sha256")
+        != _file_hash(receipt_path)
+        or binding.get("requirement_epoch") != package.get("requirement_epoch")
+        or binding.get("requirement_ir_sha256")
+        != factory_provenance.get("authority_requirement_ir_sha256")
+        or binding.get("validation_basis") != normalized_basis
+        or binding.get("generation_request_id") != commit_event.get("request_id")
+        or binding.get("generation_idempotency_key")
+        != commit_event.get("idempotency_key")
+        or binding.get("binding_sha256")
+        != _hash_without_field(binding, "binding_sha256")
+        or commit_event.get("revision") != basis_revision + 1
+        or commit_event.get("previous_state_hash")
+        != normalized_basis.get("event_store_tip_sha256")
+    )
+    return (normalized_basis, [_finding(
+        "CANDIDATE_GENERATION_COMMIT_INVALID",
+        "authoritative generation commit does not bind the exact Candidate, report, receipt, Requirement IR and validation basis",
+    )] if invalid else [])
+
+
+def _check_validation_report_authority_binding(
+    root: Path,
+    *,
+    source_check: Mapping[str, Any],
+    history_check: Mapping[str, Any],
+    expected_authority_provenance: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Compare embedded provenance to fresh Oracles and its detached receipt."""
+
+    report_path = root / VALIDATION_REPORT_REF
+    receipt_path = root / VALIDATION_REPORT_RECEIPT_REF
+    if not report_path.is_file() or not receipt_path.is_file():
+        return [_finding(
+            "VALIDATION_REPORT_RECEIPT_MISSING",
+            "validation report or detached receipt is missing",
+        )]
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        package = json.loads(
+            (root / "PACKAGE_MANIFEST.json").read_text(encoding="utf-8")
+        )
+        frozen_ir = json.loads(
+            (root / "canonical_sources/FROZEN_REQUIREMENT_IR.json").read_text(
+                encoding="utf-8"
+            )
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        return [_finding(
+            "VALIDATION_REPORT_AUTHORITY_BINDING_INVALID", str(exc)
+        )]
+    expected_checks = {
+        item["check_id"]: item
+        for item in (
+            _validation_report_check_projection(source_check),
+            _validation_report_check_projection(history_check),
+        )
+    }
+    expected_provenance = (
+        dict(expected_authority_provenance)
+        if isinstance(expected_authority_provenance, Mapping)
+        else source_check.get("authority_provenance")
+    )
+    for expected in expected_checks.values():
+        expected["authority_provenance"] = expected_provenance
+    embedded_checks = [
+        check for check in report.get("checks", [])
+        if isinstance(check, dict)
+        and str(check.get("check_id") or "").startswith("FACTORY_EXTERNAL_")
+    ] if isinstance(report, dict) else []
+    embedded_by_id = {
+        str(check.get("check_id")): check for check in embedded_checks
+    }
+    receipt_fields = {
+        "schema_version", "receipt_id", "report_ref", "report_sha256",
+        "report_id", "program_id", "package_id", "candidate_version",
+        "requirement_epoch", "requirement_ir_sha256",
+        "authority_provenance", "external_authority_checks_sha256",
+        "binding_authority", "receipt_sha256",
+    }
+    provenance_fields = {
+        "event_store_revision", "event_store_tip_sha256",
+        "requirement_epoch", "source_registry_sha256",
+        "requirement_ir_sha256",
+    }
+    sorted_embedded = sorted(
+        embedded_checks, key=lambda check: str(check.get("check_id") or "")
+    )
+    invalid = (
+        len(embedded_checks) != 2
+        or set(embedded_by_id) != set(expected_checks)
+        or any(
+            embedded_by_id.get(check_id) != expected
+            for check_id, expected in expected_checks.items()
+        )
+        or not isinstance(receipt, dict)
+        or set(receipt) != receipt_fields
+        or receipt.get("schema_version") != "1.0"
+        or receipt.get("receipt_id")
+        != "START_PACKAGE_VALIDATION_REPORT_RECEIPT"
+        or receipt.get("report_ref") != VALIDATION_REPORT_REF
+        or receipt.get("report_sha256") != _file_hash(report_path)
+        or receipt.get("report_id") != report.get("report_id")
+        or receipt.get("program_id") != frozen_ir.get("program_id")
+        or receipt.get("package_id") != package.get("package_id")
+        or receipt.get("candidate_version") != package.get("candidate_version")
+        or receipt.get("requirement_epoch") != package.get("requirement_epoch")
+        or receipt.get("requirement_ir_sha256")
+        != report.get("requirement_ir_sha256")
+        or not isinstance(receipt.get("authority_provenance"), dict)
+        or set(receipt["authority_provenance"]) != provenance_fields
+        or receipt.get("authority_provenance") != expected_provenance
+        or receipt.get("external_authority_checks_sha256")
+        != _json_hash(sorted_embedded)
+        or receipt.get("binding_authority")
+        != "FACTORY_EVENT_STORE_AND_RECEIVER_SIGNED_SOURCE_AUTHORITY_POLICY"
+        or receipt.get("receipt_sha256")
+        != _json_hash({
+            key: value for key, value in receipt.items()
+            if key != "receipt_sha256"
+        })
+    )
+    return ([_finding(
+        "VALIDATION_REPORT_AUTHORITY_BINDING_INVALID",
+        "embedded external checks differ from fresh Factory Oracles or detached receipt",
+    )] if invalid else [])
+
+
+def _check_epoch38_local_validation_report_receipt(
+    root: Path,
+) -> list[dict[str, Any]]:
+    """Bind local core validation without implying external certification."""
+
+    report_path = root / VALIDATION_REPORT_REF
+    receipt_path = root / VALIDATION_REPORT_RECEIPT_REF
+    profile_path = root / "EPOCH38_GENERATION_PROFILE.json"
+    closure_path = root / "validation/HUMAN_REVIEW_CLOSURE_RECEIPT.json"
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        profile = json.loads(profile_path.read_text(encoding="utf-8"))
+        package = json.loads(
+            (root / "PACKAGE_MANIFEST.json").read_text(encoding="utf-8")
+        )
+        frozen_ir = json.loads(
+            (root / "canonical_sources/FROZEN_REQUIREMENT_IR.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        closure = json.loads(closure_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        return [
+            _finding(
+                "EPOCH38_LOCAL_VALIDATION_RECEIPT_INVALID",
+                str(exc),
+            )
+        ]
+
+    receipt_fields = {
+        "schema_version",
+        "receipt_id",
+        "receipt_policy",
+        "report_ref",
+        "report_sha256",
+        "report_id",
+        "program_id",
+        "package_id",
+        "candidate_version",
+        "requirement_epoch",
+        "architecture_epoch",
+        "control_plane_epoch",
+        "requirement_ir_sha256",
+        "profile_ref",
+        "profile_sha256",
+        "assurance_profile",
+        "validator_id",
+        "validator_status_before_publication",
+        "validation_scope",
+        "external_authority_provenance_required",
+        "external_certification_claimed",
+        "independent_certification_claimed",
+        "optional_security_hardening",
+        "closure_claimed",
+        "human_review_approved",
+        "publication_precondition",
+        "binding_authority",
+        "receipt_sha256",
+    }
+    local_checks = [
+        check
+        for check in report.get("checks", [])
+        if isinstance(check, Mapping)
+        and str(check.get("check_id") or "").startswith("FACTORY_LOCAL_")
+    ] if isinstance(report, Mapping) else []
+    external_checks = [
+        check
+        for check in report.get("checks", [])
+        if isinstance(check, Mapping)
+        and str(check.get("check_id") or "").startswith("FACTORY_EXTERNAL_")
+    ] if isinstance(report, Mapping) else []
+    invalid = (
+        not all(
+            isinstance(value, Mapping)
+            for value in (report, receipt, profile, package, frozen_ir, closure)
+        )
+        or set(receipt) != receipt_fields
+        or receipt.get("schema_version") != "2.9"
+        or receipt.get("receipt_id")
+        != "EPOCH38_LOCAL_VALIDATION_REPORT_RECEIPT"
+        or receipt.get("receipt_policy")
+        != "SELF_USE_LOCAL_PROFILE_VALIDATION_RECEIPT"
+        or receipt.get("report_ref") != VALIDATION_REPORT_REF
+        or receipt.get("report_sha256") != _file_hash(report_path)
+        or receipt.get("report_id") != report.get("report_id")
+        or receipt.get("program_id") != frozen_ir.get("program_id")
+        or receipt.get("package_id") != package.get("package_id")
+        or receipt.get("candidate_version") != package.get("candidate_version")
+        or receipt.get("requirement_epoch") != 38
+        or receipt.get("requirement_epoch") != package.get("requirement_epoch")
+        or receipt.get("architecture_epoch") != 4
+        or receipt.get("control_plane_epoch") != 4
+        or receipt.get("requirement_ir_sha256")
+        != report.get("requirement_ir_sha256")
+        or receipt.get("profile_ref") != "EPOCH38_GENERATION_PROFILE.json"
+        or receipt.get("profile_sha256") != _file_hash(profile_path)
+        or receipt.get("assurance_profile")
+        != "SELF_USE_LOCAL_TRUSTED_OPERATOR"
+        or profile.get("assurance_profile")
+        != "SELF_USE_LOCAL_TRUSTED_OPERATOR"
+        or receipt.get("validator_id") != report.get("validator_id")
+        or receipt.get("validator_status_before_publication") != "PASS"
+        or report.get("status") != "PASS"
+        or report.get("blocking_findings") != []
+        or len(local_checks) != 2
+        or any(check.get("status") != "PASS" for check in local_checks)
+        or bool(external_checks)
+        or receipt.get("validation_scope")
+        != "LOCAL_ENGINEERING_CORE_NOT_EXTERNAL_CERTIFICATION"
+        or receipt.get("external_authority_provenance_required") is not False
+        or "authority_provenance" in receipt
+        or "external_authority_checks_sha256" in receipt
+        or receipt.get("external_certification_claimed") is not False
+        or receipt.get("independent_certification_claimed") is not False
+        or profile.get("external_certification_claimed") is not False
+        or receipt.get("optional_security_hardening") != "NOT_RUN"
+        or profile.get("optional_security_hardening") != "NOT_RUN"
+        or receipt.get("closure_claimed") is not False
+        or receipt.get("human_review_approved") is not False
+        or closure.get("closure_count") != 0
+        or closure.get("closures") != []
+        or closure.get("status") != "NOT_APPLICABLE_NO_CLOSURES"
+        or closure.get("closure_claimed") is not False
+        or closure.get("human_review_approved") is not False
+        or receipt.get("publication_precondition")
+        != "OFFICIAL_VALIDATOR_PASS"
+        or receipt.get("binding_authority")
+        != "EPOCH38_FROZEN_PROFILE_AND_PREPUBLICATION_VALIDATOR"
+        or receipt.get("receipt_sha256")
+        != _hash_without_field(receipt, "receipt_sha256")
+    )
+    return (
+        [
+            _finding(
+                "EPOCH38_LOCAL_VALIDATION_RECEIPT_INVALID",
+                "local receipt is stale, implies external certification or closure, or is not bound to the prepublication Validator PASS",
+            )
+        ]
+        if invalid
+        else []
+    )
+
+
+def _factory_required_regression_execution(
+    candidate: Path,
+    requirement_ir: Mapping[str, Any] | None,
+    *,
+    require_receipt: bool,
+) -> tuple[list[dict[str, Any]], dict[str, Any], bool]:
+    """Execute the latest exact Hash-bound Factory regression contract."""
+
+    target = (
+        requirement_ir.get("target")
+        if isinstance(requirement_ir, Mapping)
+        else None
+    )
+    remediation_key = EPOCH34_REMEDIATION_KEY
+    remediation = None
+    expected_epoch = 34
+    if isinstance(target, Mapping):
+        if target.get(EPOCH35_REMEDIATION_KEY) is not None:
+            remediation_key = EPOCH35_REMEDIATION_KEY
+            remediation = target.get(EPOCH35_REMEDIATION_KEY)
+            expected_epoch = 35
+        else:
+            remediation = target.get(EPOCH34_REMEDIATION_KEY)
+    if remediation is None:
+        return [], {"status": "NOT_REQUIRED", "required_tests": []}, False
+    findings: list[dict[str, Any]] = []
+    implementation = remediation.get("implementation_evidence")
+    required_tests = remediation.get("required_regression_tests")
+    active_epochs = remediation.get("active_epochs")
+    if (
+        not isinstance(implementation, Mapping)
+        or not isinstance(required_tests, list)
+        or not required_tests
+        or len(set(required_tests)) != len(required_tests)
+        or any(
+            not isinstance(name, str) or not name.startswith("test_")
+            for name in required_tests
+        )
+        or active_epochs
+        != {
+            "architecture_epoch": 2,
+            "control_plane_epoch": 2,
+            "requirement_epoch": expected_epoch,
+        }
+    ):
+        return [
+            _finding(
+                "FACTORY_REQUIRED_REGRESSION_CONTRACT_INVALID",
+                remediation_key,
+            )
+        ], {"status": "FAIL", "required_tests": []}, False
+
+    repository_root = Path(__file__).resolve().parents[2]
+    if remediation_key == EPOCH35_REMEDIATION_KEY:
+        implementation_sources = (
+            ("compiler_ref", "compiler_sha256"),
+            ("factory_validator_ref", "factory_validator_sha256"),
+        )
+        for ref_field, hash_field in implementation_sources:
+            relative = Path(str(implementation.get(ref_field) or ""))
+            expected_hash = implementation.get(hash_field)
+            path = (repository_root / relative).resolve()
+            if (
+                relative.is_absolute()
+                or ".." in relative.parts
+                or not path.is_relative_to(repository_root)
+                or not path.is_file()
+                or SHA256_RE.fullmatch(str(expected_hash or "")) is None
+                or _file_hash(path) != expected_hash
+            ):
+                return [
+                    _finding(
+                        "FACTORY_REQUIRED_IMPLEMENTATION_SOURCE_INVALID",
+                        str(implementation.get(ref_field)),
+                    )
+                ], {"status": "FAIL", "required_tests": list(required_tests)}, False
+    test_ref = implementation.get("regression_test_ref")
+    expected_test_sha256 = implementation.get("regression_test_sha256")
+    test_relative = Path(str(test_ref or ""))
+    test_path = (repository_root / test_relative).resolve()
+    if (
+        test_relative.is_absolute()
+        or ".." in test_relative.parts
+        or not test_path.is_relative_to(repository_root)
+        or not test_path.is_file()
+        or SHA256_RE.fullmatch(str(expected_test_sha256 or "")) is None
+        or _file_hash(test_path) != expected_test_sha256
+    ):
+        return [
+            _finding(
+                "FACTORY_REQUIRED_REGRESSION_SOURCE_INVALID",
+                str(test_ref),
+            )
+        ], {
+            "status": "FAIL",
+            "test_ref": test_ref,
+            "test_sha256": expected_test_sha256,
+            "required_tests": list(required_tests),
+        }, False
+
+    try:
+        tree = ast.parse(test_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, SyntaxError) as exc:
+        return [
+            _finding("FACTORY_REQUIRED_REGRESSION_SOURCE_INVALID", str(exc))
+        ], {"status": "FAIL", "required_tests": list(required_tests)}, False
+    definitions: dict[str, list[str]] = {}
+    for node in tree.body:
+        if not isinstance(node, ast.ClassDef):
+            continue
+        for child in node.body:
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                definitions.setdefault(child.name, []).append(node.name)
+    missing = [name for name in required_tests if name not in definitions]
+    ambiguous = [name for name in required_tests if len(definitions.get(name, [])) != 1]
+    if missing or ambiguous:
+        findings.append(
+            _finding(
+                "FACTORY_REQUIRED_REGRESSION_DEFINITION_MISSING",
+                json.dumps(
+                    {"missing": missing, "ambiguous": ambiguous},
+                    sort_keys=True,
+                ),
+            )
+        )
+    module_name = ".".join(test_relative.with_suffix("").parts)
+    selectors = [
+        f"{module_name}.{definitions[name][0]}.{name}"
+        for name in required_tests
+        if len(definitions.get(name, [])) == 1
+    ]
+    evidence: dict[str, Any] = {
+        "schema_version": "1.0",
+        "factory_id": FACTORY_ID,
+        "test_ref": test_relative.as_posix(),
+        "test_sha256": expected_test_sha256,
+        "required_tests": list(required_tests),
+        "executed_tests": [],
+        "execution_mode": "HASH_BOUND_EXACT_UNITTEST_SELECTORS",
+        "runtime_claims_verified": False,
+        "workpack_execution_authorized": False,
+        "status": "FAIL" if findings else "PENDING",
+    }
+    executed = False
+    if not findings:
+        environment = dict(os.environ)
+        environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        source_root = str(repository_root / "src")
+        existing_pythonpath = environment.get("PYTHONPATH")
+        environment["PYTHONPATH"] = (
+            source_root
+            if not existing_pythonpath
+            else os.pathsep.join((source_root, existing_pythonpath))
+        )
+        command = [sys.executable, "-m", "unittest", "-v", *selectors]
+        executed = True
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=repository_root,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+            output = completed.stdout + completed.stderr
+            observed = [
+                name for name in required_tests if f"{name} (" in output
+            ]
+            evidence.update(
+                {
+                    "command": ["python", "-m", "unittest", "-v", *selectors],
+                    "returncode": completed.returncode,
+                    "executed_tests": observed,
+                    "status": (
+                        "PASS"
+                        if completed.returncode == 0
+                        and observed == list(required_tests)
+                        else "FAIL"
+                    ),
+                }
+            )
+        except subprocess.TimeoutExpired as exc:
+            output = (exc.stdout or "") + (exc.stderr or "")
+            evidence.update(
+                {
+                    "command": ["python", "-m", "unittest", "-v", *selectors],
+                    "returncode": None,
+                    "status": "FAIL",
+                }
+            )
+        if evidence["status"] != "PASS":
+            findings.append(
+                _finding(
+                    "FACTORY_REQUIRED_REGRESSION_EXECUTION_FAILED",
+                    json.dumps(
+                        {
+                            "returncode": evidence.get("returncode"),
+                            "executed_tests": evidence.get("executed_tests"),
+                        },
+                        sort_keys=True,
+                    ),
+                )
+            )
+
+    if require_receipt and not findings:
+        receipt_path = candidate / FACTORY_REGRESSION_EXECUTION_RECEIPT_REF
+        try:
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            findings.append(
+                _finding("FACTORY_REGRESSION_EXECUTION_RECEIPT_INVALID", str(exc))
+            )
+        else:
+            provenance_path = candidate / "FACTORY_PROVENANCE.json"
+            try:
+                provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, json.JSONDecodeError):
+                provenance = {}
+            expected = {
+                **evidence,
+                "receipt_id": "FACTORY_REGRESSION_EXECUTION_RECEIPT",
+                "requirement_ir_sha256": provenance.get(
+                    "requirement_ir_sha256"
+                ),
+            }
+            expected["receipt_sha256"] = _hash_without_field(
+                expected, "receipt_sha256"
+            )
+            if receipt != expected:
+                findings.append(
+                    _finding(
+                        "FACTORY_REGRESSION_EXECUTION_RECEIPT_INVALID",
+                        FACTORY_REGRESSION_EXECUTION_RECEIPT_REF,
+                    )
+                )
+    return findings, evidence, executed
+
+
+def _validate_candidate(
     root: str | Path,
     spec_lock: Mapping[str, Any] | None = None,
     *,
     expected_target_root: str | Path | None = None,
     require_internal_report: bool = True,
+    authoritative_sources: Sequence[Mapping[str, Any]] | None = None,
+    authoritative_requirement_ir: Mapping[str, Any] | None = None,
+    authority_provenance: Mapping[str, Any] | None = None,
+    authority_events: Sequence[Mapping[str, Any]] | None = None,
+    prepublication_validation: bool = False,
 ) -> dict[str, Any]:
     """Validate one target package without importing or executing target code."""
 
     candidate = Path(root).expanduser().resolve()
     before = _tree_snapshot(candidate) if candidate.is_dir() else {}
+    context: Any = {}
     checks: list[dict[str, Any]] = []
     for check_id, function in CHECKS:
         try:
@@ -201,7 +6972,13 @@ def validate_candidate(
     binding_findings: list[dict[str, Any]] = []
     try:
         context = json.loads((candidate / "START_CONTEXT.json").read_text(encoding="utf-8"))
-        if context.get("target_root") != str(logical_root):
+        portable = _portable_context(context)
+        if (
+            portable
+            and context.get("target_root") != LOGICAL_CANDIDATE_ROOT
+        ) or (
+            not portable and context.get("target_root") != str(logical_root)
+        ):
             binding_findings.append(
                 _finding(
                     "TARGET_ROOT_MISMATCH",
@@ -217,6 +6994,351 @@ def validate_candidate(
             "findings": binding_findings,
         }
     )
+    candidate_requirement_ir: Mapping[str, Any] | None = None
+    try:
+        loaded_requirement_ir = json.loads(
+            (candidate / "canonical_sources/FROZEN_REQUIREMENT_IR.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        if isinstance(loaded_requirement_ir, Mapping):
+            candidate_requirement_ir = loaded_requirement_ir
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        pass
+
+    def controlled_runtime_scope_claimed(
+        requirement_ir: Mapping[str, Any] | None,
+        *,
+        active_requirement_epoch: int,
+    ) -> bool:
+        if not isinstance(requirement_ir, Mapping):
+            return False
+        target = requirement_ir.get("target")
+        if not isinstance(target, Mapping):
+            return False
+        return bool(
+            requirement_ir.get("program_id")
+            == "PROGRAM-HARNESS-FOUNDRY-V2-9-UPGRADE"
+            and target.get("id") == "HARNESS-FOUNDRY-V2-9-CHAT-FACTORY"
+            and active_requirement_epoch >= 45
+            and target.get("operating_assurance_profile")
+            == "SELF_USE_LOCAL_TRUSTED_OPERATOR"
+        )
+
+    candidate_profile: Mapping[str, Any] | None = None
+    try:
+        loaded_profile = json.loads(
+            (candidate / "EPOCH38_GENERATION_PROFILE.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        if isinstance(loaded_profile, Mapping):
+            candidate_profile = loaded_profile
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        pass
+    candidate_profile_epoch = (
+        candidate_profile.get("active_requirement_epoch")
+        if isinstance(candidate_profile, Mapping)
+        else 0
+    )
+    if isinstance(candidate_profile_epoch, bool) or not isinstance(
+        candidate_profile_epoch, int
+    ):
+        candidate_profile_epoch = 0
+    candidate_claims_controlled_runtime = controlled_runtime_scope_claimed(
+        candidate_requirement_ir,
+        active_requirement_epoch=candidate_profile_epoch,
+    )
+
+    raw_authority_epoch = (
+        authority_provenance.get("requirement_epoch")
+        if isinstance(authority_provenance, Mapping)
+        else 0
+    )
+    if isinstance(raw_authority_epoch, bool) or not isinstance(
+        raw_authority_epoch, int
+    ):
+        raw_authority_epoch = 0
+    authority_ir_hash_matches = bool(
+        isinstance(authoritative_requirement_ir, Mapping)
+        and isinstance(authority_provenance, Mapping)
+        and authority_provenance.get("requirement_ir_sha256")
+        == _json_hash(authoritative_requirement_ir)
+    )
+    authority_claims_controlled_runtime = controlled_runtime_scope_claimed(
+        authoritative_requirement_ir,
+        active_requirement_epoch=(
+            raw_authority_epoch if authority_ir_hash_matches else 0
+        ),
+    )
+    controlled_runtime_findings: list[dict[str, Any]] = []
+    if raw_authority_epoch >= 45 and not authority_claims_controlled_runtime:
+        controlled_runtime_findings.append(
+            _finding(
+                "CONTROLLED_WORKPACK_RUNTIME_FACTORY_AUTHORITY_PROVENANCE_INVALID",
+                "active Factory requirement epoch is not Hash-bound to the authoritative Requirement IR",
+            )
+        )
+    elif authority_claims_controlled_runtime:
+        controlled_runtime_findings.extend(
+            _check_controlled_workpack_runtime_executable_closure(
+                candidate,
+                active_requirement_epoch=raw_authority_epoch,
+            )
+        )
+    elif candidate_claims_controlled_runtime:
+        controlled_runtime_findings.append(
+            _finding(
+                "CONTROLLED_WORKPACK_RUNTIME_EXTERNAL_AUTHORITY_REQUIRED",
+                "Epoch 45 Slice 12 validation requires the authoritative Requirement IR",
+            )
+        )
+    checks.append(
+        {
+            "check_id": "CONTROLLED_WORKPACK_RUNTIME_EXECUTABLE_CLOSURE",
+            "status": "FAIL" if controlled_runtime_findings else "PASS",
+            "findings": controlled_runtime_findings,
+            "validation_basis": (
+                "FACTORY_AUTHORITY_PROVENANCE_REQUIREMENT_EPOCH"
+                if authority_claims_controlled_runtime
+                else (
+                    "FACTORY_AUTHORITY_PROVENANCE_INVALID"
+                    if raw_authority_epoch >= 45
+                    else "OUTSIDE_EPOCH45_SLICE12_SCOPE"
+                )
+            ),
+        }
+    )
+    package_validation_findings: list[dict[str, Any]] = []
+    if raw_authority_epoch >= 49 and not authority_claims_controlled_runtime:
+        package_validation_findings.append(
+            _finding(
+                "MAIN_EXECUTION_PACKAGE_VALIDATION_FACTORY_AUTHORITY_PROVENANCE_INVALID",
+                "active Factory requirement epoch is not Hash-bound to the authoritative Requirement IR",
+            )
+        )
+    elif authority_claims_controlled_runtime and raw_authority_epoch >= 49:
+        package_validation_findings.extend(
+            _check_main_execution_package_validation_executable_closure(
+                candidate,
+                active_requirement_epoch=raw_authority_epoch,
+            )
+        )
+    elif candidate_claims_controlled_runtime and candidate_profile_epoch >= 49:
+        package_validation_findings.append(
+            _finding(
+                "MAIN_EXECUTION_PACKAGE_VALIDATION_EXTERNAL_AUTHORITY_REQUIRED",
+                "Epoch 49 Slice 13 validation requires the authoritative Requirement IR",
+            )
+        )
+    checks.append(
+        {
+            "check_id": "MAIN_EXECUTION_PACKAGE_VALIDATION_EXECUTABLE_CLOSURE",
+            "status": "FAIL" if package_validation_findings else "PASS",
+            "findings": package_validation_findings,
+            "validation_basis": (
+                "FACTORY_AUTHORITY_PROVENANCE_REQUIREMENT_EPOCH"
+                if authority_claims_controlled_runtime and raw_authority_epoch >= 49
+                else (
+                    "FACTORY_AUTHORITY_PROVENANCE_INVALID"
+                    if raw_authority_epoch >= 49
+                    else "OUTSIDE_EPOCH49_SLICE13_SCOPE"
+                )
+            ),
+        }
+    )
+    (
+        regression_findings,
+        regression_evidence,
+        regression_commands_executed,
+    ) = _factory_required_regression_execution(
+        candidate,
+        candidate_requirement_ir,
+        require_receipt=require_internal_report,
+    )
+    checks.append(
+        {
+            "check_id": "FACTORY_REQUIRED_REGRESSION_EXECUTION",
+            "status": "FAIL" if regression_findings else "PASS",
+            "findings": regression_findings,
+            "factory_regression_execution": regression_evidence,
+        }
+    )
+    authority_requirement_epoch = _external_authority_requirement_epoch(
+        candidate_requirement_ir
+    )
+    epoch38_local_profile = _is_epoch38_local_profile_requirement(
+        candidate_requirement_ir
+    )
+    external_authority_required = authority_requirement_epoch >= 28
+    normalized_authority_provenance: dict[str, Any] | None = None
+    authority_provenance_findings: list[dict[str, Any]] = []
+    if external_authority_required and (
+        authoritative_sources is not None
+        or authoritative_requirement_ir is not None
+    ):
+        (
+            normalized_authority_provenance,
+            authority_provenance_findings,
+        ) = _check_external_authority_provenance(
+            authority_provenance,
+            authoritative_sources=authoritative_sources,
+            authoritative_requirement_ir=authoritative_requirement_ir,
+            requirement_epoch=authority_requirement_epoch,
+        )
+
+    authority_findings: list[dict[str, Any]] = []
+    if authoritative_sources is not None:
+        source_manifest = _read_json(
+            candidate / "canonical_sources/SOURCE_MANIFEST.json",
+            authority_findings,
+        )
+        if isinstance(source_manifest, Mapping):
+            authority_findings.extend(
+                _check_source_authority_normalization_contract(
+                    {"sources": [dict(item) for item in authoritative_sources]},
+                    source_manifest,
+                )
+            )
+        if external_authority_required:
+            authority_findings.extend(authority_provenance_findings)
+    elif external_authority_required:
+        authority_findings.append(
+            _finding(
+                "EXTERNAL_AUTHORITY_INPUT_REQUIRED",
+                "Factory Event Store Source Registry was not supplied",
+            )
+        )
+    source_authority_check = {
+            "check_id": (
+                "FACTORY_LOCAL_SOURCE_CONSISTENCY"
+                if epoch38_local_profile
+                else "FACTORY_EXTERNAL_SOURCE_AUTHORITY_ORACLE"
+            ),
+            "status": "FAIL" if authority_findings else "PASS",
+            "findings": authority_findings,
+            **(
+                {
+                    "validation_basis": (
+                        "FACTORY_SUPPLIED_LOCAL_CONSISTENCY_INPUT"
+                        if authoritative_sources is not None
+                        else "PORTABLE_STRUCTURE_ONLY"
+                    )
+                }
+                if epoch38_local_profile
+                else {
+                    "authority_input": (
+                        "FACTORY_EVENT_STORE_SOURCE_REGISTRY"
+                        if authoritative_sources is not None
+                        else (
+                            "NOT_SUPPLIED_EXTERNAL_AUTHORITY_REQUIRED"
+                            if external_authority_required
+                            else "NOT_SUPPLIED_PORTABLE_STRUCTURE_ONLY"
+                        )
+                    ),
+                    "authority_provenance": normalized_authority_provenance,
+                }
+            ),
+        }
+    checks.append(source_authority_check)
+    history_findings: list[dict[str, Any]] = []
+    if authoritative_requirement_ir is not None:
+        candidate_ir = _read_json(
+            candidate / "canonical_sources/FROZEN_REQUIREMENT_IR.json",
+            history_findings,
+        )
+        if isinstance(candidate_ir, Mapping):
+            history_findings.extend(
+                _check_external_release_history_authority(
+                    authoritative_requirement_ir, candidate_ir
+                )
+            )
+        if external_authority_required:
+            history_findings.extend(authority_provenance_findings)
+    elif external_authority_required:
+        history_findings.append(
+            _finding(
+                "EXTERNAL_AUTHORITY_INPUT_REQUIRED",
+                "Factory Event Store Requirement IR was not supplied",
+            )
+        )
+    release_history_check = {
+            "check_id": (
+                "FACTORY_LOCAL_REQUIREMENT_IR_CONSISTENCY"
+                if epoch38_local_profile
+                else "FACTORY_EXTERNAL_RELEASE_HISTORY_ORACLE"
+            ),
+            "status": "FAIL" if history_findings else "PASS",
+            "findings": history_findings,
+            **(
+                {
+                    "validation_basis": (
+                        "FACTORY_SUPPLIED_LOCAL_CONSISTENCY_INPUT"
+                        if authoritative_requirement_ir is not None
+                        else "PORTABLE_STRUCTURE_ONLY"
+                    )
+                }
+                if epoch38_local_profile
+                else {
+                    "authority_input": (
+                        "FACTORY_EVENT_STORE_REQUIREMENT_IR"
+                        if authoritative_requirement_ir is not None
+                        else (
+                            "NOT_SUPPLIED_EXTERNAL_AUTHORITY_REQUIRED"
+                            if external_authority_required
+                            else "NOT_SUPPLIED_PORTABLE_STRUCTURE_ONLY"
+                        )
+                    ),
+                    "authority_provenance": normalized_authority_provenance,
+                }
+            ),
+        }
+    checks.append(release_history_check)
+    validation_basis: dict[str, Any] | None = None
+    if (
+        require_internal_report
+        and authority_requirement_epoch >= 31
+        and not prepublication_validation
+    ):
+        validation_basis, generation_commit_findings = (
+            _check_candidate_generation_commit_authority(
+                candidate,
+                authority_events=authority_events,
+                current_authority_provenance=normalized_authority_provenance,
+            )
+        )
+        checks.append(
+            {
+                "check_id": "CANDIDATE_GENERATION_COMMIT_AUTHORITY",
+                "status": "FAIL" if generation_commit_findings else "PASS",
+                "findings": generation_commit_findings,
+            }
+        )
+    if require_internal_report and authority_requirement_epoch >= 30:
+        report_binding_findings = _check_validation_report_authority_binding(
+            candidate,
+            source_check=source_authority_check,
+            history_check=release_history_check,
+            expected_authority_provenance=validation_basis,
+        )
+        checks.append(
+            {
+                "check_id": "VALIDATION_REPORT_AUTHORITY_BINDING",
+                "status": "FAIL" if report_binding_findings else "PASS",
+                "findings": report_binding_findings,
+            }
+        )
+    if require_internal_report and epoch38_local_profile:
+        local_receipt_findings = (
+            _check_epoch38_local_validation_report_receipt(candidate)
+        )
+        checks.append(
+            {
+                "check_id": "EPOCH38_LOCAL_VALIDATION_RECEIPT_POLICY",
+                "status": "FAIL" if local_receipt_findings else "PASS",
+                "findings": local_receipt_findings,
+            }
+        )
     after = _tree_snapshot(candidate) if candidate.is_dir() else {}
     if before != after:
         checks.append(
@@ -234,7 +7356,8 @@ def validate_candidate(
         spec_hash = str(provenance.get("spec_content_sha256", ""))
         requirement_hash = str(provenance.get("requirement_ir_sha256", ""))
         if (
-            provenance.get("factory_id") != "HARNESS_FOUNDRY_V2_8_CHAT_FACTORY_V0_1"
+            provenance.get("factory_id") != FACTORY_ID
+            or provenance.get("baseline_factory_id") != BASELINE_FACTORY_ID
             or not SHA256_RE.fullmatch(spec_hash)
             or len(set(spec_hash)) == 1
             or provenance.get("execution_started") is not False
@@ -269,9 +7392,11 @@ def validate_candidate(
             if (candidate / "AUTHORING_HANDOFF.md").is_file()
             else ""
         )
+        portable_hash = str(provenance.get("portable_requirement_ir_sha256", ""))
+        expected_frozen_hash = portable_hash or requirement_hash
         if (
             not isinstance(frozen_ir, dict)
-            or _json_hash(frozen_ir) != requirement_hash
+            or _json_hash(frozen_ir) != expected_frozen_hash
             or provenance.get("program_id") != frozen_ir.get("program_id")
             or not isinstance(internal_report, dict)
             or internal_report.get("requirement_ir_sha256") != requirement_hash
@@ -280,6 +7405,9 @@ def validate_candidate(
             provenance_findings.append(
                 _finding("REQUIREMENT_IR_PROVENANCE_MISMATCH", "frozen IR/provenance/report/handoff")
             )
+        provenance_findings.extend(
+            _check_factory_implementation_provenance(candidate, provenance)
+        )
     checks.append(
         {
             "check_id": "SPEC_LOCK_AND_FACTORY_PROVENANCE",
@@ -292,17 +7420,81 @@ def validate_candidate(
     return {
         "schema_version": "1.0",
         "validator_id": "HARNESS_FOUNDRY_V2_8_TARGET_CANDIDATE_VALIDATOR",
-        "candidate_root": str(candidate),
-        "logical_target_root": str(logical_root),
+        "candidate_root": (
+            LOGICAL_CANDIDATE_ROOT
+            if isinstance(context, dict) and _portable_context(context)
+            else str(candidate)
+        ),
+        "logical_target_root": (
+            LOGICAL_CANDIDATE_ROOT
+            if isinstance(context, dict) and _portable_context(context)
+            else str(logical_root)
+        ),
         "status": "PASS" if valid else "FAIL",
         "valid": valid,
         "checks": checks,
         "blocking_findings": blocking,
         "permitted_terminal_state": TARGET_CANDIDATE_STATE,
         "writes_performed": False,
-        "commands_executed": False,
+        "commands_executed": regression_commands_executed,
         "runtime_claims_verified": False,
     }
+
+
+def validate_candidate(
+    root: str | Path,
+    spec_lock: Mapping[str, Any] | None = None,
+    *,
+    expected_target_root: str | Path | None = None,
+    require_internal_report: bool = True,
+    authoritative_sources: Sequence[Mapping[str, Any]] | None = None,
+    authoritative_requirement_ir: Mapping[str, Any] | None = None,
+    authority_provenance: Mapping[str, Any] | None = None,
+    authority_events: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Public fail-closed Candidate validation; no prepublication bypass."""
+
+    return _validate_candidate(
+        root,
+        spec_lock,
+        expected_target_root=expected_target_root,
+        require_internal_report=require_internal_report,
+        authoritative_sources=authoritative_sources,
+        authoritative_requirement_ir=authoritative_requirement_ir,
+        authority_provenance=authority_provenance,
+        authority_events=authority_events,
+        prepublication_validation=False,
+    )
+
+
+def _validate_prepublication_staging_candidate(
+    root: str | Path,
+    *,
+    expected_target_root: str | Path,
+    spec_lock: Mapping[str, Any] | None = None,
+    authoritative_sources: Sequence[Mapping[str, Any]] | None = None,
+    authoritative_requirement_ir: Mapping[str, Any] | None = None,
+    authority_provenance: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Private compiler-only validation before the generation event exists."""
+
+    staging = Path(root).expanduser().resolve()
+    target = Path(expected_target_root).expanduser().resolve()
+    if staging == target or target.exists() or staging.parent != target.parent:
+        raise ValueError(
+            "prepublication validation requires an isolated sibling staging root and an absent target"
+        )
+    return _validate_candidate(
+        staging,
+        spec_lock,
+        expected_target_root=target,
+        require_internal_report=True,
+        authoritative_sources=authoritative_sources,
+        authoritative_requirement_ir=authoritative_requirement_ir,
+        authority_provenance=authority_provenance,
+        authority_events=None,
+        prepublication_validation=True,
+    )
 
 
 def _check_inventory(root: Path) -> list[dict[str, Any]]:
@@ -334,6 +7526,484 @@ def _check_inventory(root: Path) -> list[dict[str, Any]]:
     template_names = [path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file() and ".template." in path.name]
     for name in template_names:
         findings.append(_finding("TEMPLATE_FILENAME_FORBIDDEN", name))
+    return findings
+
+
+def _is_epoch38_local_profile(root: Path) -> bool:
+    try:
+        profile = json.loads(
+            (root / "EPOCH38_GENERATION_PROFILE.json").read_text(
+                encoding="utf-8"
+            )
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return False
+    return bool(
+        isinstance(profile, Mapping)
+        and profile.get("profile_kind")
+        == "SELF_USE_LOCAL_CORE_CANDIDATE_ROUTE"
+        and profile.get("assurance_profile")
+        == "SELF_USE_LOCAL_TRUSTED_OPERATOR"
+    )
+
+
+def _effective_root_materialization_contract(
+    root: Path,
+) -> tuple[list[str], dict[str, str]]:
+    if _is_epoch38_local_profile(root):
+        return (
+            list(EPOCH38_LOCAL_ROOT_MATERIALIZATION_REQUIRES),
+            dict(EPOCH38_LOCAL_ROOT_MATERIALIZATION_REQUIREMENT_SOURCES),
+        )
+    return (
+        list(ROOT_MATERIALIZATION_REQUIRES),
+        {
+            "LAB_TOOL_RELEASE_LOCK_VALID": (
+                "ENGINEERING_DAG:LAB_TOOL_RELEASE_LOCKED"
+            ),
+            "LINKAGE_TOOL_RELEASE_LOCK_VALID": (
+                "ENGINEERING_DAG:LINKAGE_TOOL_RELEASE_LOCKED"
+            ),
+        },
+    )
+
+
+def _effective_project_workpack_contract(
+    root: Path, workpack_id: str
+) -> Mapping[str, Any] | None:
+    contract = PROJECT_WORKPACK_CONTRACTS.get(workpack_id)
+    if contract is None:
+        return None
+    if _is_epoch38_local_profile(root) and workpack_id == "MB-RELEASE-CANDIDATE":
+        return {
+            **contract,
+            "requires": EPOCH38_LOCAL_RELEASE_REQUIRES,
+            "requirement_sources": (
+                EPOCH38_LOCAL_RELEASE_REQUIREMENT_SOURCES
+            ),
+        }
+    return contract
+
+
+def _check_epoch38_generation_route(root: Path) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    frozen = _read_json(
+        root / "canonical_sources/FROZEN_REQUIREMENT_IR.json", findings
+    )
+    target = frozen.get("target") if isinstance(frozen, Mapping) else None
+    if not (
+        isinstance(target, Mapping)
+        and target.get("requirement_epoch") == 38
+        and target.get("architecture_epoch") == 4
+        and target.get("control_plane_epoch") == 4
+    ):
+        return findings
+    profile_path = root / "EPOCH38_GENERATION_PROFILE.json"
+    profile = _read_json(profile_path, findings)
+    dag = _read_json(root / "ENGINEERING_PROJECT_DAG.json", findings)
+    release = _read_json(root / "RELEASE_PIPELINE_MANIFEST.json", findings)
+    projects = _read_json(root / "THREE_PROJECT_PROGRAM_MANIFEST.json", findings)
+    if not all(isinstance(value, Mapping) for value in (profile, dag, release, projects)):
+        return findings
+    profile_sha256 = _file_hash(profile_path)
+    optional_routes = {
+        "LINK-PROTOCOL",
+        "LINK-CLI",
+        "LINK-SELFTEST",
+        "LINK-PREFLIGHT",
+        "LINK-D",
+        "LAB-PROTOCOL",
+        "LAB-CLI",
+        "LAB-FIXTURES",
+        "LAB-SELFTEST",
+        "LAB-CERTIFICATION",
+    }
+    excluded_steps = {
+        "P4_CERTIFIED_RELEASE_LOCK",
+        "LAB_INSTALLED_POSITIVE_NEGATIVE_TAMPER_TESTS",
+        "LINKAGE_A_INTERFACE_COMPLETENESS",
+        "LINKAGE_D_INSTALLED_HANDSHAKE",
+    }
+    if (
+        profile.get("profile_kind") != "SELF_USE_LOCAL_CORE_CANDIDATE_ROUTE"
+        or profile.get("assurance_profile")
+        != "SELF_USE_LOCAL_TRUSTED_OPERATOR"
+        or profile.get("local_engineering_completion") != "CORE_RELEASE_READY_LOCAL"
+        or profile.get("optional_security_hardening")
+        not in {"NOT_APPLICABLE", "NOT_RUN"}
+        or profile.get("external_certification_claimed") is not False
+        or profile.get("external_trust_anchor") != "NOT_APPLICABLE"
+        or profile.get("independent_oracle") != "NOT_APPLICABLE"
+        or profile.get("dual_formal_validator_certification")
+        != "NOT_APPLICABLE"
+        or profile.get("dynamic_adversarial_or_tamper_proof")
+        != "NOT_APPLICABLE"
+        or set(profile.get("optional_security_routes") or []) != optional_routes
+        or set(profile.get("excluded_default_release_steps") or [])
+        != excluded_steps
+        or profile.get("default_generation_release_steps")
+        != ["P4_RELEASE_CANDIDATE_LOCK"]
+        or profile.get("execution_started") is not False
+    ):
+        findings.append(
+            _finding(
+                "EPOCH38_GENERATION_PROFILE_INVALID",
+                "Epoch 38 local profile or non-claim boundary drifted",
+            )
+        )
+    for document, label in (
+        (dag, "ENGINEERING_PROJECT_DAG.json"),
+        (release, "RELEASE_PIPELINE_MANIFEST.json"),
+        (projects, "THREE_PROJECT_PROGRAM_MANIFEST.json"),
+    ):
+        if (
+            document.get("route_selection_authority_ref")
+            != "EPOCH38_GENERATION_PROFILE.json"
+            or document.get("route_selection_authority_sha256") != profile_sha256
+        ):
+            findings.append(
+                _finding("EPOCH38_ROUTE_AUTHORITY_MISMATCH", label)
+            )
+    if (
+        release.get("default_route_step_ids") != ["P4_RELEASE_CANDIDATE_LOCK"]
+        or set(release.get("excluded_default_step_ids") or []) != excluded_steps
+        or any(
+            item.get("default_route_selected") is True
+            and item.get("step_id") != "P4_RELEASE_CANDIDATE_LOCK"
+            for item in release.get("steps", [])
+            if isinstance(item, Mapping)
+        )
+    ):
+        findings.append(
+            _finding(
+                "EPOCH38_RELEASE_ROUTE_EXPANDED",
+                "default release route includes non-core or optional steps",
+            )
+        )
+    default_nodes = list(dag.get("default_route_node_ids") or [])
+    expected_default_edges = [
+        {"from": left, "to": right}
+        for left, right in zip(default_nodes, default_nodes[1:])
+    ]
+    compatibility_only_progressions = {
+        "MAIN_EXECUTION_BEFORE_LAB_AND_LINKAGE_SELF_VALIDATION",
+        "MAIN_EXECUTION_PACKAGE_BEFORE_LAB_AND_LINKAGE_RELEASE",
+    }
+    active_forbidden_progressions = set(
+        dag.get("forbidden_progressions") or []
+    )
+    optional_security_forbidden_progressions = set(
+        dag.get("optional_security_forbidden_progressions") or []
+    )
+    if (
+        dag.get("active_route_edge_field") != "default_route_edges"
+        or dag.get("edges_role")
+        != "COMPATIBILITY_CATALOG_NOT_ACTIVE_DEFAULT_EXECUTION_ROUTE"
+        or dag.get("compatibility_catalog_edges") != dag.get("edges")
+        or dag.get("forbidden_progressions_role")
+        != "ACTIVE_DEFAULT_ROUTE_ONLY"
+        or active_forbidden_progressions & compatibility_only_progressions
+        or optional_security_forbidden_progressions
+        != compatibility_only_progressions
+        or dag.get("optional_security_forbidden_progressions_role")
+        != "OPTIONAL_SECURITY_HARDENING_ONLY_NOT_ACTIVE_DEFAULT_ROUTE"
+    ):
+        findings.append(
+            _finding(
+                "EPOCH38_DEFAULT_ROUTE_FORBIDDEN_PROGRESSION_LEAK",
+                "active local route retains an unconditional Lab or Linkage progression blocker",
+            )
+        )
+    default_node_map = {
+        str(item.get("node_id")): item
+        for item in dag.get("nodes", [])
+        if isinstance(item, Mapping) and item.get("default_route_selected") is True
+    }
+    main_materialization = default_node_map.get(
+        "MAIN_EXECUTION_PACKAGE_MATERIALIZED", {}
+    )
+    default_release = next(
+        (
+            item
+            for item in release.get("steps", [])
+            if isinstance(item, Mapping)
+            and item.get("step_id") == "P4_RELEASE_CANDIDATE_LOCK"
+        ),
+        {},
+    )
+    root_index = _read_json(root / "WORKPACK_INDEX.json", findings)
+    root_workpack = (
+        root_index.get("workpacks", [None])[0]
+        if isinstance(root_index, Mapping) and root_index.get("workpacks")
+        else None
+    )
+    root_capsule = _read_json(root / "CAPSULE.json", findings)
+    main_index = _read_json(
+        root / "project_start_packages/main_build/WORKPACK_INDEX.json",
+        findings,
+    )
+    release_workpack = next(
+        (
+            item
+            for item in main_index.get("workpacks", [])
+            if isinstance(item, Mapping)
+            and item.get("workpack_id") == "MB-RELEASE-CANDIDATE"
+        ),
+        {},
+    ) if isinstance(main_index, Mapping) else {}
+    release_capsule = _read_json(
+        root
+        / "project_start_packages/main_build/capsules/"
+        "MB-RELEASE-CANDIDATE.capsule.json",
+        findings,
+    )
+    release_result = _read_json(
+        root
+        / "project_start_packages/main_build/results/"
+        "MB-RELEASE-CANDIDATE.result.json",
+        findings,
+    )
+    optional_node_ids = {
+        str(value) for value in dag.get("optional_security_node_ids") or []
+    }
+    optional_node_capabilities = {
+        str(capability)
+        for item in dag.get("nodes", [])
+        if isinstance(item, Mapping)
+        and item.get("node_id") in optional_node_ids
+        for capability in item.get("produces_capabilities", [])
+    }
+    default_step_ids = {
+        str(value) for value in release.get("default_route_step_ids") or []
+    }
+    optional_step_ids = {
+        str(item.get("step_id"))
+        for item in release.get("steps", [])
+        if isinstance(item, Mapping)
+        and str(item.get("step_id")) not in default_step_ids
+    }
+    optional_step_capabilities = {
+        str(capability)
+        for item in release.get("steps", [])
+        if isinstance(item, Mapping)
+        and str(item.get("step_id")) in optional_step_ids
+        for capability in item.get("produces", [])
+    }
+    optional_capabilities = optional_node_capabilities | optional_step_capabilities
+    route_dependency_leak = False
+    for node_id, item in default_node_map.items():
+        node_refs = {
+            str(value)
+            for field in (
+                "required_predecessor_nodes",
+                "requires",
+                "allowed_next_nodes",
+            )
+            for value in item.get(field, [])
+        }
+        failure_return = item.get("failure_return_node")
+        if isinstance(failure_return, str):
+            node_refs.add(failure_return)
+        if (
+            node_refs & optional_node_ids
+            or set(item.get("project_workpack_required_capabilities") or [])
+            & optional_capabilities
+            or item.get("required_tool_distribution_hashes")
+            != EPOCH38_LOCAL_TOOL_DISTRIBUTION_REQUIREMENT
+        ):
+            route_dependency_leak = True
+        expected_index = default_nodes.index(node_id)
+        expected_predecessors = (
+            [default_nodes[expected_index - 1]] if expected_index else []
+        )
+        expected_successors = (
+            [default_nodes[expected_index + 1]]
+            if expected_index + 1 < len(default_nodes)
+            else []
+        )
+        if (
+            item.get("required_predecessor_nodes") != expected_predecessors
+            or item.get("requires") != expected_predecessors
+            or item.get("allowed_next_nodes") != expected_successors
+        ):
+            route_dependency_leak = True
+    expected_root_requires = list(
+        EPOCH38_LOCAL_ROOT_MATERIALIZATION_REQUIRES
+    )
+    expected_root_sources = dict(
+        EPOCH38_LOCAL_ROOT_MATERIALIZATION_REQUIREMENT_SOURCES
+    )
+    expected_release_requires = list(EPOCH38_LOCAL_RELEASE_REQUIRES)
+    expected_release_sources = dict(
+        EPOCH38_LOCAL_RELEASE_REQUIREMENT_SOURCES
+    )
+    human_approval = default_node_map.get("START_PACKAGE_HUMAN_APPROVAL", {})
+    if (
+        not isinstance(root_workpack, Mapping)
+        or root_workpack.get("requires") != expected_root_requires
+        or root_workpack.get("requirement_sources") != expected_root_sources
+        or not isinstance(root_capsule, Mapping)
+        or root_capsule.get("requires") != expected_root_requires
+        or root_capsule.get("requirement_sources") != expected_root_sources
+        or "PROFILE_LOCK_VALID"
+        not in human_approval.get("produces_capabilities", [])
+        or main_materialization.get("project_workpack_required_capabilities")
+        != expected_root_requires
+        or default_release.get("requires") != expected_release_requires
+        or default_release.get("required_predecessor_step_ids") != []
+        or default_release.get("allowed_next_step_ids") != []
+        or default_release.get("failure_return_step_id")
+        != "MAIN_P4_LOCAL_CLOSURE"
+        or default_release.get("required_tool_distribution_hashes")
+        != EPOCH38_LOCAL_TOOL_DISTRIBUTION_REQUIREMENT
+        or default_release.get("project_workpack_required_capabilities")
+        != expected_release_requires
+        or release_workpack.get("requires") != expected_release_requires
+        or release_workpack.get("requirement_sources")
+        != expected_release_sources
+        or not isinstance(release_capsule, Mapping)
+        or release_capsule.get("requires") != expected_release_requires
+        or release_capsule.get("requirement_sources")
+        != expected_release_sources
+        or not isinstance(release_result, Mapping)
+        or release_result.get("required_capabilities")
+        != expected_release_requires
+    ):
+        route_dependency_leak = True
+    if (
+        set(default_node_map) != set(default_nodes)
+        or dag.get("default_route_edges") != expected_default_edges
+        or any(
+            value in set(default_nodes)
+            for value in dag.get("optional_security_node_ids") or []
+        )
+        or main_materialization.get("default_profile_required_capabilities")
+        != ["CHARTER_LOCK_VALID", "PROFILE_LOCK_VALID"]
+        or default_release.get("default_profile_requires")
+        != [
+            "P4_LOCAL_GATE_PASS",
+            "OFFICIAL_CORE_VALIDATION_PASS",
+            "CORE_EVIDENCE_PROJECTION_PASS",
+        ]
+    ):
+        findings.append(
+            _finding(
+                "EPOCH38_DEFAULT_ROUTE_NOT_INDEPENDENT",
+                "default Main route still depends on optional Lab Linkage or certification capabilities",
+            )
+        )
+    if route_dependency_leak:
+        findings.append(
+            _finding(
+                "EPOCH38_DEFAULT_ROUTE_CAPABILITY_LEAK",
+                "default local route retains an optional-security dependency",
+            )
+        )
+    if (
+        projects.get("default_route_project_ids") != ["MAIN_HARNESS_BUILD"]
+        or any(
+            item.get("default_route_selected") is True
+            and item.get("project_id") != "MAIN_HARNESS_BUILD"
+            for item in projects.get("projects", [])
+            if isinstance(item, Mapping)
+        )
+        or any(
+            item.get("project_id")
+            in {"EXTERNAL_CONFORMANCE_LAB", "CONFORMANCE_LINKAGE_REVIEW"}
+            and (
+                item.get("delivery_tier") != "OPTIONAL_SECURITY_HARDENING"
+                or item.get("default_profile_disposition")
+                != "NOT_APPLICABLE_NOT_STARTED"
+            )
+            for item in projects.get("projects", [])
+            if isinstance(item, Mapping)
+        )
+    ):
+        findings.append(
+            _finding(
+                "EPOCH38_OPTIONAL_PROJECT_ROUTE_ACTIVE",
+                "Lab or Linkage is active in the default local route",
+            )
+        )
+    return findings
+
+
+def _check_epoch38_charter_projection(root: Path) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    frozen = _read_json(
+        root / "canonical_sources/FROZEN_REQUIREMENT_IR.json", findings
+    )
+    target = frozen.get("target") if isinstance(frozen, Mapping) else None
+    correction = (
+        target.get("v2_9_charter_architecture_correction_epoch38")
+        if isinstance(target, Mapping)
+        else None
+    )
+    if not (
+        isinstance(target, Mapping)
+        and isinstance(correction, Mapping)
+        and target.get("operating_assurance_profile")
+        == "SELF_USE_LOCAL_TRUSTED_OPERATOR"
+    ):
+        return findings
+
+    charter_path = root / "PROGRAM_CHARTER.md"
+    try:
+        charter = charter_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        findings.append(
+            _finding("EPOCH38_CHARTER_PROJECTION_MISSING", str(exc))
+        )
+        return findings
+
+    required_fragments = [
+        str(correction.get("mission") or target.get("mission")),
+        f"- Package shape profile: `{target.get('profile')}`",
+        "- Assurance profile: `SELF_USE_LOCAL_TRUSTED_OPERATOR`",
+        "1. `CORE_IMPLEMENTATION`",
+        "2. `POST_IMPLEMENTATION_VALIDATION`",
+        "3. `OPTIONAL_SECURITY_HARDENING`",
+        (
+            "External Trust Anchor, independent certification, dual-Validator "
+            "closure, and dynamic adversarial/tamper proof are optional and "
+            "non-blocking"
+        ),
+        "External certification claimed: `false`.",
+        "Candidate self-check and receipts are diagnostic/evidence only",
+    ]
+    delivery_tiers = correction.get("atom_delivery_tiers")
+    if not isinstance(delivery_tiers, Mapping):
+        findings.append(
+            _finding(
+                "EPOCH38_CHARTER_DELIVERY_TIERS_INVALID",
+                "v2_9_charter_architecture_correction_epoch38.atom_delivery_tiers",
+            )
+        )
+        return findings
+    for item in target.get("scope") or []:
+        match = re.match(r"(P0-\d{2})\b", str(item))
+        if match is None:
+            continue
+        delivery_tier = delivery_tiers.get(f"ATOM-V29-{match.group(1)}")
+        if delivery_tier not in {
+            "CORE_IMPLEMENTATION",
+            "POST_IMPLEMENTATION_VALIDATION",
+            "OPTIONAL_SECURITY_HARDENING",
+        }:
+            findings.append(
+                _finding(
+                    "EPOCH38_CHARTER_DELIVERY_TIERS_INVALID",
+                    f"ATOM-V29-{match.group(1)}",
+                )
+            )
+            continue
+        required_fragments.append(f"- `{delivery_tier}` {item}")
+
+    for fragment in required_fragments:
+        if fragment not in charter:
+            findings.append(
+                _finding("EPOCH38_CHARTER_PROJECTION_MISSING", fragment)
+            )
     return findings
 
 
@@ -447,6 +8117,9 @@ def _check_identity_and_refs(root: Path) -> list[dict[str, Any]]:
 
 def _check_artifact_hashes(root: Path) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
+    expected_root_requires, expected_root_sources = (
+        _effective_root_materialization_contract(root)
+    )
     index = _read_json(root / "WORKPACK_INDEX.json", findings)
     if not isinstance(index, dict) or len(index.get("workpacks", [])) != 1:
         return findings + [_finding("INITIAL_WORKPACK_CARDINALITY_INVALID", "WORKPACK_INDEX.json")]
@@ -454,16 +8127,16 @@ def _check_artifact_hashes(root: Path) -> list[dict[str, Any]]:
     if not isinstance(item, dict):
         return findings + [_finding("INITIAL_WORKPACK_INVALID", "WORKPACK_INDEX.json")]
     if (
-        item.get("requires") != list(ROOT_MATERIALIZATION_REQUIRES)
-        or item.get("requirement_sources")
-        != {
-            "LAB_TOOL_RELEASE_LOCK_VALID": "ENGINEERING_DAG:LAB_TOOL_RELEASE_LOCKED",
-            "LINKAGE_TOOL_RELEASE_LOCK_VALID": "ENGINEERING_DAG:LINKAGE_TOOL_RELEASE_LOCKED",
-        }
+        item.get("requires") != expected_root_requires
+        or item.get("requirement_sources") != expected_root_sources
         or item.get("produces") != list(ROOT_MATERIALIZATION_PRODUCES)
         or item.get("command_ids") != list(ROOT_MATERIALIZATION_COMMAND_IDS)
         or item.get("command_execution_order")
         != list(ROOT_MATERIALIZATION_COMMAND_IDS)
+        or item.get("intent_atom_ids") != []
+        or item.get("validation_scope") != ROOT_LAYER_VALIDATION_SCOPE
+        or item.get("behavioral_atom_acceptance")
+        != ROOT_LAYER_BEHAVIORAL_ATOM_POLICY
     ):
         findings.append(
             _finding(
@@ -506,20 +8179,31 @@ def _check_artifact_hashes(root: Path) -> list[dict[str, Any]]:
             _finding("WORKPACK_PREDECESSOR_LOCK_MISMATCH", "CAPSULE.json")
         )
     if (
-        capsule.get("requires") != list(ROOT_MATERIALIZATION_REQUIRES)
+        capsule.get("requires") != expected_root_requires
+        or capsule.get("requirement_sources") != expected_root_sources
         or capsule.get("produces") != list(ROOT_MATERIALIZATION_PRODUCES)
         or capsule.get("command_ids") != list(ROOT_MATERIALIZATION_COMMAND_IDS)
+        or capsule.get("intent_atom_ids") != []
+        or capsule.get("required_outputs")
+        != list(ROOT_MATERIALIZATION_PRODUCES)
+        or capsule.get("validation_scope") != ROOT_LAYER_VALIDATION_SCOPE
+        or capsule.get("behavioral_atom_acceptance")
+        != ROOT_LAYER_BEHAVIORAL_ATOM_POLICY
         or result.get("expected_capabilities")
         != list(ROOT_MATERIALIZATION_PRODUCES)
+        or result.get("intent_atom_ids") != []
+        or result.get("validation_scope") != ROOT_LAYER_VALIDATION_SCOPE
+        or result.get("behavioral_atom_acceptance")
+        != ROOT_LAYER_BEHAVIORAL_ATOM_POLICY
     ):
         findings.append(
             _finding("ROOT_MATERIALIZATION_CAPABILITY_INVALID", "CAPSULE.json")
         )
     if capsule.get("hydration_complete") is not False or capsule.get("capsule_sha256") is not None:
         findings.append(_finding("CAPSULE_PREHYDRATION_HASH_INVALID", "capsule_sha256"))
-    allowed_paths = [Path(str(value)).resolve() for value in capsule.get("allowed_write_paths", [])]
-    forbidden_paths = [Path(str(value)).resolve() for value in capsule.get("forbidden_write_paths", [])]
-    workspace = Path(str(capsule.get("workspace_root_abs", "")))
+    allowed_paths = [_contract_path(value).resolve() for value in capsule.get("allowed_write_paths", [])]
+    forbidden_paths = [_contract_path(value).resolve() for value in capsule.get("forbidden_write_paths", [])]
+    workspace = _contract_path(capsule.get("workspace_root_abs", ""))
     if (
         len(allowed_paths) != 1
         or not workspace.is_absolute()
@@ -585,6 +8269,172 @@ def _check_artifact_hashes(root: Path) -> list[dict[str, Any]]:
     return findings
 
 
+def _check_source_authority_normalization_contract(
+    frozen_ir: Mapping[str, Any],
+    source_manifest: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Factory Oracle for frozen-to-portable source authority semantics."""
+
+    findings: list[dict[str, Any]] = []
+    authority_normalization = {
+        "NORMATIVE_USER_SELECTED": "HUMAN_APPROVED",
+        "HUMAN_PROVIDED_SUPPLEMENT": "HUMAN_PROVIDED",
+        "HUMAN_AUTHORIZED_AUTHORING_PROPOSAL": "HUMAN_APPROVED",
+        "HUMAN_VIA_CODEX_CHAT_REVIEW_EVIDENCE": "HUMAN_VIA_CODEX_CHAT",
+    }
+    canonical_authorities = {
+        "HUMAN_APPROVED",
+        "HUMAN_PROVIDED",
+        "HUMAN_VIA_CODEX_CHAT",
+        "LOCKED_SPECIFICATION",
+    }
+    declared_items = frozen_ir.get("sources")
+    compiled_items = source_manifest.get("sources")
+    if not isinstance(declared_items, list) or not isinstance(compiled_items, list):
+        return [
+            _finding(
+                "SOURCE_AUTHORITY_NORMALIZATION_CONTRACT_INVALID",
+                "source declarations or compiled manifest are not lists",
+            )
+        ]
+    declared = {
+        str(item.get("source_id")): item
+        for item in declared_items
+        if isinstance(item, Mapping) and item.get("source_id")
+    }
+    compiled = {
+        str(item.get("source_id")): item
+        for item in compiled_items
+        if isinstance(item, Mapping) and item.get("source_id")
+    }
+    if (
+        len(declared) != len(declared_items)
+        or len(compiled) != len(compiled_items)
+        or set(declared) != set(compiled)
+    ):
+        findings.append(
+            _finding(
+                "SOURCE_AUTHORITY_NORMALIZATION_CONTRACT_INVALID",
+                "frozen and compiled source identity sets differ",
+            )
+        )
+    for source_id in sorted(set(declared) & set(compiled)):
+        raw = declared[source_id]
+        materialized = compiled[source_id]
+        declared_authority = raw.get("authority_level")
+        canonical = authority_normalization.get(
+            declared_authority, declared_authority
+        )
+        expected_declared = (
+            declared_authority if canonical != declared_authority else None
+        )
+        if canonical not in canonical_authorities or (
+            materialized.get("authority_level") != canonical
+            or materialized.get("declared_authority_level") != expected_declared
+            or materialized.get("sha256") != raw.get("sha256")
+            or materialized.get("copy_policy")
+            != (raw.get("copy_policy") or "REFERENCE_ONLY")
+            or materialized.get("loaded_completely")
+            is not bool(raw.get("loaded_completely", True))
+        ):
+            findings.append(
+                _finding(
+                    "SOURCE_AUTHORITY_NORMALIZATION_CONTRACT_INVALID",
+                    source_id,
+                )
+            )
+    target = frozen_ir.get("target")
+    remediation = (
+        target.get("v0_21_generation_failure_remediation")
+        if isinstance(target, Mapping)
+        else None
+    )
+    if isinstance(remediation, Mapping):
+        contract = remediation.get("authority_normalization_contract")
+        failure = remediation.get("failure")
+        source_id = failure.get("source_id") if isinstance(failure, Mapping) else None
+        source = compiled.get(str(source_id))
+        if (
+            not isinstance(contract, Mapping)
+            or not isinstance(source, Mapping)
+            or source.get("authority_level")
+            != contract.get("portable_authority_level")
+            or source.get("declared_authority_level")
+            != contract.get("declared_authority_level")
+            or contract.get("declared_authority_level_preserved") is not True
+            or contract.get("source_payload_hash_and_copy_policy_unchanged")
+            is not True
+            or contract.get("unknown_authority_behavior") != "FAIL_CLOSED"
+        ):
+            findings.append(
+                _finding(
+                    "SOURCE_AUTHORITY_NORMALIZATION_CONTRACT_INVALID",
+                    "v0.21 generation remediation is not materialized",
+                )
+            )
+    return findings
+
+
+def _factory_release_history_entries(
+    requirement_ir: Mapping[str, Any],
+) -> list[dict[str, Any]] | None:
+    """Factory Oracle projection, intentionally separate from Producer code."""
+
+    target = requirement_ir.get("target")
+    if not isinstance(target, Mapping):
+        return None
+    entries: list[dict[str, Any]] = []
+    for key in sorted(target):
+        value = target[key]
+        if not isinstance(value, Mapping) or value.get(
+            "replacement_identity_cross_check_required"
+        ) is not True:
+            continue
+        epochs = value.get("active_epochs")
+        successor = value.get("successor_binding")
+        if not isinstance(epochs, Mapping) or not isinstance(successor, Mapping):
+            return None
+        entries.append(
+            {
+                "requirement_key": str(key),
+                "closure_requirement_epoch": epochs.get("requirement_epoch"),
+                "superseded_candidate": value.get("superseded_candidate"),
+                "replacement_candidate": value.get("replacement_candidate"),
+                "successor_candidate_version": successor.get("candidate_version"),
+            }
+        )
+    return sorted(
+        entries,
+        key=lambda item: (
+            item.get("closure_requirement_epoch", -1),
+            item.get("requirement_key", ""),
+        ),
+    )
+
+
+def _check_external_release_history_authority(
+    authoritative_requirement_ir: Mapping[str, Any],
+    candidate_requirement_ir: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    authoritative = _factory_release_history_entries(authoritative_requirement_ir)
+    candidate = _factory_release_history_entries(candidate_requirement_ir)
+    if authoritative is None or candidate is None:
+        return [
+            _finding(
+                "RELEASE_HISTORY_AUTHORITY_INVALID",
+                "authoritative or Candidate Requirement history is malformed",
+            )
+        ]
+    if authoritative != candidate:
+        return [
+            _finding(
+                "RELEASE_HISTORY_AUTHORITY_MISMATCH",
+                "Candidate successor history differs from Factory Event Store Requirement history",
+            )
+        ]
+    return []
+
+
 def _check_sources_atoms_coverage(root: Path) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
     sources = _read_json(root / "canonical_sources/SOURCE_MANIFEST.json", findings)
@@ -598,6 +8448,10 @@ def _check_sources_atoms_coverage(root: Path) -> list[dict[str, Any]]:
     )
     if not all(isinstance(item, dict) for item in (sources, catalog, matrix)):
         return findings
+    if isinstance(frozen_ir, Mapping):
+        findings.extend(
+            _check_source_authority_normalization_contract(frozen_ir, sources)
+        )
     source_items = sources.get("sources", [])
     source_id_list = [item.get("source_id") for item in source_items if isinstance(item, dict)]
     source_ids = set(source_id_list)
@@ -882,6 +8736,7 @@ def _check_sources_atoms_coverage(root: Path) -> list[dict[str, Any]]:
 
 def _check_phase_and_release(root: Path) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
+    epoch38_local = _is_epoch38_local_profile(root)
     phase = _read_json(root / "PHASE_DEPENDENCY_MANIFEST.json", findings)
     release = _read_json(root / "RELEASE_PIPELINE_MANIFEST.json", findings)
     engineering = _read_json(root / "ENGINEERING_PROJECT_DAG.json", findings)
@@ -955,6 +8810,13 @@ def _check_phase_and_release(root: Path) -> list[dict[str, Any]]:
             "P3_BUILD_LOCK_OR_APPROVED_NA_LOCK_VALID",
             "C3_CHECKPOINT_PASS",
         }
+        if epoch38_local:
+            produced.update(
+                {
+                    "OFFICIAL_CORE_VALIDATION_PASS",
+                    "CORE_EVIDENCE_PROJECTION_PASS",
+                }
+            )
         previous_step_id: str | None = None
         previous_outputs: list[str] = []
         candidate_root, execution_root, _context = _context_roots(root, findings)
@@ -973,12 +8835,36 @@ def _check_phase_and_release(root: Path) -> list[dict[str, Any]]:
                 if index == 0
                 else previous_outputs
             )
+            route_selected = bool(
+                epoch38_local and step.get("default_route_selected") is True
+            )
+            if route_selected:
+                expected_requires = list(EPOCH38_LOCAL_RELEASE_REQUIRES)
             if step.get("step_id") == "REAL_TARGET_INSTALL":
                 expected_requires = [
                     "P4_CERTIFIED_RELEASE_LOCK_VALID",
                     "REAL_TARGET_INSTALL_AUTHORIZATION_GRANTED",
                 ]
             next_step = ids[index + 1] if index + 1 < len(ids) else None
+            expected_predecessor_step_ids = (
+                list(step.get("default_route_predecessor_step_ids") or [])
+                if route_selected
+                else ([previous_step_id] if previous_step_id else [])
+            )
+            expected_next_step_ids = (
+                list(step.get("default_route_next_step_ids") or [])
+                if route_selected
+                else ([next_step] if next_step else [])
+            )
+            expected_tool_distribution = (
+                EPOCH38_LOCAL_TOOL_DISTRIBUTION_REQUIREMENT
+                if route_selected
+                else {
+                    "lab_distribution_hash": None,
+                    "linkage_distribution_hash": None,
+                    "status": "PLANNED_NOT_AVAILABLE_UNTIL_TOOL_RELEASE",
+                }
+            )
             read_paths = step.get("allowed_read_paths", [])
             write_paths = [
                 *step.get("allowed_write_paths", []),
@@ -999,9 +8885,9 @@ def _check_phase_and_release(root: Path) -> list[dict[str, Any]]:
                 or step.get("project_workpack_id")
                 != RELEASE_WORKPACK_BINDINGS.get(str(step.get("step_id")))
                 or step.get("required_predecessor_step_ids")
-                != ([previous_step_id] if previous_step_id else [])
+                != expected_predecessor_step_ids
                 or step.get("allowed_next_step_ids")
-                != ([next_step] if next_step else [])
+                != expected_next_step_ids
                 or set(step.get("required_lock_refs", []))
                 != {"CHARTER_LOCK.json", "PROFILE_LOCK.json"}
                 or step.get("required_input_hashes")
@@ -1010,22 +8896,18 @@ def _check_phase_and_release(root: Path) -> list[dict[str, Any]]:
                     "profile_lock_hash": release.get("profile_lock_hash"),
                 }
                 or step.get("required_tool_distribution_hashes")
-                != {
-                    "lab_distribution_hash": None,
-                    "linkage_distribution_hash": None,
-                    "status": "PLANNED_NOT_AVAILABLE_UNTIL_TOOL_RELEASE",
-                }
+                != expected_tool_distribution
                 or not step.get("environment_id")
                 or not step.get("failure_return_step_id")
                 or len(step.get("invalidates_on", [])) < 4
                 or any(
-                    not Path(str(value)).is_absolute()
-                    or not Path(str(value)).is_relative_to(candidate_root)
+                    not _contract_path(value).is_absolute()
+                    or not _contract_path(value).is_relative_to(candidate_root)
                     for value in read_paths
                 )
                 or any(
-                    not Path(str(value)).is_absolute()
-                    or not Path(str(value)).is_relative_to(execution_root)
+                    not _contract_path(value).is_absolute()
+                    or not _contract_path(value).is_relative_to(execution_root)
                     for value in write_paths
                 )
             ):
@@ -1099,8 +8981,183 @@ def _check_phase_and_release(root: Path) -> list[dict[str, Any]]:
     return findings
 
 
+def _check_semantic_production_contracts(root: Path) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    frozen_ir = _read_json(
+        root / "canonical_sources/FROZEN_REQUIREMENT_IR.json", findings
+    )
+    if not isinstance(frozen_ir, dict) or not explicit_production_enabled(frozen_ir):
+        return findings
+    findings.extend(validate_explicit_production_contracts(frozen_ir))
+    manifest_path = root / "canonical_sources/ARTIFACT_OBLIGATION_MANIFEST.json"
+    manifest = _read_json(manifest_path, findings)
+    catalog_path = root / "canonical_sources/NORMATIVE_ATOM_CATALOG.json"
+    coverage_path = root / "canonical_sources/ATOM_COVERAGE_MATRIX.json"
+    catalog = _read_json(catalog_path, findings)
+    coverage = _read_json(coverage_path, findings)
+    provenance = _read_json(root / "FACTORY_PROVENANCE.json", findings)
+    if not all(
+        isinstance(item, dict)
+        for item in (manifest, catalog, coverage, provenance)
+    ):
+        return findings
+    expected_manifest = build_artifact_obligation_manifest(
+        frozen_ir,
+        target_id=str(frozen_ir.get("target", {}).get("id")),
+        program_id=str(frozen_ir.get("program_id")),
+        requirement_ir_sha256=str(provenance.get("requirement_ir_sha256")),
+        atom_catalog_sha256=_file_hash(catalog_path),
+        coverage_matrix_sha256=_file_hash(coverage_path),
+    )
+    if manifest != expected_manifest:
+        findings.append(
+            _finding(
+                "ARTIFACT_OBLIGATION_MANIFEST_MISMATCH",
+                "compiled manifest does not equal the frozen Atom production contracts",
+            )
+        )
+        return findings
+    catalog_atoms = {
+        str(item.get("atom_id")): item
+        for item in catalog.get("atoms", [])
+        if isinstance(item, dict) and item.get("atom_id")
+    }
+    for atom in frozen_ir.get("atoms", []):
+        if not isinstance(atom, dict) or not atom.get("atom_id"):
+            continue
+        if catalog_atoms.get(str(atom["atom_id"]), {}).get(
+            "production_contract"
+        ) != atom.get("production_contract"):
+            findings.append(
+                _finding(
+                    "ATOM_PRODUCTION_CONTRACT_CATALOG_MISMATCH",
+                    str(atom["atom_id"]),
+                )
+            )
+    for project_id, directory in PROJECTS:
+        project_root = root / "project_start_packages" / directory
+        index = _read_json(project_root / "WORKPACK_INDEX.json", findings)
+        if not isinstance(index, dict):
+            continue
+        for workpack in index.get("workpacks", []):
+            if not isinstance(workpack, dict) or not workpack.get("workpack_id"):
+                continue
+            workpack_id = str(workpack["workpack_id"])
+            expected_bundle = task_bundle_for_workpack(
+                manifest,
+                workpack_id=workpack_id,
+                project_id=project_id,
+                program_id=str(frozen_ir.get("program_id")),
+                target_id=str(frozen_ir.get("target", {}).get("id")),
+            )
+            if expected_bundle is None:
+                if workpack.get("intent_atom_ids"):
+                    findings.append(
+                        _finding(
+                            "ROUTED_WORKPACK_TASK_BUNDLE_MISSING",
+                            workpack_id,
+                        )
+                    )
+                continue
+            bundle_ref = f"task_bundles/{workpack_id}.task_bundle.json"
+            bundle_path = project_root / bundle_ref
+            bundle = _read_json(bundle_path, findings)
+            if bundle != expected_bundle:
+                findings.append(
+                    _finding("TASK_BUNDLE_CONTENT_MISMATCH", workpack_id)
+                )
+                continue
+            bundle_hash = _file_hash(bundle_path)
+            required_ids = expected_bundle["required_artifact_ids"]
+            required_refs = expected_bundle["required_artifact_refs"]
+            contract_ids = expected_bundle["production_contract_ids"]
+            common_expected = {
+                "semantic_hydration_complete": True,
+                "task_bundle_ref": bundle_ref,
+                "task_bundle_sha256": bundle_hash,
+                "artifact_obligation_manifest_ref": ARTIFACT_MANIFEST_REF,
+                "artifact_obligation_manifest_sha256": manifest[
+                    "manifest_sha256"
+                ],
+                "production_contract_ids": contract_ids,
+            }
+            if any(workpack.get(key) != value for key, value in common_expected.items()):
+                findings.append(
+                    _finding("WORKPACK_TASK_BUNDLE_BINDING_INVALID", workpack_id)
+                )
+            if (
+                workpack.get("semantic_contract_status") != "FROZEN"
+                or workpack.get("required_artifact_ids") != required_ids
+                or workpack.get("required_artifact_refs") != required_refs
+                or workpack.get("success_rule") != expected_bundle["completion_rule"]
+            ):
+                findings.append(
+                    _finding("WORKPACK_ARTIFACT_OBLIGATIONS_INVALID", workpack_id)
+                )
+            commands = _read_json(
+                project_root / str(workpack.get("command_manifest_ref")), findings
+            )
+            capsule = _read_json(
+                project_root / str(workpack.get("capsule_ref")), findings
+            )
+            result = _read_json(
+                project_root / str(workpack.get("result_ref")), findings
+            )
+            if not all(isinstance(item, dict) for item in (commands, capsule, result)):
+                continue
+            command_expected = {
+                "semantic_task_bundle_ref": bundle_ref,
+                "semantic_task_bundle_sha256": bundle_hash,
+                "artifact_obligation_manifest_ref": ARTIFACT_MANIFEST_REF,
+                "artifact_obligation_manifest_sha256": manifest[
+                    "manifest_sha256"
+                ],
+                "required_artifact_ids": required_ids,
+                "required_artifact_refs": required_refs,
+            }
+            if any(commands.get(key) != value for key, value in command_expected.items()):
+                findings.append(
+                    _finding("COMMAND_TASK_BUNDLE_BINDING_INVALID", workpack_id)
+                )
+            if any(capsule.get(key) != value for key, value in common_expected.items()) or (
+                capsule.get("required_artifact_ids") != required_ids
+                or capsule.get("required_artifact_refs") != required_refs
+                or capsule.get("hydration_complete") is not False
+            ):
+                findings.append(
+                    _finding("CAPSULE_TASK_BUNDLE_BINDING_INVALID", workpack_id)
+                )
+            if any(result.get(key) != value for key, value in common_expected.items()) or (
+                result.get("expected_artifact_ids") != required_ids
+                or result.get("expected_artifact_refs") != required_refs
+            ):
+                findings.append(
+                    _finding("RESULT_TASK_BUNDLE_BINDING_INVALID", workpack_id)
+                )
+            markdown_ref = workpack.get("workpack_ref")
+            markdown_path = project_root / str(markdown_ref)
+            try:
+                markdown = markdown_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeError) as exc:
+                findings.append(_finding("WORKPACK_DOCUMENT_INVALID", str(exc)))
+                continue
+            missing_ids = [value for value in required_ids if value not in markdown]
+            if missing_ids:
+                findings.append(
+                    _finding(
+                        "WORKPACK_ARTIFACT_DOCUMENTATION_INCOMPLETE",
+                        f"{workpack_id}:{missing_ids}",
+                    )
+                )
+    return findings
+
+
 def _check_three_projects(root: Path) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
+    epoch38_local = _is_epoch38_local_profile(root)
+    expected_root_requires, _expected_root_sources = (
+        _effective_root_materialization_contract(root)
+    )
     candidate_root, execution_root, context = _context_roots(root, findings)
     manifest = _read_json(root / "THREE_PROJECT_PROGRAM_MANIFEST.json", findings)
     dag = _read_json(root / "ENGINEERING_PROJECT_DAG.json", findings)
@@ -1128,6 +9185,7 @@ def _check_three_projects(root: Path) -> list[dict[str, Any]]:
     }
     project_workpack_ids: list[str] = []
     workpack_owner: dict[str, str] = {}
+    project_workpack_write_paths: dict[str, list[str]] = {}
     project_indexes: dict[str, dict[str, Any]] = {}
     for project_id, directory in PROJECTS:
         index = _read_json(
@@ -1163,6 +9221,13 @@ def _check_three_projects(root: Path) -> list[dict[str, Any]]:
                     _finding("PROJECT_WORKPACK_ID_NOT_UNIQUE", workpack_id)
                 )
             workpack_owner[workpack_id] = project_id
+            declared_write_paths = item.get("allowed_write_paths")
+            if isinstance(declared_write_paths, list) and all(
+                isinstance(value, str) for value in declared_write_paths
+            ):
+                project_workpack_write_paths[workpack_id] = list(
+                    declared_write_paths
+                )
             expected_dag_node = expected_dag_by_workpack.get(workpack_id)
             expected_release_step = expected_release_by_workpack.get(workpack_id)
             expected_surface = (
@@ -1198,7 +9263,7 @@ def _check_three_projects(root: Path) -> list[dict[str, Any]]:
                 continue
             if item.get("status") != "PLANNED_NOT_STARTED":
                 findings.append(_finding("PROJECT_NOT_PLANNED_STOPPED", str(item.get("project_id"))))
-            root_abs = Path(str(item.get("root_abs", "")))
+            root_abs = _contract_path(item.get("root_abs", ""))
             if not root_abs.is_absolute() or not root_abs.is_relative_to(execution_root):
                 findings.append(_finding("PROJECT_ROOT_INVALID", str(root_abs)))
     if isinstance(dag, dict):
@@ -1217,7 +9282,13 @@ def _check_three_projects(root: Path) -> list[dict[str, Any]]:
             if isinstance(item, dict)
         }
         for predecessor, successor in zip(ENGINEERING_NODE_ORDER, ENGINEERING_NODE_ORDER[1:]):
-            if predecessor not in node_by_id.get(successor, {}).get("requires", []):
+            successor_node = node_by_id.get(successor, {})
+            if (
+                epoch38_local
+                and successor_node.get("default_route_selected") is True
+            ):
+                continue
+            if predecessor not in successor_node.get("requires", []):
                 findings.append(
                     _finding("ENGINEERING_DAG_PREDECESSOR_MISSING", successor)
                 )
@@ -1228,6 +9299,28 @@ def _check_three_projects(root: Path) -> list[dict[str, Any]]:
                 ENGINEERING_NODE_ORDER[index + 1]
                 if index + 1 < len(ENGINEERING_NODE_ORDER)
                 else None
+            )
+            route_selected = bool(
+                epoch38_local and node.get("default_route_selected") is True
+            )
+            expected_predecessors = (
+                list(node.get("default_route_predecessor_node_ids") or [])
+                if route_selected
+                else ([predecessor] if predecessor else [])
+            )
+            expected_successors = (
+                list(node.get("default_route_next_node_ids") or [])
+                if route_selected
+                else ([successor] if successor else [])
+            )
+            expected_tool_distribution = (
+                EPOCH38_LOCAL_TOOL_DISTRIBUTION_REQUIREMENT
+                if route_selected
+                else {
+                    "lab_distribution_hash": None,
+                    "linkage_distribution_hash": None,
+                    "status": "PLANNED_NOT_AVAILABLE_UNTIL_TOOL_RELEASE",
+                }
             )
             expected_workpack_id = (
                 root_workpack_id
@@ -1287,8 +9380,19 @@ def _check_three_projects(root: Path) -> list[dict[str, Any]]:
                 )
             )
             if node_id == "MAIN_EXECUTION_PACKAGE_MATERIALIZED":
-                expected_workpack_requires = list(ROOT_MATERIALIZATION_REQUIRES)
+                expected_workpack_requires = expected_root_requires
                 expected_workpack_produces = list(ROOT_MATERIALIZATION_PRODUCES)
+            if node_id in {
+                "MAIN_EXECUTION_PACKAGE_MATERIALIZED",
+                "MAIN_EXECUTION_PACKAGE_VALIDATED",
+            } and (
+                node.get("validation_scope") != ROOT_LAYER_VALIDATION_SCOPE
+                or node.get("behavioral_atom_acceptance")
+                != ROOT_LAYER_BEHAVIORAL_ATOM_POLICY
+            ):
+                findings.append(
+                    _finding("ROOT_LAYER_VALIDATION_SCOPE_INVALID", node_id)
+                )
             expected_sequence_edges = [
                 {
                     "from_workpack_id": left,
@@ -1305,6 +9409,9 @@ def _check_three_projects(root: Path) -> list[dict[str, Any]]:
                 for left, right in zip(expected_sequence, expected_sequence[1:])
             ]
             special_capabilities = {
+                "START_PACKAGE_HUMAN_APPROVAL": (
+                    ("PROFILE_LOCK_VALID",) if epoch38_local else ()
+                ),
                 "SHARED_CONTROL_BASELINE_LOCK": (
                     "CHARTER_LOCK_VALID",
                     "SHARED_PROTOCOL_LOCK_VALID",
@@ -1367,10 +9474,24 @@ def _check_three_projects(root: Path) -> list[dict[str, Any]]:
                 "human_gate",
             )
             read_paths = node.get("allowed_read_paths", [])
-            write_paths = [
-                *node.get("allowed_write_paths", []),
-                *node.get("success_output_refs", []),
+            allowed_write_paths = node.get("allowed_write_paths", [])
+            success_output_refs = node.get("success_output_refs", [])
+            write_paths = [*allowed_write_paths, *success_output_refs]
+            success_outputs_outside_scope = [
+                output_ref
+                for output_ref in success_output_refs
+                if not any(
+                    _contract_path_is_contained(output_ref, allowed_root)
+                    for allowed_root in allowed_write_paths
+                )
             ]
+            if success_outputs_outside_scope:
+                findings.append(
+                    _finding(
+                        "ENGINEERING_DAG_SUCCESS_OUTPUT_OUTSIDE_ALLOWED_WRITE_PATHS",
+                        f"{node_id}: {success_outputs_outside_scope}",
+                    )
+                )
             action_count = sum(
                 value is not None
                 for value in (node.get("workpack_id"), node.get("pipeline_action_id"))
@@ -1378,8 +9499,9 @@ def _check_three_projects(root: Path) -> list[dict[str, Any]]:
             if (
                 any(field not in node for field in required_fields)
                 or node.get("required_predecessor_nodes")
-                != ([predecessor] if predecessor else [])
-                or node.get("allowed_next_nodes") != ([successor] if successor else [])
+                != expected_predecessors
+                or node.get("requires") != expected_predecessors
+                or node.get("allowed_next_nodes") != expected_successors
                 or set(node.get("required_lock_refs", []))
                 != {"CHARTER_LOCK.json", "PROFILE_LOCK.json"}
                 or node.get("required_input_hashes")
@@ -1388,11 +9510,13 @@ def _check_three_projects(root: Path) -> list[dict[str, Any]]:
                     "profile_lock_hash": dag.get("profile_lock_hash"),
                 }
                 or node.get("required_tool_distribution_hashes")
-                != {
-                    "lab_distribution_hash": None,
-                    "linkage_distribution_hash": None,
-                    "status": "PLANNED_NOT_AVAILABLE_UNTIL_TOOL_RELEASE",
-                }
+                != expected_tool_distribution
+                or (
+                    route_selected
+                    and expected_predecessors
+                    and node.get("failure_return_node")
+                    != expected_predecessors[0]
+                )
                 or action_count != 1
                 or not node.get("environment_id")
                 or not node.get("success_gate")
@@ -1400,13 +9524,13 @@ def _check_three_projects(root: Path) -> list[dict[str, Any]]:
                 or not node.get("failure_return_node")
                 or len(node.get("invalidates_on", [])) < 4
                 or any(
-                    not Path(str(value)).is_absolute()
-                    or not Path(str(value)).is_relative_to(candidate_root)
+                    not _contract_path(value).is_absolute()
+                    or not _contract_path(value).is_relative_to(candidate_root)
                     for value in read_paths
                 )
                 or any(
-                    not Path(str(value)).is_absolute()
-                    or not Path(str(value)).is_relative_to(execution_root)
+                    not _contract_path(value).is_absolute()
+                    or not _contract_path(value).is_relative_to(execution_root)
                     for value in write_paths
                 )
             ):
@@ -1436,6 +9560,79 @@ def _check_three_projects(root: Path) -> list[dict[str, Any]]:
             ):
                 findings.append(
                     _finding("ENGINEERING_WORKPACK_BINDING_INVALID", node_id)
+                )
+            expected_node_write_paths = [
+                _contract_serialized_path(
+                    execution_root,
+                    f"evidence/engineering_dag/{node_id}",
+                )
+            ]
+            if (
+                node_id in DAG_WORKPACK_SEQUENCE_BINDINGS
+                or node_id == "MAIN_EXECUTION_PACKAGE_MATERIALIZED"
+                or node_id in DAG_WORKPACK_BINDINGS
+                and node_id.startswith("MAIN_")
+            ):
+                expected_node_write_paths.append(
+                    _contract_serialized_path(
+                        execution_root,
+                        "project_start_packages/main_build/repository"
+                        if node_id == "MAIN_EXECUTION_PACKAGE_MATERIALIZED"
+                        else (
+                            "project_start_packages/"
+                            f"{expected_project_directory}/repository"
+                        ),
+                    )
+                )
+            for workpack_id in expected_project_bound_workpacks:
+                expected_workpack_write_paths = [
+                    _contract_serialized_path(
+                        execution_root,
+                        "evidence/project_workpacks/"
+                        f"{node.get('project_id')}/{workpack_id}",
+                    )
+                ]
+                if any(
+                    command_id.endswith("CODEX-CODING")
+                    for command_id in PROJECT_WORKPACK_CONTRACTS[workpack_id][
+                        "command_ids"
+                    ]
+                ):
+                    expected_workpack_write_paths.append(
+                        _contract_serialized_path(
+                            execution_root,
+                            "project_start_packages/"
+                            f"{expected_project_directory}/repository",
+                        )
+                    )
+                if (
+                    project_workpack_write_paths.get(workpack_id)
+                    != expected_workpack_write_paths
+                    or any(
+                        value not in node.get("allowed_write_paths", [])
+                        for value in expected_workpack_write_paths
+                    )
+                ):
+                    findings.append(
+                        _finding(
+                            "ENGINEERING_WORKPACK_WRITE_ROOT_PROJECTION_INVALID",
+                            f"{node_id}:{workpack_id}",
+                        )
+                    )
+                for value in expected_workpack_write_paths:
+                    if value not in expected_node_write_paths:
+                        expected_node_write_paths.append(value)
+            actual_node_write_paths = node.get("allowed_write_paths", [])
+            if (
+                not isinstance(actual_node_write_paths, list)
+                or len(actual_node_write_paths) != len(expected_node_write_paths)
+                or set(actual_node_write_paths) != set(expected_node_write_paths)
+            ):
+                findings.append(
+                    _finding(
+                        "ENGINEERING_NODE_WRITE_ROOT_SET_INVALID",
+                        node_id,
+                    )
                 )
             for workpack_id in [
                 *([str(node.get("workpack_id"))] if node.get("workpack_id") else []),
@@ -1467,9 +9664,9 @@ def _check_three_projects(root: Path) -> list[dict[str, Any]]:
                     if value.startswith("MAIN_")
                 ),
             }:
-                main_repository = str(
-                    execution_root
-                    / "project_start_packages/main_build/repository"
+                main_repository = _contract_serialized_path(
+                    execution_root,
+                    "project_start_packages/main_build/repository",
                 )
                 if main_repository not in node.get("allowed_write_paths", []):
                     findings.append(
@@ -1482,9 +9679,9 @@ def _check_three_projects(root: Path) -> list[dict[str, Any]]:
                 or node.get("workpack_id") is not None
                 or node.get("project_workpack_sequence") != []
                 or node.get("pipeline_action_id") != node_id
-                or str(
-                    execution_root
-                    / "project_start_packages/main_build/repository"
+                or _contract_serialized_path(
+                    execution_root,
+                    "project_start_packages/main_build/repository",
                 )
                 in node.get("allowed_write_paths", [])
             ):
@@ -1495,19 +9692,30 @@ def _check_three_projects(root: Path) -> list[dict[str, Any]]:
                 branches = node.get("conditional_branches", {})
                 implementation = branches.get("IMPLEMENT", {})
                 not_applicable = branches.get("APPROVED_NOT_APPLICABLE", {})
-                main_repository = str(
-                    execution_root
-                    / "project_start_packages/main_build/repository"
+                main_repository = _contract_serialized_path(
+                    execution_root,
+                    "project_start_packages/main_build/repository",
                 )
+                expected_implementation_write_paths = (
+                    project_workpack_write_paths.get("MB-P3", [])
+                )
+                expected_not_applicable_write_paths = [
+                    _contract_serialized_path(
+                        execution_root,
+                        f"evidence/engineering_dag/{node_id}",
+                    )
+                ]
                 if (
                     implementation.get("workpack_id") != "MB-P3"
                     or main_repository
                     not in implementation.get("allowed_write_paths", [])
+                    or implementation.get("allowed_write_paths")
+                    != expected_implementation_write_paths
                     or not_applicable.get("pipeline_action_id")
                     != "P3_NOT_APPLICABLE_LOCK"
                     or not_applicable.get("human_decision_required") is not True
-                    or main_repository
-                    in not_applicable.get("allowed_write_paths", [])
+                    or not_applicable.get("allowed_write_paths")
+                    != expected_not_applicable_write_paths
                 ):
                     findings.append(
                         _finding("P3_CONDITIONAL_BRANCH_INVALID", node_id)
@@ -1563,7 +9771,7 @@ def _check_three_projects(root: Path) -> list[dict[str, Any]]:
                 else None
             )
             expected_contract = (
-                PROJECT_WORKPACK_CONTRACTS[expected_workpack_id]
+                _effective_project_workpack_contract(root, expected_workpack_id)
                 if expected_workpack_id
                 else None
             )
@@ -1665,7 +9873,7 @@ def _check_three_projects(root: Path) -> list[dict[str, Any]]:
             if commands.get("default_disposition") != "DECLARE_ONLY":
                 findings.append(_finding("PROJECT_COMMANDS_NOT_DECLARE_ONLY", directory))
             for command in commands.get("commands", []):
-                executable = Path(str(command.get("executable", ""))) if isinstance(command, dict) else Path("")
+                executable = _contract_path(command.get("executable", "")) if isinstance(command, dict) else Path("")
                 if (
                     not executable.is_absolute()
                     or not executable.is_relative_to(execution_root)
@@ -1685,6 +9893,11 @@ def _check_project_workpack_execution_contracts(
     release: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
+    epoch38_profile = (
+        _read_json(root / "EPOCH38_GENERATION_PROFILE.json", findings)
+        if _is_epoch38_local_profile(root)
+        else {}
+    )
     coverage_matrix = _read_json(
         root / "canonical_sources/ATOM_COVERAGE_MATRIX.json", findings
     )
@@ -1755,12 +9968,12 @@ def _check_project_workpack_execution_contracts(
                 continue
             command_id = str(command["command_id"])
             commands_by_id[command_id] = command
-            executable = Path(
-                str(command.get("executable_abs") or command.get("executable") or "")
+            executable = _contract_path(
+                command.get("executable_abs") or command.get("executable") or ""
             )
-            cwd = Path(str(command.get("cwd_absolute") or ""))
+            cwd = _contract_path(command.get("cwd_absolute") or "")
             allowed_write_roots = [
-                Path(str(value))
+                _contract_path(value)
                 for value in command.get("allowed_write_roots", [])
             ]
             if (
@@ -1789,7 +10002,7 @@ def _check_project_workpack_execution_contracts(
             if not isinstance(item, dict) or not item.get("workpack_id"):
                 continue
             workpack_id = str(item["workpack_id"])
-            contract = PROJECT_WORKPACK_CONTRACTS.get(workpack_id)
+            contract = _effective_project_workpack_contract(root, workpack_id)
             if not contract or contract.get("project_id") != project_id:
                 findings.append(
                     _finding(
@@ -1824,8 +10037,11 @@ def _check_project_workpack_execution_contracts(
                 or any(item.get(key) != value for key, value in expected_refs.items())
                 or item.get("execution_authorization_ref") is not None
                 or item.get("auto_start") is not False
-                or item.get("success_rule")
-                != "ALL_REQUIRED_COMMANDS_AND_CAPABILITIES_VALID"
+                or (
+                    item.get("semantic_hydration_complete") is not True
+                    and item.get("success_rule")
+                    != "ALL_REQUIRED_COMMANDS_AND_CAPABILITIES_VALID"
+                )
                 or not item.get("failure_return_node")
             ):
                 findings.append(
@@ -1899,11 +10115,34 @@ def _check_project_workpack_execution_contracts(
                     )
                 )
             allowed_read_paths = [
-                Path(str(value)) for value in item.get("allowed_read_paths", [])
+                _contract_path(value) for value in item.get("allowed_read_paths", [])
             ]
             allowed_write_paths = [
-                Path(str(value)) for value in item.get("allowed_write_paths", [])
+                _contract_path(value) for value in item.get("allowed_write_paths", [])
             ]
+            expected_allowed_write_paths = [
+                _contract_serialized_path(
+                    execution_root,
+                    f"evidence/project_workpacks/{project_id}/{workpack_id}",
+                )
+            ]
+            if any(
+                command_id.endswith("CODEX-CODING")
+                for command_id in contract["command_ids"]
+            ):
+                expected_allowed_write_paths.append(
+                    _contract_serialized_path(
+                        execution_root,
+                        f"project_start_packages/{directory}/repository",
+                    )
+                )
+            if item.get("allowed_write_paths") != expected_allowed_write_paths:
+                findings.append(
+                    _finding(
+                        "PROJECT_WORKPACK_WRITE_ROOT_CONTRACT_INVALID",
+                        f"{directory}:{workpack_id}",
+                    )
+                )
             if (
                 not allowed_read_paths
                 or not allowed_write_paths
@@ -2027,6 +10266,25 @@ def _check_project_workpack_execution_contracts(
                         and release_positions.get(source_id, -1)
                         < release_positions.get(target_control_id, -1)
                     )
+                elif source_kind == "EPOCH38_GENERATION_PROFILE":
+                    expected_source_ids = {
+                        "OFFICIAL_CORE_VALIDATION_PASS": (
+                            "core_validation_sha256"
+                        ),
+                        "CORE_EVIDENCE_PROJECTION_PASS": (
+                            "core_evidence_projection_sha256"
+                        ),
+                    }
+                    bindings = (
+                        epoch38_profile.get("bindings", {})
+                        if isinstance(epoch38_profile, Mapping)
+                        else {}
+                    )
+                    source_valid = bool(
+                        source_valid
+                        and expected_source_ids.get(capability) == source_id
+                        and SHA256_RE.fullmatch(str(bindings.get(source_id) or ""))
+                    )
                 else:
                     source_valid = False
                 if not source_valid:
@@ -2086,14 +10344,17 @@ def _check_authoring_boundary(root: Path) -> list[dict[str, Any]]:
             if not isinstance(command, dict):
                 continue
             executable = command.get("executable_abs", command.get("executable"))
-            executable_path = Path(str(executable)) if executable else Path("")
+            executable_path = _contract_path(executable) if executable else Path("")
             argv = command.get("argv")
             cwd = command.get("cwd_abs") or command.get("cwd_absolute")
-            cwd_path = Path(str(cwd)) if cwd else Path("")
+            cwd_path = _contract_path(cwd) if cwd else Path("")
             authorized_materialization = (
                 executable_path.exists()
                 and (
-                    _authorized_driver_materialization_precondition(
+                    _authorized_materialized_executable_provenance(
+                        root, execution_root, executable_path, command
+                    )
+                    or _authorized_driver_materialization_precondition(
                         root, execution_root, executable_path, command
                     )
                     or _authorized_driver_materialization(
@@ -2115,6 +10376,15 @@ def _check_authoring_boundary(root: Path) -> list[dict[str, Any]]:
                         root, execution_root, executable_path, command
                     )
                     or _authorized_linkage_tool_release_materialization(
+                        root, execution_root, executable_path, command
+                    )
+                    or _authorized_p4_build_input_lock_success_stale_runtime_blocker(
+                        root, execution_root, executable_path, command
+                    )
+                    or _authorized_p4_build_input_lock_output_directory_failure(
+                        root, execution_root, executable_path, command
+                    )
+                    or _authorized_release_pipeline_handoff_entry_preflight_failure(
                         root, execution_root, executable_path, command
                     )
                     or _authorized_release_pipeline_handoff_preparation(
@@ -2188,13 +10458,21 @@ def _check_authoring_boundary(root: Path) -> list[dict[str, Any]]:
                     )
                 )
             )
-            if (
+            executable_path_invalid = (
                 not executable
                 or not executable_path.is_absolute()
                 or not executable_path.is_relative_to(execution_root)
-                or (executable_path.exists() and not authorized_materialization)
-            ):
+                or executable_path.is_symlink()
+            )
+            if executable_path_invalid:
                 findings.append(_finding("COMMAND_EXECUTABLE_NOT_ABSOLUTE", f"{path.name}:{command.get('command_id')}"))
+            elif executable_path.exists() and not authorized_materialization:
+                findings.append(
+                    _finding(
+                        "COMMAND_EXECUTABLE_MATERIALIZATION_UNVERIFIED",
+                        f"{path.name}:{command.get('command_id')}",
+                    )
+                )
             if command.get("command_kind") == "PLANNED_EXECUTOR_INTERFACE":
                 command_plan_invalid = (
                     argv is not None
@@ -2213,7 +10491,7 @@ def _check_authoring_boundary(root: Path) -> list[dict[str, Any]]:
                 command_plan_invalid = (
                     not isinstance(argv, list)
                     or not argv
-                    or argv[0] != str(executable_path)
+                    or argv[0] != str(executable)
                     or not cwd_path.is_absolute()
                     or not cwd_path.is_relative_to(execution_root)
                     or command.get("executable_status")
@@ -2231,6 +10509,164 @@ def _check_authoring_boundary(root: Path) -> list[dict[str, Any]]:
             if command.get("auto_execute") is True or command.get("authorization_ref") is not None:
                 findings.append(_finding("COMMAND_AUTO_EXECUTION_FORBIDDEN", f"{path.name}:{command.get('command_id')}"))
     return findings
+
+
+def _authorized_materialized_executable_provenance(
+    candidate_root: Path,
+    execution_root: Path,
+    executable_path: Path,
+    command: Mapping[str, Any],
+) -> bool:
+    """Accept a Codex launcher through a monotonic, Hash-bound provenance chain.
+
+    A materialized launcher remains valid after the control plane advances beyond
+    the phase that created it.  The proof therefore binds immutable repair
+    authorization, descriptor, attestation, and receipt objects instead of
+    enumerating a transient runtime phase.
+    """
+
+    if command.get("executor_role") != "CODEX_CODING_AGENT":
+        return False
+    expected_launcher = execution_root / "planned_executors/bin/codex"
+    try:
+        if (
+            executable_path.resolve() != expected_launcher.resolve()
+            or executable_path.is_symlink()
+            or not executable_path.is_file()
+            or not os.access(executable_path, os.X_OK)
+        ):
+            return False
+
+        build_root = execution_root.parent.resolve()
+
+        def resolve_execution_ref(ref: Any) -> Path:
+            path = Path(str(ref))
+            resolved = (
+                path.resolve()
+                if path.is_absolute()
+                else (build_root / path).resolve()
+            )
+            if not resolved.is_relative_to(execution_root.resolve()):
+                raise ValueError("provenance reference escapes execution root")
+            return resolved
+
+        control = execution_root / "control_plane"
+        descriptor_path = (
+            control
+            / "LINKAGE_CODEX_EXECUTOR_DESCRIPTOR_AFTER_TARGET_HASH_REPAIR.json"
+        )
+        receipt_path = (
+            control / "LINKAGE_CODEX_TARGET_HASH_REPAIR_REVERIFICATION_RECEIPT.json"
+        )
+        descriptor = json.loads(descriptor_path.read_text(encoding="utf-8"))
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        authorization_path = resolve_execution_ref(receipt.get("authorization_ref"))
+        attestation_path = resolve_execution_ref(
+            descriptor.get("reverification_attestation_ref")
+        )
+        authorization = json.loads(authorization_path.read_text(encoding="utf-8"))
+        attestation = json.loads(attestation_path.read_text(encoding="utf-8"))
+
+        candidate_hash = _candidate_tree_hash(candidate_root)
+        launcher_hash = _file_hash(executable_path)
+        allowed_write_paths = authorization.get("scope", {}).get(
+            "allowed_write_paths", []
+        )
+        launcher_write_authorized = any(
+            resolve_execution_ref(item) == executable_path.resolve()
+            for item in allowed_write_paths
+        )
+
+        immutable_chain_valid = bool(
+            descriptor.get("status")
+            == "REPAIRED_REVERIFIED_READY_FOR_NEW_LINKAGE_BOOTSTRAP_RETRY_AUTHORIZATION"
+            and descriptor.get("candidate_content_sha256") == candidate_hash
+            and Path(str(descriptor.get("launcher_abs", ""))).resolve()
+            == executable_path.resolve()
+            and descriptor.get("launcher_sha256") == launcher_hash
+            and resolve_execution_ref(descriptor.get("authorization_ref"))
+            == authorization_path
+            and descriptor.get("authorization_sha256")
+            == _file_hash(authorization_path)
+            and descriptor.get("reverification_attestation_sha256")
+            == _file_hash(attestation_path)
+            and receipt.get("status")
+            == "COMPLETE_READY_FOR_HASH_BOUND_2_TRANSITION_LINKAGE_BOOTSTRAP_RETRY_AUTHORIZATION"
+            and receipt.get("candidate_content_sha256") == candidate_hash
+            and resolve_execution_ref(receipt.get("descriptor_ref"))
+            == descriptor_path.resolve()
+            and receipt.get("descriptor_sha256") == _file_hash(descriptor_path)
+            and resolve_execution_ref(receipt.get("codex_launcher_ref"))
+            == executable_path.resolve()
+            and receipt.get("codex_launcher_sha256") == launcher_hash
+            and receipt.get("authorization_sha256")
+            == _file_hash(authorization_path)
+            and receipt.get("reverification_attestation_sha256")
+            == _file_hash(attestation_path)
+            and authorization.get("status") == "GRANTED"
+            and authorization.get("candidate_content_sha256") == candidate_hash
+            and authorization.get("driver_execution_authorized") is False
+            and authorization.get("workpack_execution_authorized") is False
+            and launcher_write_authorized
+            and attestation.get("status") == "PASS"
+            and attestation.get("blocking_findings") == []
+            and attestation.get("candidate_content_sha256") == candidate_hash
+            and resolve_execution_ref(attestation.get("authorization_ref"))
+            == authorization_path
+            and attestation.get("authorization_sha256")
+            == _file_hash(authorization_path)
+            and resolve_execution_ref(attestation.get("codex_launcher_ref"))
+            == executable_path.resolve()
+            and attestation.get("codex_launcher_sha256") == launcher_hash
+        )
+        if not immutable_chain_valid:
+            return False
+
+        runtime_path = control / "runtime/PROGRAM_DRIVER_RUNTIME_STATE.json"
+        ledger_path = control / "runtime/PHASE_TRANSITION_LEDGER.jsonl"
+        runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
+        runtime_material = dict(runtime)
+        claimed_state_hash = runtime_material.pop("state_hash", None)
+        if (
+            claimed_state_hash != _json_hash(runtime_material)
+            or runtime.get("candidate_content_sha256") != candidate_hash
+            or runtime.get("open_blocker_codes") != []
+            or runtime.get("recovery", {}).get("required") is not False
+            or runtime.get("side_effects_allowed") is not False
+            or runtime.get("active_dag_node") is not None
+            or runtime.get("active_workpack_id") is not None
+            or runtime.get("active_pipeline_action_id") is not None
+        ):
+            return False
+
+        previous_event_hash: str | None = None
+        event_count = 0
+        for line in ledger_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            event = json.loads(line)
+            claimed_event_hash = event.get("event_hash")
+            event_material = dict(event)
+            event_material.pop("event_hash", None)
+            if (
+                event.get("previous_event_hash") != previous_event_hash
+                or claimed_event_hash != _json_hash(event_material)
+            ):
+                return False
+            previous_event_hash = claimed_event_hash
+            event_count += 1
+        return bool(
+            event_count > 0
+            and runtime.get("last_transition_event_hash") == previous_event_hash
+        )
+    except (
+        OSError,
+        UnicodeError,
+        json.JSONDecodeError,
+        TypeError,
+        ValueError,
+    ):
+        return False
 
 
 def _authorized_driver_materialization_precondition(
@@ -3571,6 +12007,9 @@ def _authorized_main_p4_local_closure_completion(
     command: Mapping[str, Any],
     *,
     allow_release_preparation_state: bool = False,
+    allow_release_entry_failure_state: bool = False,
+    allow_release_output_directory_failure_state: bool = False,
+    allow_release_p4_success_state: bool = False,
 ) -> bool:
     """Accept only the receipt-bound stdin-isolated MB-P4 successful retry."""
 
@@ -3687,19 +12126,97 @@ def _authorized_main_p4_local_closure_completion(
             "MB-P4",
         ]
         expected_control_state = (
-            "RELEASE_PIPELINE_HANDOFF_PREPARED_WAITING_ENTRY_EXECUTION_AUTHORIZATION"
-            if allow_release_preparation_state
-            else "MAIN_P4_LOCAL_CLOSURE_PASS_WAITING_RELEASE_PIPELINE_HANDOFF_PREPARATION_AUTHORIZATION"
+            "P4_BUILD_INPUT_LOCK_PASS_BLOCKED_STALE_RUNTIME_FAILURE_BLOCKER_WAITING_REPAIR_REVERIFY_AUTHORIZATION"
+            if allow_release_p4_success_state
+            else (
+                "P4_BUILD_INPUT_LOCK_BLOCKED_OUTPUT_DIRECTORY_OWNERSHIP_MISMATCH_WAITING_REPAIR_REVERIFY_AND_RETRY_AUTHORIZATION"
+                if allow_release_output_directory_failure_state
+                else (
+                    "RELEASE_PIPELINE_HANDOFF_ENTRY_BLOCKED_OUTPUT_POLICY_MISMATCH_WAITING_REPAIR_REVERIFY_AND_RETRY_AUTHORIZATION"
+                    if allow_release_entry_failure_state
+                    else (
+                        "RELEASE_PIPELINE_HANDOFF_PREPARED_WAITING_ENTRY_EXECUTION_AUTHORIZATION"
+                        if allow_release_preparation_state
+                        else "MAIN_P4_LOCAL_CLOSURE_PASS_WAITING_RELEASE_PIPELINE_HANDOFF_PREPARATION_AUTHORIZATION"
+                    )
+                )
+            )
         )
         expected_blockers = (
-            ["RELEASE_PIPELINE_HANDOFF_ENTRY_EXECUTION_AUTHORIZATION_REQUIRED"]
-            if allow_release_preparation_state
-            else ["RELEASE_PIPELINE_HANDOFF_PREPARATION_AUTHORIZATION_REQUIRED"]
+            [
+                "PROGRAM_DRIVER_STALE_PIPELINE_ACTION_FAILURE_BLOCKER_AFTER_SUCCESS",
+                "P4_BUILD_INPUT_LOCK_POST_SUCCESS_RUNTIME_BLOCKER_COHERENCE_REPAIR_REVERIFY_AUTHORIZATION_REQUIRED",
+            ]
+            if allow_release_p4_success_state
+            else (
+            [
+                "P4_BUILD_INPUT_LOCK_DRIVER_PRECREATED_OUTPUT_DIRECTORY_CONFLICTS_WITH_ACTION_ATOMIC_CREATE",
+                "P4_BUILD_INPUT_LOCK_RETRY_AUTHORIZATION_CONSUMED_REAUTHORIZATION_REQUIRED",
+            ]
+            if allow_release_output_directory_failure_state
+            else (
+                [
+                    "RELEASE_PIPELINE_HANDOFF_ENTRY_ATTEMPT_SCOPED_OUTPUT_TEMPLATE_POLICY_MISMATCH",
+                    "RELEASE_PIPELINE_HANDOFF_ENTRY_EXECUTION_RETRY_REAUTHORIZATION_REQUIRED",
+                ]
+                if allow_release_entry_failure_state
+                else (
+                    ["RELEASE_PIPELINE_HANDOFF_ENTRY_EXECUTION_AUTHORIZATION_REQUIRED"]
+                    if allow_release_preparation_state
+                    else ["RELEASE_PIPELINE_HANDOFF_PREPARATION_AUTHORIZATION_REQUIRED"]
+                )
+            )
+            )
         )
         expected_next_action = (
-            "OBTAIN_RELEASE_PIPELINE_HANDOFF_ENTRY_EXECUTION_AUTHORIZATION"
-            if allow_release_preparation_state
-            else "OBTAIN_RELEASE_PIPELINE_HANDOFF_PREPARATION_AUTHORIZATION"
+            "OBTAIN_P4_BUILD_INPUT_LOCK_POST_SUCCESS_RUNTIME_BLOCKER_COHERENCE_REPAIR_REVERIFY_AUTHORIZATION"
+            if allow_release_p4_success_state
+            else (
+                "OBTAIN_P4_BUILD_INPUT_LOCK_OUTPUT_DIRECTORY_OWNERSHIP_REPAIR_REVERIFY_AND_RETRY_AUTHORIZATION"
+                if allow_release_output_directory_failure_state
+                else (
+                    "OBTAIN_RELEASE_PIPELINE_HANDOFF_ENTRY_PIPELINE_ACTION_OUTPUT_POLICY_REPAIR_REVERIFY_AND_RETRY_AUTHORIZATION"
+                    if allow_release_entry_failure_state
+                    else (
+                        "OBTAIN_RELEASE_PIPELINE_HANDOFF_ENTRY_EXECUTION_AUTHORIZATION"
+                        if allow_release_preparation_state
+                        else "OBTAIN_RELEASE_PIPELINE_HANDOFF_PREPARATION_AUTHORIZATION"
+                    )
+                )
+            )
+        )
+        expected_runtime_revision = (
+            50
+            if allow_release_p4_success_state
+            else (48 if allow_release_output_directory_failure_state else 46)
+        )
+        expected_runtime_status = (
+            "STOPPED_AFTER_AUTHORIZED_SCOPE_CONSUMED"
+            if allow_release_p4_success_state
+            else "STOPPED_AFTER_AUTHORIZED_SCOPE_CONSUMED"
+            if not allow_release_output_directory_failure_state
+            else "BLOCKED_PIPELINE_ACTION_VALIDATION_FAIL"
+        )
+        expected_runtime_active_dag_node = (
+            "RELEASE_PIPELINE_HANDOFF"
+            if allow_release_output_directory_failure_state
+            else None
+        )
+        expected_state_active_dag_node = (
+            "RELEASE_PIPELINE_HANDOFF"
+            if (
+                allow_release_p4_success_state
+                or allow_release_output_directory_failure_state
+            )
+            else None
+        )
+        expected_runtime_blockers = (
+            ["PIPELINE_ACTION_RESULT_OR_INDEPENDENT_VALIDATION_FAILED"]
+            if (
+                allow_release_p4_success_state
+                or allow_release_output_directory_failure_state
+            )
+            else []
         )
 
         return bool(
@@ -3788,29 +12305,645 @@ def _authorized_main_p4_local_closure_completion(
             and promotion.get("release_pipeline_handoff_started") is False
             and bound(promotion, "result_ref", "result_sha256")
             and runtime_hash == _json_hash(runtime_material)
-            and runtime.get("state_revision") == 46
-            and runtime.get("driver_status")
-            == "STOPPED_AFTER_AUTHORIZED_SCOPE_CONSUMED"
+            and runtime.get("state_revision") == expected_runtime_revision
+            and runtime.get("driver_status") == expected_runtime_status
             and runtime.get("completed_workpack_ids") == expected_workpacks
             and runtime.get("completed_workpack_ids", []).count("MB-P4") == 1
             and runtime.get("authorization_consumptions", {}).get(
                 "AUTH-VSCDSL-MAIN-P4-STDIN-ISOLATED-RETRY-V03-001"
             )
             == 1
-            and runtime.get("active_dag_node") is None
+            and runtime.get("active_dag_node") == expected_runtime_active_dag_node
             and runtime.get("active_workpack_id") is None
+            and runtime.get("open_blocker_codes") == expected_runtime_blockers
+            and (
+                not allow_release_p4_success_state
+                or runtime.get("completed_pipeline_action_ids", []).count(
+                    "P4_BUILD_INPUT_LOCK"
+                )
+                == 1
+            )
             and runtime.get("side_effects_allowed") is False
             and state.get("state") == expected_control_state
             and state.get("highest_completed_external_gate")
-            == "MAIN_P4_LOCAL_CLOSURE_PASS"
+            == (
+                "P4_BUILD_INPUT_LOCK_PASS"
+                if allow_release_p4_success_state
+                else "MAIN_P4_LOCAL_CLOSURE_PASS"
+            )
             and state.get("open_blocker_codes") == expected_blockers
             and state.get("next_eligible_action") == expected_next_action
-            and state.get("active_dag_node") is None
+            and state.get("active_dag_node") == expected_state_active_dag_node
             and state.get("active_workpack_id") is None
-            and state.get("release_pipeline_handoff_started") is False
+            and state.get("release_pipeline_handoff_started")
+            is allow_release_p4_success_state
             and state.get("install_started") is False
             and repository_hash(repository) == expected_repository
             and not (repository / ".git").exists()
+            and not (evidence / "engineering_dag/RELEASE_PIPELINE_HANDOFF").exists()
+            and not (execution_root / "planned_runtime").exists()
+        )
+    except (
+        KeyError,
+        OSError,
+        UnicodeError,
+        json.JSONDecodeError,
+        TypeError,
+        ValueError,
+    ):
+        return False
+
+
+def _authorized_p4_build_input_lock_success_stale_runtime_blocker(
+    candidate_root: Path,
+    execution_root: Path,
+    executable_path: Path,
+    command: Mapping[str, Any],
+) -> bool:
+    """Accept only the receipt-bound P4 lock success stopped before PACK_DRAFT."""
+
+    if not _authorized_main_p4_local_closure_completion(
+        candidate_root,
+        execution_root,
+        executable_path,
+        command,
+        allow_release_p4_success_state=True,
+    ):
+        return False
+    try:
+        build_root = execution_root.parent
+
+        def resolve_ref(ref: Any) -> Path:
+            path = Path(str(ref))
+            return (path if path.is_absolute() else build_root / path).resolve()
+
+        def read_json(path: Path) -> Mapping[str, Any]:
+            value = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(value, dict):
+                raise TypeError(f"expected object: {path}")
+            return value
+
+        def bound(document: Mapping[str, Any], ref_key: str, hash_key: str) -> bool:
+            path = resolve_ref(document.get(ref_key))
+            return bool(path.is_file() and document.get(hash_key) == _file_hash(path))
+
+        control = execution_root / "control_plane"
+        evidence = execution_root / "evidence"
+        planned = execution_root / "planned_executors"
+        output_dir = evidence / "release_pipeline/P4_BUILD_INPUT_LOCK"
+        manifest_path = planned / "manifests/P4_BUILD_INPUT_LOCK.resolved-action.json"
+        action_path = planned / "bin/materialize_p4_build_input_lock.py"
+        schema_path = planned / "schemas/P4_BUILD_INPUT_LOCK_OUTPUT.schema.json"
+        contract_path = planned / "contracts/P4_BUILD_INPUT_LOCK_CONTRACT.json"
+        isolation_path = evidence / (
+            "release-pipeline-handoff-entry-output-directory-repair-reverification/"
+            "FAILED_ATTEMPT_EVIDENCE_ISOLATION_RECEIPT.json"
+        )
+        repair_authorization_path = control / (
+            "P4_BUILD_INPUT_LOCK_OUTPUT_DIRECTORY_OWNERSHIP_"
+            "REPAIR_REVERIFY_AND_RETRY_AUTHORIZATION.json"
+        )
+        repair_receipt_path = control / (
+            "P4_BUILD_INPUT_LOCK_OUTPUT_DIRECTORY_OWNERSHIP_"
+            "REPAIR_REVERIFICATION_RECEIPT.json"
+        )
+        retry_authorization_path = control / (
+            "P4_BUILD_INPUT_LOCK_OUTPUT_DIRECTORY_REPAIRED_RETRY_AUTHORIZATION.json"
+        )
+        issuance_path = control / (
+            "P4_BUILD_INPUT_LOCK_OUTPUT_DIRECTORY_REPAIRED_RETRY_"
+            "AUTHORIZATION_ISSUANCE_RECEIPT.json"
+        )
+        independent_path = evidence / (
+            "release-pipeline-handoff-entry-output-directory-repair-reverification/"
+            "POST_RETRY_INDEPENDENT_VALIDATION_RECEIPT.json"
+        )
+        completion_path = control / (
+            "P4_BUILD_INPUT_LOCK_OUTPUT_DIRECTORY_REPAIRED_RETRY_"
+            "COMPLETION_RECEIPT.json"
+        )
+        next_draft_path = control / (
+            "P4_BUILD_INPUT_LOCK_POST_SUCCESS_RUNTIME_BLOCKER_COHERENCE_"
+            "REPAIR_REVERIFY_AUTHORIZATION_DRAFT.json"
+        )
+        runtime_path = control / "runtime/PROGRAM_DRIVER_RUNTIME_STATE.json"
+        transition_path = control / "runtime/PHASE_TRANSITION_LEDGER.jsonl"
+        promotion_path = control / "runtime/PROMOTION_LEDGER.jsonl"
+        state_path = control / "CONTROL_PLANE_STATE.json"
+        lock_path = output_dir / "P4_BUILD_INPUT_LOCK.json"
+        action_result_path = output_dir / "P4_BUILD_INPUT_LOCK.action-result.json"
+
+        isolation = read_json(isolation_path)
+        repair_authorization = read_json(repair_authorization_path)
+        repair_receipt = read_json(repair_receipt_path)
+        retry_authorization = read_json(retry_authorization_path)
+        issuance = read_json(issuance_path)
+        independent = read_json(independent_path)
+        completion = read_json(completion_path)
+        next_draft = read_json(next_draft_path)
+        manifest = read_json(manifest_path)
+        runtime = read_json(runtime_path)
+        state = read_json(state_path)
+        lock = read_json(lock_path)
+        action_result = read_json(action_result_path)
+        retry_scope = retry_authorization.get("scope", {})
+        next_scope = next_draft.get("scope", {})
+        active_attempt = runtime.get("active_attempt", {})
+        state_entry = state.get("release_pipeline_handoff_entry_execution", {})
+        output_files = (
+            {path.name for path in output_dir.iterdir() if path.is_file()}
+            if output_dir.is_dir()
+            else set()
+        )
+
+        return bool(
+            repair_authorization.get("status")
+            == "GRANTED_REPAIR_REVERIFY_AND_SINGLE_RETRY_PREPARATION"
+            and repair_authorization.get("driver_source_change_authorized") is False
+            and repair_authorization.get("driver_transitions_during_repair") == 0
+            and repair_receipt.get("status")
+            == "PASS_REPAIR_REVERIFIED_READY_TO_ISSUE_ONE_TIME_HASH_BOUND_P4_BUILD_INPUT_LOCK_OUTPUT_DIRECTORY_REPAIRED_RETRY_AUTHORIZATION"
+            and isolation.get("status")
+            == "PASS_FAILED_ATTEMPT_EVIDENCE_ISOLATED_HASH_BOUND_BEFORE_CLEANUP"
+            and bound(isolation, "isolated_stdout_ref", "isolated_stdout_sha256")
+            and bound(isolation, "isolated_stderr_ref", "isolated_stderr_sha256")
+            and retry_authorization.get("status") == "GRANTED"
+            and retry_authorization.get("authorization_id")
+            == "AUTH-VSCDSL-P4-BUILD-INPUT-LOCK-OUTPUT-DIRECTORY-REPAIRED-RETRY-V03-001"
+            and retry_authorization.get("authorization_scope_sha256")
+            == _json_hash(retry_scope)
+            and retry_scope.get("pipeline_action_ids") == ["P4_BUILD_INPUT_LOCK"]
+            and retry_scope.get("workpack_ids") == []
+            and retry_authorization.get("max_transitions") == 1
+            and retry_authorization.get("granted_transitions") == 1
+            and retry_authorization.get("consumption_policy", {}).get(
+                "exact_pipeline_action_order"
+            )
+            == ["P4_BUILD_INPUT_LOCK"]
+            and retry_authorization.get("consumption_policy", {}).get(
+                "stop_before_next_release_step"
+            )
+            == "PACK_DRAFT"
+            and issuance.get("status")
+            == "PASS_ONE_TIME_HASH_BOUND_P4_BUILD_INPUT_LOCK_OUTPUT_DIRECTORY_REPAIRED_RETRY_AUTHORIZATION_ISSUED"
+            and issuance.get("authorization_sha256")
+            == _file_hash(retry_authorization_path)
+            and _file_hash(manifest_path)
+            == "5d9dea22d9361f5dea8ecfcc2f8115691bc7ce07acce9cf92a8bd939b38b3ca4"
+            and _file_hash(action_path)
+            == "e83f10bb1f806e2fa6717513dad23b223dcabae4e39a477c1190795a7cb1e581"
+            and _file_hash(schema_path)
+            == "5db7343bcaefe0a314e5e9255cd3b0e98e02266032d61ca3bc0731664505f404"
+            and _file_hash(contract_path)
+            == "efc8e8d651de342f3731a04458eb57f82293703632e872817a24456f762f16aa"
+            and manifest.get("action_script_sha256") == _file_hash(action_path)
+            and output_files
+            == {
+                "P4_BUILD_INPUT_LOCK.json",
+                "P4_BUILD_INPUT_LOCK.action-result.json",
+                "P4_BUILD_INPUT_LOCK.stdout",
+                "P4_BUILD_INPUT_LOCK.stderr",
+            }
+            and _file_hash(lock_path)
+            == "82bf4b60321543d463cca58865b5dea8a1e3b87e2f2eb0c1f3bbbef5154bde01"
+            and _file_hash(action_result_path)
+            == "ced6851924f13da1751d28552920567877bea8a12df0b4396ba4e7cf21582f58"
+            and lock.get("status") == "P4_BUILD_INPUT_LOCK_VALID"
+            and action_result.get("status") == "PASS"
+            and len(action_result.get("checks", [])) == 10
+            and all(
+                item.get("status") == "PASS"
+                for item in action_result.get("checks", [])
+            )
+            and independent.get("status")
+            == "PASS_P4_BUILD_INPUT_LOCK_VALID_STOPPED_BEFORE_PACK_DRAFT_STALE_RUNTIME_BLOCKER_REPAIR_REQUIRED"
+            and independent.get("authorization_consumption_count") == 1
+            and len(independent.get("checks", [])) == 12
+            and all(
+                item.get("status") == "PASS"
+                for item in independent.get("checks", [])
+            )
+            and completion.get("status")
+            == "P4_BUILD_INPUT_LOCK_COMPLETE_STOPPED_BEFORE_PACK_DRAFT_RUNTIME_BLOCKER_REPAIR_REQUIRED"
+            and completion.get("attempt_id")
+            == "ATTEMPT-F3D5BA4086584164A1B4B373A9D9860E"
+            and completion.get("authorization_transitions_consumed") == 1
+            and completion.get("driver_transition_count") == 2
+            and completion.get("p4_build_input_lock_completed") is True
+            and completion.get("promotion_created") is True
+            and completion.get("runtime_stale_blocker_present") is True
+            and completion.get("pack_draft_started") is False
+            and bound(completion, "authorization_ref", "authorization_sha256")
+            and bound(completion, "lock_ref", "lock_sha256")
+            and bound(completion, "action_result_ref", "action_result_sha256")
+            and bound(
+                completion,
+                "independent_validation_ref",
+                "independent_validation_sha256",
+            )
+            and runtime.get("state_revision") == 50
+            and active_attempt.get("attempt_id")
+            == "ATTEMPT-F3D5BA4086584164A1B4B373A9D9860E"
+            and active_attempt.get("status") == "VALIDATED_PASS"
+            and runtime.get("authorization_consumptions", {}).get(
+                retry_authorization.get("authorization_id")
+            )
+            == 1
+            and runtime.get("open_blocker_codes")
+            == ["PIPELINE_ACTION_RESULT_OR_INDEPENDENT_VALIDATION_FAILED"]
+            and len(transition_path.read_text(encoding="utf-8").splitlines()) == 50
+            and len(promotion_path.read_text(encoding="utf-8").splitlines()) == 18
+            and state.get("projects", {}).get("MAIN_HARNESS_BUILD")
+            == "P4_BUILD_INPUT_LOCK_PASS_COMPLETE_STOPPED_BEFORE_PACK_DRAFT_RUNTIME_BLOCKER_REPAIR_REQUIRED"
+            and state_entry.get("status")
+            == "PASS_P4_BUILD_INPUT_LOCK_VALID_STOPPED_BEFORE_PACK_DRAFT_RUNTIME_BLOCKER_REPAIR_REQUIRED"
+            and state_entry.get("pack_draft_started") is False
+            and next_draft.get("status") == "DRAFT_READY_NOT_GRANTED"
+            and next_draft.get("grantable") is False
+            and next_draft.get("execution_authorized") is False
+            and next_draft.get("driver_execution_authorized") is False
+            and next_draft.get("authorization_scope_sha256") == _json_hash(next_scope)
+            and next_draft.get("max_driver_transitions") == 0
+            and next_draft.get("granted_driver_transitions") == 0
+            and next_draft.get("repair_contract", {}).get(
+                "p4_build_input_lock_rerun_allowed"
+            )
+            is False
+            and not (evidence / "release_pipeline/PACK_DRAFT").exists()
+            and not (evidence / "engineering_dag/RELEASE_PIPELINE_HANDOFF").exists()
+            and not (execution_root / "planned_runtime").exists()
+        )
+    except (
+        KeyError,
+        OSError,
+        UnicodeError,
+        json.JSONDecodeError,
+        TypeError,
+        ValueError,
+    ):
+        return False
+
+
+def _authorized_p4_build_input_lock_output_directory_failure(
+    candidate_root: Path,
+    execution_root: Path,
+    executable_path: Path,
+    command: Mapping[str, Any],
+) -> bool:
+    """Accept only the one-time P4 lock retry's output-directory fail-stop."""
+
+    if not _authorized_main_p4_local_closure_completion(
+        candidate_root,
+        execution_root,
+        executable_path,
+        command,
+        allow_release_output_directory_failure_state=True,
+    ):
+        return False
+    try:
+        build_root = execution_root.parent
+
+        def resolve_ref(ref: Any) -> Path:
+            path = Path(str(ref))
+            return (path if path.is_absolute() else build_root / path).resolve()
+
+        def read_json(path: Path) -> Mapping[str, Any]:
+            value = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(value, dict):
+                raise TypeError(f"expected object: {path}")
+            return value
+
+        def bound(document: Mapping[str, Any], ref_key: str, hash_key: str) -> bool:
+            path = resolve_ref(document.get(ref_key))
+            return bool(path.is_file() and document.get(hash_key) == _file_hash(path))
+
+        control = execution_root / "control_plane"
+        evidence = execution_root / "evidence"
+        output_dir = evidence / "release_pipeline/P4_BUILD_INPUT_LOCK"
+        manifest_path = execution_root / (
+            "planned_executors/manifests/P4_BUILD_INPUT_LOCK.resolved-action.json"
+        )
+        repair_authorization_path = control / (
+            "RELEASE_PIPELINE_HANDOFF_ENTRY_PIPELINE_ACTION_OUTPUT_POLICY_"
+            "REPAIR_REVERIFY_AND_RETRY_AUTHORIZATION.json"
+        )
+        repair_receipt_path = control / (
+            "RELEASE_PIPELINE_HANDOFF_ENTRY_OUTPUT_POLICY_REPAIR_"
+            "REVERIFICATION_RECEIPT.json"
+        )
+        retry_authorization_path = control / (
+            "P4_BUILD_INPUT_LOCK_OUTPUT_POLICY_REPAIRED_RETRY_AUTHORIZATION.json"
+        )
+        issuance_path = control / (
+            "P4_BUILD_INPUT_LOCK_OUTPUT_POLICY_REPAIRED_RETRY_"
+            "AUTHORIZATION_ISSUANCE_RECEIPT.json"
+        )
+        failure_path = control / (
+            "P4_BUILD_INPUT_LOCK_OUTPUT_POLICY_REPAIRED_RETRY_FAILURE_RECEIPT.json"
+        )
+        independent_path = evidence / (
+            "release-pipeline-handoff-entry-output-directory-failure/"
+            "INDEPENDENT_OUTPUT_DIRECTORY_OWNERSHIP_FAILURE_VERIFICATION_RECEIPT.json"
+        )
+        next_draft_path = control / (
+            "P4_BUILD_INPUT_LOCK_OUTPUT_DIRECTORY_OWNERSHIP_"
+            "REPAIR_REVERIFY_AND_RETRY_AUTHORIZATION_DRAFT.json"
+        )
+        runtime_path = control / "runtime/PROGRAM_DRIVER_RUNTIME_STATE.json"
+        transition_path = control / "runtime/PHASE_TRANSITION_LEDGER.jsonl"
+        promotion_path = control / "runtime/PROMOTION_LEDGER.jsonl"
+        state_path = control / "CONTROL_PLANE_STATE.json"
+
+        manifest = read_json(manifest_path)
+        repair_authorization = read_json(repair_authorization_path)
+        repair_receipt = read_json(repair_receipt_path)
+        retry_authorization = read_json(retry_authorization_path)
+        issuance = read_json(issuance_path)
+        failure = read_json(failure_path)
+        independent = read_json(independent_path)
+        next_draft = read_json(next_draft_path)
+        runtime = read_json(runtime_path)
+        state = read_json(state_path)
+        retry_scope = retry_authorization.get("scope", {})
+        next_scope = next_draft.get("scope", {})
+        active_attempt = runtime.get("active_attempt", {})
+        state_entry = state.get("release_pipeline_handoff_entry_execution", {})
+        output_files = (
+            {path.name for path in output_dir.iterdir() if path.is_file()}
+            if output_dir.is_dir()
+            else set()
+        )
+
+        return bool(
+            repair_authorization.get("status")
+            == "GRANTED_REPAIR_REVERIFY_AND_SINGLE_RETRY_PREPARATION"
+            and repair_authorization.get("driver_transitions_during_repair") == 0
+            and repair_receipt.get("status")
+            == "PASS_REPAIR_REVERIFIED_READY_TO_ISSUE_ONE_TIME_HASH_BOUND_P4_BUILD_INPUT_LOCK_RETRY_AUTHORIZATION"
+            and retry_authorization.get("status") == "GRANTED"
+            and retry_authorization.get("authorization_scope_sha256")
+            == _json_hash(retry_scope)
+            and retry_scope.get("pipeline_action_ids") == ["P4_BUILD_INPUT_LOCK"]
+            and retry_scope.get("workpack_ids") == []
+            and retry_authorization.get("max_transitions") == 1
+            and retry_authorization.get("granted_transitions") == 1
+            and retry_authorization.get("consumption_policy", {}).get(
+                "require_fixed_output_paths"
+            )
+            is True
+            and retry_authorization.get("consumption_policy", {}).get(
+                "require_attempt_scoped_output_paths"
+            )
+            is None
+            and issuance.get("status")
+            == "PASS_ONE_TIME_HASH_BOUND_P4_BUILD_INPUT_LOCK_RETRY_AUTHORIZATION_ISSUED"
+            and issuance.get("authorization_sha256")
+            == _file_hash(retry_authorization_path)
+            and manifest.get("pipeline_action_id") == "P4_BUILD_INPUT_LOCK"
+            and _file_hash(manifest_path)
+            == "0864e49cc5b9c3546428aef2adf97b8a3d684b7c8cea35e43ff7afcbb97c3b9a"
+            and manifest.get("result_output_abs")
+            == str(output_dir / "P4_BUILD_INPUT_LOCK.action-result.json")
+            and manifest.get("stdout_abs")
+            == str(output_dir / "P4_BUILD_INPUT_LOCK.stdout")
+            and manifest.get("stderr_abs")
+            == str(output_dir / "P4_BUILD_INPUT_LOCK.stderr")
+            and failure.get("status")
+            == "FAIL_STOPPED_OUTPUT_DIRECTORY_OWNERSHIP_MISMATCH_ONE_RETRY_CONSUMED_REAUTHORIZATION_REQUIRED"
+            and failure.get("attempt_id")
+            == "ATTEMPT-142300F1D149443599FFEEBBA07B6B07"
+            and failure.get("authorization_transitions_consumed") == 1
+            and failure.get("driver_transition_count") == 2
+            and failure.get("command_exit_code") == 1
+            and failure.get("independent_validation_exit_code") == 1
+            and failure.get("lock_output_exists") is False
+            and failure.get("result_output_exists") is False
+            and failure.get("p4_build_input_lock_completed") is False
+            and failure.get("pack_draft_started") is False
+            and failure.get("certification_started") is False
+            and failure.get("git_operation_started") is False
+            and failure.get("install_started") is False
+            and bound(
+                failure,
+                "independent_failure_verification_ref",
+                "independent_failure_verification_sha256",
+            )
+            and independent.get("status")
+            == "FAIL_CONFIRMED_OUTPUT_DIRECTORY_OWNERSHIP_MISMATCH_ONE_RETRY_CONSUMED_STOPPED"
+            and independent.get("authorization_consumption_count") == 1
+            and independent.get("failure_cause", {}).get("action_error")
+            == "FileExistsError"
+            and len(independent.get("checks", [])) == 10
+            and all(
+                check.get("status") == "PASS"
+                for check in independent.get("checks", [])
+            )
+            and bound(independent, "manifest_ref", "manifest_sha256")
+            and bound(independent, "stdout_ref", "stdout_sha256")
+            and bound(independent, "stderr_ref", "stderr_sha256")
+            and next_draft.get("status") == "DRAFT_READY_NOT_GRANTED"
+            and next_draft.get("grantable") is False
+            and next_draft.get("execution_authorized") is False
+            and next_draft.get("driver_execution_authorized") is False
+            and next_draft.get("max_driver_transitions") == 0
+            and next_draft.get("granted_driver_transitions") == 0
+            and next_draft.get("proposed_max_driver_transitions") == 1
+            and next_draft.get("authorization_scope_sha256")
+            == _json_hash(next_scope)
+            and bound(
+                next_draft,
+                "based_on_failure_receipt_ref",
+                "based_on_failure_receipt_sha256",
+            )
+            and bound(
+                next_draft,
+                "based_on_retry_authorization_ref",
+                "based_on_retry_authorization_sha256",
+            )
+            and runtime.get("state_revision") == 48
+            and runtime.get("state_hash")
+            == "60fc3fc9ad1eaf91d34f9d91d7fd5651a53917b19bf4738dc52668faf1979a4a"
+            and _file_hash(runtime_path)
+            == "d98d56478474705c92fa12dacef6a90e234d817d0af97d8f2407f4debff04830"
+            and runtime.get("authorization_consumptions", {}).get(
+                retry_authorization.get("authorization_id")
+            )
+            == 1
+            and active_attempt.get("attempt_id")
+            == "ATTEMPT-142300F1D149443599FFEEBBA07B6B07"
+            and active_attempt.get("status") == "VALIDATED_FAIL"
+            and active_attempt.get("command_exit_code") == 1
+            and active_attempt.get("independent_validation_exit_code") == 1
+            and len(transition_path.read_text(encoding="utf-8").splitlines()) == 48
+            and _file_hash(transition_path)
+            == "5e18f20a2dd3c8a904e58086c109961c131d1721ea4e360e359ee5f5e9fc0fff"
+            and len(promotion_path.read_text(encoding="utf-8").splitlines()) == 17
+            and _file_hash(promotion_path)
+            == "9611ac6f3aa2711e38dbe194a336a2b0c35f0f92eb017b8f9693a61ae64a78b5"
+            and output_files
+            == {"P4_BUILD_INPUT_LOCK.stdout", "P4_BUILD_INPUT_LOCK.stderr"}
+            and not (output_dir / "P4_BUILD_INPUT_LOCK.json").exists()
+            and not (output_dir / "P4_BUILD_INPUT_LOCK.action-result.json").exists()
+            and state.get("projects", {}).get("MAIN_HARNESS_BUILD")
+            == "P4_BUILD_INPUT_LOCK_BLOCKED_OUTPUT_DIRECTORY_OWNERSHIP_MISMATCH_ONE_RETRY_CONSUMED"
+            and state_entry.get("status")
+            == "FAIL_STOPPED_OUTPUT_DIRECTORY_OWNERSHIP_MISMATCH_ONE_RETRY_CONSUMED_REAUTHORIZATION_REQUIRED"
+            and state_entry.get("p4_build_input_lock_started") is True
+            and state_entry.get("p4_build_input_lock_lock_exists") is False
+            and state_entry.get("p4_build_input_lock_result_exists") is False
+            and state_entry.get("pack_draft_started") is False
+            and bound(state_entry, "failure_receipt_ref", "failure_receipt_sha256")
+            and not (evidence / "engineering_dag/RELEASE_PIPELINE_HANDOFF").exists()
+            and not (execution_root / "planned_runtime").exists()
+        )
+    except (
+        KeyError,
+        OSError,
+        UnicodeError,
+        json.JSONDecodeError,
+        TypeError,
+        ValueError,
+    ):
+        return False
+
+
+def _authorized_release_pipeline_handoff_entry_preflight_failure(
+    candidate_root: Path,
+    execution_root: Path,
+    executable_path: Path,
+    command: Mapping[str, Any],
+) -> bool:
+    """Accept only the zero-write entry preflight failure and blocked repair draft."""
+
+    if not _authorized_main_p4_local_closure_completion(
+        candidate_root,
+        execution_root,
+        executable_path,
+        command,
+        allow_release_entry_failure_state=True,
+    ):
+        return False
+    try:
+        build_root = execution_root.parent
+
+        def resolve_ref(ref: Any) -> Path:
+            path = Path(str(ref))
+            return (path if path.is_absolute() else build_root / path).resolve()
+
+        def read_json(path: Path) -> Mapping[str, Any]:
+            value = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(value, dict):
+                raise TypeError(f"expected object: {path}")
+            return value
+
+        def bound(document: Mapping[str, Any], ref_key: str, hash_key: str) -> bool:
+            path = resolve_ref(document.get(ref_key))
+            return bool(path.is_file() and document.get(hash_key) == _file_hash(path))
+
+        control = execution_root / "control_plane"
+        evidence = execution_root / "evidence"
+        authorization_path = (
+            control / "RELEASE_PIPELINE_HANDOFF_ENTRY_EXECUTION_AUTHORIZATION.json"
+        )
+        manifest_path = execution_root / (
+            "planned_executors/manifests/P4_BUILD_INPUT_LOCK.resolved-action.json"
+        )
+        independent_path = evidence / (
+            "release-pipeline-handoff-entry-failure/"
+            "INDEPENDENT_PREFLIGHT_FAILURE_VERIFICATION_RECEIPT.json"
+        )
+        failure_path = control / (
+            "RELEASE_PIPELINE_HANDOFF_ENTRY_EXECUTION_PREFLIGHT_FAILURE_RECEIPT.json"
+        )
+        repair_draft_path = control / (
+            "RELEASE_PIPELINE_HANDOFF_ENTRY_PIPELINE_ACTION_OUTPUT_POLICY_"
+            "REPAIR_REVERIFY_AND_RETRY_AUTHORIZATION_DRAFT.json"
+        )
+        runtime_path = control / "runtime/PROGRAM_DRIVER_RUNTIME_STATE.json"
+        transition_path = control / "runtime/PHASE_TRANSITION_LEDGER.jsonl"
+        promotion_path = control / "runtime/PROMOTION_LEDGER.jsonl"
+        state_path = control / "CONTROL_PLANE_STATE.json"
+
+        authorization = read_json(authorization_path)
+        manifest = read_json(manifest_path)
+        independent = read_json(independent_path)
+        failure = read_json(failure_path)
+        repair_draft = read_json(repair_draft_path)
+        runtime = read_json(runtime_path)
+        state = read_json(state_path)
+        scope = authorization.get("scope", {})
+        repair_scope = repair_draft.get("scope", {})
+        state_entry = state.get("release_pipeline_handoff_entry_execution", {})
+
+        return bool(
+            authorization.get("status") == "GRANTED"
+            and authorization.get("authorization_scope_sha256") == _json_hash(scope)
+            and scope.get("pipeline_action_ids") == ["P4_BUILD_INPUT_LOCK"]
+            and authorization.get("consumption_policy", {}).get(
+                "require_attempt_scoped_output_paths"
+            )
+            is True
+            and manifest.get("result_output_template_abs") is None
+            and manifest.get("stdout_template_abs") is None
+            and manifest.get("stderr_template_abs") is None
+            and "--output-last-message" not in manifest.get("argv", [])
+            and independent.get("status")
+            == "FAIL_CONFIRMED_PREFLIGHT_ZERO_WRITE_ZERO_TRANSITION_STOPPED"
+            and independent.get("driver_error")
+            == "ATTEMPT_SCOPED_OUTPUT_TEMPLATE_INVALID"
+            and independent.get("driver_response", {}).get("writes_performed")
+            is False
+            and independent.get("driver_transition_count") == 0
+            and independent.get("runtime_authorization_consumption_count") == 0
+            and failure.get("status")
+            == "FAIL_STOPPED_PREFLIGHT_ZERO_WRITE_ZERO_TRANSITION_REAUTHORIZATION_REQUIRED"
+            and failure.get("authorization_status_after_failure")
+            == "PRECHECK_FAILED_UNCONSUMED_SUPERSEDED_NOT_REUSABLE"
+            and failure.get("residual_transition_budget_reusable") is False
+            and failure.get("p4_build_input_lock_started") is False
+            and bound(
+                failure,
+                "independent_failure_verification_ref",
+                "independent_failure_verification_sha256",
+            )
+            and repair_draft.get("status") == "DRAFT_READY_NOT_GRANTED"
+            and repair_draft.get("grantable") is False
+            and repair_draft.get("execution_authorized") is False
+            and repair_draft.get("driver_execution_authorized") is False
+            and repair_draft.get("authorization_scope_sha256")
+            == _json_hash(repair_scope)
+            and repair_draft.get("failed_authorization_residual_budget_reusable")
+            is False
+            and repair_draft.get("proposed_max_driver_transitions") == 1
+            and bound(
+                repair_draft,
+                "based_on_failed_authorization_ref",
+                "based_on_failed_authorization_sha256",
+            )
+            and bound(
+                repair_draft,
+                "based_on_failure_receipt_ref",
+                "based_on_failure_receipt_sha256",
+            )
+            and runtime.get("state_revision") == 46
+            and runtime.get("state_hash")
+            == "74b87f76953c11e555b5f4ed07f1f7f2728f525a56bc4859fa5b65c7afaf7ff2"
+            and _file_hash(runtime_path)
+            == "f315e2b25630ed6e9f2c92554e4553cc353597be11c8fe6385f47e9275bb352e"
+            and runtime.get("authorization_consumptions", {}).get(
+                "AUTH-VSCDSL-RELEASE-PIPELINE-HANDOFF-ENTRY-EXECUTION-V03-001"
+            )
+            is None
+            and len(transition_path.read_text(encoding="utf-8").splitlines()) == 46
+            and len(promotion_path.read_text(encoding="utf-8").splitlines()) == 17
+            and state.get("projects", {}).get("MAIN_HARNESS_BUILD")
+            == "RELEASE_PIPELINE_HANDOFF_ENTRY_BLOCKED_PREFLIGHT_ZERO_WRITE_ZERO_TRANSITION"
+            and state.get("workspace_status")
+            == "RELEASE_PIPELINE_HANDOFF_ENTRY_PREFLIGHT_FAILED_ZERO_WRITE_ZERO_TRANSITION"
+            and state_entry.get("status")
+            == "FAIL_STOPPED_PREFLIGHT_ZERO_WRITE_ZERO_TRANSITION_REAUTHORIZATION_REQUIRED"
+            and bound(state_entry, "failure_receipt_ref", "failure_receipt_sha256")
+            and not (evidence / "release_pipeline/P4_BUILD_INPUT_LOCK").exists()
             and not (evidence / "engineering_dag/RELEASE_PIPELINE_HANDOFF").exists()
             and not (execution_root / "planned_runtime").exists()
         )
@@ -8422,7 +17555,7 @@ def _authorized_main_validation_preparation(
             and manifest.get("execution_started") is False
             and manifest.get("shell") is False
             and manifest.get("network") == "NONE"
-            and manifest.get("executable_sha256") == _file_hash(Path("/opt/homebrew/bin/python3"))
+            and _declared_executable_hash_matches(manifest)
             and descriptor.get("status")
             == "PREPARED_VERIFIED_NOT_INVOKED_FOR_MAIN_VALIDATION"
             and descriptor.get("main_validation_started") is False
@@ -10776,13 +19909,13 @@ def _check_negative_contracts(root: Path) -> list[dict[str, Any]]:
                 _finding("ATTESTATION_TRUSTED_ISSUER_INVALID", trusted_issuer)
             )
     if isinstance(runtime, dict):
-        final_entry = Path(str(runtime.get("final_runtime_entrypoint_abs", "")))
-        driver_entry = Path(str(runtime.get("build_program_driver_entrypoint_abs", "")))
+        final_entry = _contract_path(runtime.get("final_runtime_entrypoint_abs", ""))
+        driver_entry = _contract_path(runtime.get("build_program_driver_entrypoint_abs", ""))
         executor = runtime.get("required_executor", {})
-        executor_entry = Path(str(executor.get("executable_abs", ""))) if isinstance(executor, dict) else Path("")
+        executor_entry = _contract_path(executor.get("executable_abs", "")) if isinstance(executor, dict) else Path("")
         coding_agent = runtime.get("coding_agent_executor", {})
         coding_agent_entry = (
-            Path(str(coding_agent.get("executable_abs", "")))
+            _contract_path(coding_agent.get("executable_abs", ""))
             if isinstance(coding_agent, dict)
             else Path("")
         )
@@ -10838,12 +19971,10 @@ def _check_negative_contracts(root: Path) -> list[dict[str, Any]]:
                 ):
                     coding_command_ids.add(command_id)
                     if (
-                        Path(
-                            str(
-                                command.get("executable_abs")
-                                or command.get("executable")
-                                or ""
-                            )
+                        _contract_path(
+                            command.get("executable_abs")
+                            or command.get("executable")
+                            or ""
                         )
                         != coding_agent_entry
                         or command.get("command_kind")
@@ -10971,6 +20102,23 @@ def _finding(code: str, message: str) -> dict[str, Any]:
 
 def _file_hash(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _declared_executable_hash_matches(document: Mapping[str, Any]) -> bool:
+    """Validate a runtime-discovered absolute executable against its bound Hash."""
+
+    executable = document.get("executable_abs") or document.get("executable")
+    if not isinstance(executable, str):
+        return False
+    path = Path(executable)
+    try:
+        return bool(
+            path.is_absolute()
+            and path.is_file()
+            and document.get("executable_sha256") == _file_hash(path)
+        )
+    except OSError:
+        return False
 
 
 def _json_hash(value: Any) -> str:

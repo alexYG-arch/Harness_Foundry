@@ -1,5 +1,27 @@
 # Factory architecture
 
+## 默认 Foundry 核心产品路径
+
+```text
+Requirement / Architecture inputs
+  -> explicit readback and Hash-bound locks
+  -> read-only compiled contract
+  -> profile-driven Program Graph
+  -> one Generic Transition Engine
+  -> authoring or bounded runtime advance
+  -> durable Checkpoint / Resume / Explain Stop
+  -> portable local package and startup smoke
+  -> official core validation and evidence projection
+```
+
+这条路径是 `SELF_USE_LOCAL_TRUSTED_OPERATOR` 的默认交付路线，共 41 项核心能力。它不依赖 Candidate、Execution Root、Runtime Bind、Program Driver、Workpack、A3、动态攻防、外部认证或安装。`validate-core` 只执行核心模块和核心失败路径；Manifest、Schema 或 Receipt 不能替代真实实现行为。
+
+Slices 09–14 的 8 项 Candidate/Runtime 能力保留为非默认兼容扩展，`default_route=false`、`core_release_blocking=false`。它们的存在不扩大 Foundry 核心完成条件。
+
+## 可选 Start Package 兼容架构
+
+以下架构只在用户明确选择 Candidate Authoring 兼容路线时适用：
+
 ```text
 User natural language
   -> Codex Chat
@@ -16,7 +38,7 @@ User natural language
 
 Codex performs semantic interpretation and presents questions. The deterministic Factory owns state transitions, hashing, freeze challenges, compilation, validation, and publication. The Factory never calls another model.
 
-The sibling v2.8 tree is normative and read-only. `spec_lock/HF28_SPEC_LOCK.json` binds its absolute root, package identity, version, exact file inventory, file hashes, aggregate content hash, and validator identity.
+The sibling v2.8 tree is normative and read-only. `spec_lock/HF28_SPEC_LOCK.json` binds its physical sibling name, package identity, version, exact file inventory, file hashes, aggregate content hash, and validator identity without exporting an author-machine absolute path.
 
 Candidate generation consumes only the frozen Requirement IR, the spec lock, and explicit adjustment records. Chat history is not a generation input.
 

@@ -1,0 +1,89 @@
+{
+  "schema_version": "1.0",
+  "baseline_id": "HUMAN-COST-V29-V0-9-TO-SHARED-BASELINE-001",
+  "status": "HISTORICAL_BASELINE_PARTIALLY_OBSERVABLE",
+  "program_id": "PROGRAM-HARNESS-FOUNDRY-V2-9-UPGRADE",
+  "baseline_scope": "Requirement Epoch 8 reopen through Candidate v0_9 SHARED_CONTROL_BASELINE_LOCK commit",
+  "evidence_roots": [
+    "harness-resource://factory-run/PROGRAM-HARNESS-FOUNDRY-V2-9-UPGRADE/events?requirement_epoch=8",
+    "harness-resource://baseline/v0_9/.harness-foundry/control/PROGRAM_CONTROL_EVENTS.jsonl",
+    "harness-resource://baseline/v0_9/.harness-foundry/control/authorization_receipts/REG-AUTH-V2-9-V0-9-SHARED-CONTROL-BASELINE-LOCK-001.grant_receipt.json"
+  ],
+  "factory_epoch8_event_counts": {
+    "REQUIREMENTS_REOPENED_AND_DOWNSTREAM_INVALIDATED": 1,
+    "REQUIREMENTS_UPDATED": 2,
+    "REQUIREMENTS_READBACK_PREPARED": 1,
+    "REQUIREMENTS_FREEZE_REQUESTED": 1,
+    "REQUIREMENTS_FROZEN_BY_HUMAN": 1,
+    "START_PACKAGE_CANDIDATE_READY_FOR_HUMAN_REVIEW": 1
+  },
+  "runtime_v0_9_event_counts": {
+    "START_PACKAGE_HUMAN_GATE_APPROVED": 1,
+    "SHARED_CONTROL_BASELINE_LOCK_COMMITTED": 1
+  },
+  "provable_human_authority_decisions": {
+    "requirement_freeze_confirmation": 1,
+    "start_package_human_gate": 1,
+    "registration_authorization_grant": 1,
+    "total": 3
+  },
+  "manual_operational_steps_minimum_observable": {
+    "request_requirement_freeze": 1,
+    "confirm_requirement_freeze": 1,
+    "approve_start_package_human_gate": 1,
+    "grant_registration_authorization": 1,
+    "invoke_one_registration_transition": 1,
+    "total_minimum": 5,
+    "note": "Chat-only preparation and inspection turns are not fully represented in the current event schemas, so this is a lower bound rather than a complete interruption count."
+  },
+  "metrics": {
+    "human_decision_count": 3,
+    "manual_hash_input_count": 1,
+    "human_interruptions_to_completion_minimum": 5,
+    "human_wait_duration_ms": null,
+    "auto_transition_count": 0,
+    "derived_grant_count": 0,
+    "bounded_retry_count": 0,
+    "resume_count": 0,
+    "stop_reason_counts": {
+      "REQUIREMENT_FREEZE_CONFIRMATION": 1,
+      "START_PACKAGE_HUMAN_GATE": 1,
+      "REGISTRATION_AUTHORIZATION": 1,
+      "ONE_TRANSITION_BUDGET_EXHAUSTED": 1
+    }
+  },
+  "measurement_limitations": [
+    "Current Factory and Runtime event schemas do not record every Chat interruption or human wait duration.",
+    "manual_hash_input_count counts the exact Requirement Freeze confirmation token containing the Requirement IR SHA256; it does not infer unlogged clipboard behavior.",
+    "The baseline is for the bounded v0.9 path only and is not a full v2.9 release cost estimate."
+  ],
+  "epoch9_hard_acceptance": {
+    "architecture_freeze_count": 1,
+    "parent_risk_authorization_count": 1,
+    "manual_hash_input_count": 0,
+    "minimum_distinct_node_kinds_auto_advanced": 3,
+    "minimum_safe_retry_or_resume_count": 1,
+    "additional_human_gates_for_phase_workpack_review_hash_or_evidence": 0,
+    "allowed_stop_classes": [
+      "REAL_RISK_DELTA",
+      "DECLARED_STOP_GATE",
+      "UNKNOWN_SIDE_EFFECT"
+    ]
+  },
+  "required_epoch9_instrumentation": [
+    "human_decision_count",
+    "manual_hash_input_count",
+    "human_interruptions_to_completion",
+    "human_wait_duration_ms",
+    "auto_transition_count",
+    "derived_grant_count",
+    "bounded_retry_count",
+    "resume_count",
+    "stop_reason_counts"
+  ],
+  "non_claims": [
+    "HUMAN_COST_TARGET_PASSED",
+    "AUTO_PROGRESS_IMPLEMENTED",
+    "RUNTIME_E2E_COMPLETED"
+  ]
+}

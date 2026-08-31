@@ -1,0 +1,56 @@
+{
+  "schema_version": "2.9",
+  "review_id": "V29-V026-HUMAN-REVIEW",
+  "review_mode": "READ_ONLY_NO_HUMAN_GATE_APPROVAL",
+  "program_id": "PROGRAM-HARNESS-FOUNDRY-V2-9-UPGRADE",
+  "candidate_identity": {
+    "candidate_version": "v0_26",
+    "candidate_content_sha256": "cfc092776c9089f1fe1745af2c1ef06d2b0f92045d78717917c20e6bda57ecee",
+    "requirement_ir_sha256": "8556136fa9164d07814a299de89840dfef1e9c09eb7216421587884ffa344978",
+    "factory_revision": 193,
+    "factory_state_sha256": "bdd7044b2bdc2ab09017c6926aae0a96abc9c1cda5205966428c6af218940595"
+  },
+  "reviewed_file_sha256": {
+    "PACKAGE_MANIFEST.json": "054b96b083bb25a5cfe8ab7e5036977daa6c6a7d265b876ffaafa128f0c1cd02",
+    "FACTORY_PROVENANCE.json": "66588f59ffc39bbf2f8a883c7ac50dcf7141448ca87839bf447aa35e6b50ba5d",
+    "canonical_sources/PORTABLE_SOURCE_INDEX.json": "5d7c25b904fc2c1c90432a46997b0706edf755a7ef92be130998791f58c13971",
+    "canonical_sources/SOURCE_MANIFEST.json": "8e79d077ee33cc8b028f7766724069f0ac1a7261b7e6cc433622b25ae331c45c",
+    "contracts/v2_9_release_closure/SOURCE_AUTHORITY_POLICY_LOCK.schema.json": "e96b7d7cb4f1519c9497be9ad5fe4dcc05d8ab8adcca8a5aee9cac9671e47905",
+    "tools/self_check.py": "14bed9acdc33b48f491251b788c91d21993b1370be36d169a767347451bacc6b",
+    "validation/HUMAN_REVIEW_CLOSURE_RECEIPT.json": "890d111164ea3fb40975c745efd6b86d70e076b6c38575480d6cf09908f6308e"
+  },
+  "adversarial_observations": [
+    {
+      "case_id": "PORTABLE_SOURCE_INDEX_SYNCHRONIZED_REHASH_TAMPER",
+      "mutation": "Change one PORTABLE_SOURCE_INDEX payload_ref and recompute downstream closure evidence and portable file inventory Hashes",
+      "standalone_v0_26_verdict": "PASS",
+      "factory_v0_26_verdict": "FAIL",
+      "factory_finding": "PORTABLE_SOURCE_PAYLOAD_INVALID"
+    },
+    {
+      "case_id": "CANDIDATE_DERIVED_EXTERNAL_SOURCE_AUTHORITY_POLICY",
+      "mutation": "Copy the Candidate-equivalent semantic authority projection to a path outside the Candidate",
+      "standalone_v0_26_verdict": "PASS",
+      "authority_established": false
+    },
+    {
+      "case_id": "CLOSURE_REPLACEMENT_IDENTITY_SYNCHRONIZED_ERROR",
+      "mutation": "Repeat candidate-v0_26-root-unbound in Frozen Requirement IR and Closure Receipt",
+      "standalone_v0_26_verdict": "PASS",
+      "factory_v0_26_verdict": "PASS",
+      "successor_binding_candidate_version": "v0_26"
+    }
+  ],
+  "blocking_finding_ids": [
+    "HR-V026-001-PORTABLE-SOURCE-INDEX-STANDALONE-BLIND-SPOT",
+    "HR-V026-002-SOURCE-AUTHORITY-POLICY-NOT-EXTERNALLY-AUTHENTIC",
+    "HR-V026-003-V025-CLOSURE-REPLACEMENT-IDENTITY-DRIFT"
+  ],
+  "review_verdict": "BLOCK_START_PACKAGE_HUMAN_GATE",
+  "candidate_write_performed": false,
+  "execution_root_created": false,
+  "human_gate_consumed": false,
+  "driver_or_workpack_started": false,
+  "authorization_granted": false,
+  "runtime_execution_started": false
+}

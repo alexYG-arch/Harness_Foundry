@@ -1,0 +1,131 @@
+{
+  "schema_version": "1.0",
+  "lock_id": "CONTROL-KERNEL-ARCHITECTURE-EPOCH1-PROPOSAL",
+  "status": "PROPOSED_NOT_FROZEN_NOT_AUTHORIZATION",
+  "program_id": "PROGRAM-HARNESS-FOUNDRY-V2-9-UPGRADE",
+  "requirement_epoch": 9,
+  "architecture_epoch": 1,
+  "control_plane_epoch": 1,
+  "source_bindings": [
+    {
+      "ref": "docs/HARNESS_FOUNDRY_V2_9_ARCHITECTURE_CORRECTION_PLAN.md",
+      "sha256": "200d8a5f79717af8d25a6c82e2fe4a7725de845ec67841509ab8f545fd6efe01"
+    },
+    {
+      "ref": "docs/v2_9_epoch9/BASELINE_REUSE_MANIFEST.json",
+      "sha256": "35eccc98e4ffbc9f9d7c4fadb32080dee63228d4c8769644990ac0deb3edb66a"
+    },
+    {
+      "ref": "docs/v2_9_epoch9/HUMAN_COST_BASELINE.json",
+      "sha256": "646b4acde1586b5508bc5e136ecf0f4d9bbd9de10a8a45cf5764926b629031af"
+    },
+    {
+      "ref": "docs/v2_9_epoch9/ASSURANCE_PROFILE.proposal.schema.json",
+      "sha256": "0e7f5c4a56d44628ea0c72241b48b711f0155b1121ee826a7782a23fc3c99696"
+    },
+    {
+      "ref": "docs/v2_9_epoch9/CONTROL_DOMAIN_CONTRACT.proposal.schema.json",
+      "sha256": "2a5da2c46e0c6b6291e1ac8ba186f5a67331f91c75b0446966241984f599ccbb"
+    },
+    {
+      "ref": "docs/v2_9_epoch9/DECISION_POLICY.proposal.schema.json",
+      "sha256": "ed3c5d5cf302dedd8f6c97df004a4327e17f62f2c90893d0afb6d3a8324bdff1"
+    },
+    {
+      "ref": "docs/v2_9_epoch9/ARCHITECTURE_DECISION_PACKET.md",
+      "sha256": "dfa68a342697ba7ec164ec0af0768034d4bab57919f3c275dfd5cd796ebbb887"
+    }
+  ],
+  "correction_requirement_ids": [
+    "CORR-29-001",
+    "CORR-29-002",
+    "CORR-29-003",
+    "CORR-29-004",
+    "CORR-29-005",
+    "CORR-29-006",
+    "CORR-29-007",
+    "CORR-29-008"
+  ],
+  "architecture_decision_ids": [
+    "ADR-V29-E9-001",
+    "ADR-V29-E9-002",
+    "ADR-V29-E9-003",
+    "ADR-V29-E9-004",
+    "ADR-V29-E9-005",
+    "ADR-V29-E9-006",
+    "ADR-V29-E9-007",
+    "ADR-V29-E9-008",
+    "ADR-V29-E9-009",
+    "ADR-V29-E9-010",
+    "ADR-V29-E9-011",
+    "ADR-V29-E9-012"
+  ],
+  "control_kernel": {
+    "persistent_authority": "SINGLE_APPEND_ONLY_SQLITE_EVENT_STORE",
+    "rebuildable_views": [
+      "GRANT_LEDGER",
+      "PROGRAM_CONTROL_STATE",
+      "READBACK",
+      "HUMAN_COST_RESULT"
+    ],
+    "program_graph_source": "STATIC_FROZEN_ASSURANCE_PROFILE",
+    "transition_engine": "ONE_GENERIC_ENGINE_FOR_DECLARED_NODE_KINDS",
+    "decision_mode": "HASH_BOUND_DETERMINISTIC_RULE_EVALUATOR",
+    "semantic_slot_authority": "PROPOSAL_ONLY",
+    "unknown_or_conflict": "FAIL_CLOSED",
+    "authorization_mode": "PARENT_RISK_ENVELOPE_WITH_MACHINE_DERIVED_ATTEMPT_GRANTS",
+    "completion_mode": "EXPLICIT_MINIMUM_REQUIREMENT_ALL_OF_WITH_DIRECT_INVALIDATION"
+  },
+  "representative_node_kinds": [
+    "READ_ONLY_VALIDATION",
+    "INTERNAL_STATE_TRANSACTION",
+    "BOUNDED_REVERSIBLE_FIXTURE_ACTION"
+  ],
+  "invalidation_plan": {
+    "superseded_assumption_id": "ASM-V29-003",
+    "supersession_status": "SUPERSEDED_BY_PROFILE_DRIVEN_TOPOLOGY_PROPOSAL",
+    "candidate_v0_9": "INVALIDATED_BY_REQUIREMENT_EPOCH9_REOPEN_HISTORICAL_ONLY",
+    "execution_v0_9": "READ_ONLY_GOLDEN_FIXTURE_NO_SUCCESSOR_AUTHORITY",
+    "old_control_plane_epoch": 0,
+    "old_successor_node": "CONTROL_PLANE_REGISTRATION",
+    "old_successor_execution_allowed": false,
+    "consumed_or_revoked_grant_reuse_allowed": false
+  },
+  "scope_boundary": {
+    "v2_9_includes": [
+      "GENERIC_TRANSITION_ENGINE",
+      "DETERMINISTIC_DECISION_POLICY",
+      "PARENT_AND_DERIVED_GRANT",
+      "SINGLE_EVENT_AUTHORITY",
+      "STATIC_ASSURANCE_PROFILE",
+      "MINIMUM_REQUIREMENT_COMPLETION",
+      "CONTROL_DOMAIN_CONTRACT",
+      "HUMAN_COST_ACCEPTANCE",
+      "PORTABLE_HISTORICAL_BINDING"
+    ],
+    "v3_0_only": [
+      "AUTOMATIC_SEMANTIC_DECOMPOSITION",
+      "EVIDENCE_REVERSE_INDEX",
+      "READINESS_MATRIX",
+      "COVERAGE_DELTA_OPTIMIZER",
+      "DYNAMIC_TOPOLOGY_OPTIMIZER",
+      "LEARNING_REVIEW_ROUTER",
+      "CROSS_PROGRAM_FEDERATION"
+    ]
+  },
+  "authoring_stop": {
+    "implementation_allowed_before_freeze": false,
+    "candidate_generation_allowed_before_freeze": false,
+    "driver_start_allowed": false,
+    "workpack_execution_allowed": false,
+    "network_allowed": false,
+    "install_publish_certify_allowed": false
+  },
+  "non_claims": [
+    "ARCHITECTURE_FROZEN",
+    "V2_9_IMPLEMENTED",
+    "CANDIDATE_V0_10_GENERATED",
+    "RUNTIME_E2E_PASSED",
+    "RELEASED_OR_CERTIFIED"
+  ]
+}

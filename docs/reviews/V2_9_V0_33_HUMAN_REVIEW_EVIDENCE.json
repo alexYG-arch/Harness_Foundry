@@ -1,0 +1,63 @@
+{
+  "schema_version": "1.0",
+  "evidence_id": "V2_9_V0_33_HUMAN_REVIEW_EVIDENCE",
+  "program_id": "PROGRAM-HARNESS-FOUNDRY-V2-9-UPGRADE",
+  "review_decision": "FAIL_REOPEN_REQUIRED",
+  "candidate_version": "v0_33",
+  "candidate_requirement_epoch": 33,
+  "candidate_requirement_ir_sha256": "02e2981b17a67e6c229497370ef8a75fe3ba9dff7781e72b06a502f9b8e34bea",
+  "candidate_validation_basis_revision": 256,
+  "candidate_validation_basis_tip_sha256": "64b60af613822dee79d5b46ba871a5c0749d72dbcac836838a5ad28e538b05b6",
+  "candidate_validation_report_sha256": "0ec9fcd5b9d9d965eb2ce724588e77b5e666ee4c82d7b2f2e344b2564765b14c",
+  "candidate_validation_report_receipt_sha256": "d31d2e8b9a517d86d4687d49893d7d712ac8cd39336b88b59f1aec9b10ca3d9e",
+  "review_input_factory_revision": 257,
+  "review_input_factory_state_sha256": "3418c330fc610bae027863c2a6feb87358fb395ff3866d9c97e2730f34b13549",
+  "finding_ids": [
+    "HR-V033-001-EXISTING-EXECUTION-ROOT-OVERWRITE",
+    "HR-V033-002-REQUIRED-BINDER-REGRESSION-NOT-EXECUTED"
+  ],
+  "required_regression_tests": [
+    "test_epoch33_review_remediation_routes_to_producer_and_both_oracles",
+    "test_runtime_binder_rejects_missing_dependency_before_root_write",
+    "test_runtime_binder_rejects_dangling_uri_without_creating_root",
+    "test_runtime_binder_rejects_portable_inventory_gap_without_creating_root",
+    "test_runtime_binder_rejects_existing_root_by_default_and_allows_exact_reentry",
+    "test_standalone_requires_receiver_side_source_authority_policy"
+  ],
+  "implemented_replacement_evidence": {
+    "compiler_sha256": "d53c092f1bf37481b964847ab9ac684f743f6d7dee602d7b9636ad959139694a",
+    "factory_validator_sha256": "d2db16566b0f43fca40feac47cf83509456c8a5285f3444f48e05a4820d943c0",
+    "release_closure_regression_test_sha256": "a365b1c6a0ce0f56fd39d63d748d2a1fd418e5568945f68b2f982eeacb9956fb",
+    "full_test_command": "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py' -v",
+    "full_test_result": "PASS_177_OF_177",
+    "spec_verification_result": "PASS_101_FILES",
+    "spec_content_sha256": "be81e6b46573abcbff0a9851812b3b2bb78814928e57a59d65a2b5bb733b8503",
+    "skill_validation_result": "PASS",
+    "diff_check_result": "PASS"
+  },
+  "required_factory_behavior": {
+    "existing_root_fail_closed_by_default": true,
+    "idempotent_reentry_requires_explicit_flag": true,
+    "idempotent_reentry_requires_exact_receipt": true,
+    "existing_binding_overwrite_allowed": false,
+    "required_test_definitions_checked": true,
+    "required_test_selectors_executed": true,
+    "detached_factory_regression_execution_receipt_required": true,
+    "closure_may_infer_pass_from_declaration_or_file_hash": false
+  },
+  "preservation_and_non_execution": {
+    "v0_33_candidate_present": true,
+    "v0_33_execution_root_absent": true,
+    "v0_34_candidate_absent": true,
+    "v0_34_execution_root_absent": true,
+    "human_gate_consumed": false,
+    "driver_started": false,
+    "workpack_started": false,
+    "runtime_authorization_granted": false,
+    "runtime_transition_executed": false
+  },
+  "remediation_status": "IMPLEMENTED_TESTED_NOT_FROZEN_NOT_GENERATED",
+  "evidence_authority": "FACTORY_LOCAL_READ_ONLY_HUMAN_REVIEW_AND_TEST_EVIDENCE",
+  "runtime_success_claimed": false,
+  "human_gate_approval_claimed": false
+}

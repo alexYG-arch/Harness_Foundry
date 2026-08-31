@@ -214,6 +214,57 @@ class FactoryStateMachineTests(unittest.TestCase):
         with self.assertRaises(IdempotencyConflictError):
             self.service.handle_chat_turn(changed)
 
+    def test_update_requirements_rejects_unknown_patch_wrapper(self) -> None:
+        created = self.service.handle_chat_turn(
+            self._request("CREATE", number=1, payload={})
+        )
+
+        with self.assertRaisesRegex(
+            RequestValidationError, "unknown payload fields: patch"
+        ):
+            self.service.handle_chat_turn(
+                self._request(
+                    "UPDATE_REQUIREMENTS",
+                    number=2,
+                    expected_state_hash=created["new_state_hash"],
+                    payload={"patch": {"target": {"mission": "silently ignored"}}},
+                )
+            )
+
+        record = self.store.get_program("PROGRAM-1")
+        self.assertEqual(record.revision, 1)
+        self.assertIsNone(
+            record.snapshot["requirement_ir"]["target"].get("mission")
+        )
+
+    def test_update_requirements_rejects_empty_patch(self) -> None:
+        for index, payload in enumerate(
+            ({}, {"requirement_ir": {}}, {"target": {}}), 1
+        ):
+            with self.subTest(payload=payload):
+                program_id = f"PROGRAM-EMPTY-{index}"
+                created = self.service.handle_chat_turn(
+                    self._request(
+                        "CREATE",
+                        number=index * 2 - 1,
+                        payload={},
+                        program_id=program_id,
+                    )
+                )
+                with self.assertRaisesRegex(
+                    RequestValidationError, "non-empty requirement patch"
+                ):
+                    self.service.handle_chat_turn(
+                        self._request(
+                            "UPDATE_REQUIREMENTS",
+                            number=index * 2,
+                            program_id=program_id,
+                            expected_state_hash=created["new_state_hash"],
+                            payload=payload,
+                        )
+                    )
+                self.assertEqual(self.store.get_program(program_id).revision, 1)
+
     def test_frozen_requirements_require_explicit_reopen(self) -> None:
         _, _, _, frozen = self._freeze()
         with self.assertRaises(InvalidTransitionError):
@@ -257,6 +308,7 @@ class FactoryStateMachineTests(unittest.TestCase):
             target_root: Path,
             created_at: str,
             spec_lock: dict,
+            **_kwargs: object,
         ) -> dict:
             target_root.mkdir(parents=True)
             (target_root / "START_CONTEXT.json").write_text(
@@ -275,7 +327,11 @@ class FactoryStateMachineTests(unittest.TestCase):
             )
             return {"candidate_path": str(target_root), "content_sha256": "abc"}
 
-        def validate_candidate(root: Path, spec_lock: dict | None = None) -> dict:
+        def validate_candidate(
+            root: Path,
+            spec_lock: dict | None = None,
+            **_kwargs: object,
+        ) -> dict:
             return {"status": "PASS", "candidate_root": str(root)}
 
         compiler_module.compile_candidate = compile_candidate  # type: ignore[attr-defined]

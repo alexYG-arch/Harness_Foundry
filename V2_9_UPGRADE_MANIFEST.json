@@ -1,0 +1,72 @@
+{
+  "schema_version": "1.0",
+  "project_id": "HARNESS_FOUNDRY_V2_9_CHAT_FACTORY_V0_1",
+  "status": "ISOLATED_BASELINE_READY_FOR_AUTHORING",
+  "target_version": "2.9.0",
+  "implementation_claim": "NOT_YET_IMPLEMENTED",
+  "created_date": "2026-08-03",
+  "source_baseline": {
+    "project_id": "HARNESS_FOUNDRY_V2_8_CHAT_FACTORY_V0_1",
+    "git_commit": "8ba998c59c8fd6fa8558554bec893b694e13564e",
+    "import_policy": "TRACKED_HEAD_PLUS_EXPLICIT_TESTED_WORKTREE_DELTA",
+    "tracked_worktree_delta_sha256": "7ba9102a32f4e75a69ea157ecf7534a32a08d2656ade875c489d74ac282c20c6",
+    "baseline_test_count": 78,
+    "baseline_test_status": "PASS"
+  },
+  "explicit_worktree_imports": {
+    "src/harness_foundry_factory/compiler.py": "2daf0cf39ff3b97535cf61608fb093b9d3eec142666a32ebbaeb5bacb3938cb0",
+    "src/harness_foundry_factory/constants.py": "c2542fbaaaeff14755b6ce9c3fa821db30be5a98dd297670b3049fbc664fcdca",
+    "src/harness_foundry_factory/validator.py": "100e65b392377fd9c06c2738628f37e779e59a9b65be62b8e1dce5226749ef0d",
+    "tests/test_compiler_validator.py": "49210d4e5f813032a470c82e035c63fd9f327a7ff142cb8ac9a4bf7f5314faf2",
+    "tests/test_workpack_layering.py": "497fe3a30255154853125e2cdfd0652b76b70b5c2eafbaf71acfbf9ca0a214c2"
+  },
+  "upgrade_inputs": {
+    "docs/HARNESS_FOUNDRY_V2_9_SEMANTIC_CONFORMANCE_UPGRADE_PLAN.md": "3c8969ff9eab4be2e117eee402a19c58a0785d1c6559578c58231dbcf773848a",
+    "docs/HARNESS_FOUNDRY_V2_9_SEMANTIC_CONFORMANCE_UPGRADE_PLAN_R6_CASE_HEAVY_ARCHIVE.md": "762c2974abce2bc9c5ed6415aefd9a49e7f1b59b96b500fa45687e3942eb2199",
+    "docs/HARNESS_FOUNDRY_V2_9_SEMANTIC_CONFORMANCE_UPGRADE_PLAN_R7_PRE_3_0_SPLIT_ARCHIVE.md": "f87bfb8fb00fe6a88bd37da2691a7b13cd0eb0c20e0b6bc2b1c40e7a545062fd",
+    "docs/HARNESS_FOUNDRY_V2_9_SOURCE_CASE_001.md": "529ce3860b21bce4b1c6d722c454d4707b59b6b3c5e41fd6c934df34fca690b2",
+    "docs/HARNESS_FOUNDRY_V3_0_FOLLOW_ON_ARCHITECTURE_PLAN.md": "342bb83d5fd01bdfe9c4861bbc1b55b5ccd09da10ac05a8262f646c2c82d6702",
+    "docs/HARNESS_FOUNDRY_V3_0_FOLLOW_ON_ARCHITECTURE_PLAN_R0_PRE_HUMAN_COST_REFACTOR_ARCHIVE.md": "f694cb2d0364de3bbbe46aaed7d404b5d1bf794247698aacf64d975334338822",
+    "docs/START_PACKAGE_THREE_PROJECT_ARCHITECTURE_REVIEW.md": "0d3fbaf538e020d331821fb12804642b75046666a2c45c8483ec0ae8f5de7883",
+    "docs/START_PACKAGE_TRUST_PRINCIPLES_LIMITATIONS_AND_CODEX_THREE_CLI.md": "91029ddf3aa895acc086285a850df72cf780ded3d3c1a2317eb16f8bae2145b8"
+  },
+  "isolation": {
+    "independent_git_directory": true,
+    "independent_branch": "codex/v2.9-upgrade",
+    "independent_runs_root": true,
+    "runtime_state_copied": false,
+    "sqlite_copied": false,
+    "authorization_or_certificate_copied": false,
+    "source_project_write_required": false
+  },
+  "first_v2_9_implementation_change": {
+    "requirement": "P0-10_PORTABLE_RELEASE_CONTRACT",
+    "finding": "HF28_SPEC_LOCK_BOUND_TO_LOCAL_ABSOLUTE_PATH",
+    "resolution": "PHYSICAL_SIBLING_NAME_AND_CONTENT_HASH",
+    "absolute_path_removed_from_committed_lock": true,
+    "symlink_sibling_rejected": true,
+    "spec_content_sha256": "be81e6b46573abcbff0a9851812b3b2bb78814928e57a59d65a2b5bb733b8503",
+    "spec_file_count": 101,
+    "new_project_test_count": 80,
+    "new_project_test_status": "PASS",
+    "changed_file_sha256": {
+      "src/harness_foundry_factory/spec_lock.py": "9fd684cb84653405cf00bbcf5e48dd796bbeefb1e6e744a8cb53f212c970f01e",
+      "spec_lock/HF28_SPEC_LOCK.json": "921aeba5a8c1eb99d053ca309e8212f9ef8c2a44545eb7c3502b3486c907a35d",
+      "tests/test_spec_and_sources.py": "96ac3fe7d6c96f0bef8ed5cef4c58708c31401830c671ec0dc1346047b6ff685",
+      "FACTORY_MANIFEST.json": "3b458bdf74d4eae5f35d9b6cdc2969544acf8377f1c735d52e8894514af3197f"
+    }
+  },
+  "epoch_1_requirement_correction": {
+    "status": "REOPENED_FOR_NEW_READBACK",
+    "reason": "P0-10 must cover generated Candidate and frozen/shareable manifests, not only the final Git release.",
+    "portable_contract": "PERSIST_LOGICAL_REFS_RESOLVE_LOCAL_ROOTS_AT_RUNTIME",
+    "local_binding_policy": "LOCAL_ONLY_NON_EXPORTABLE",
+    "updated_file_sha256": {
+      "START_V2_9_UPGRADE.md": "4037e1e0041dc4ee71b900c439374b114b0c02b861794f6c96f249302c7e5b2a",
+      "docs/HARNESS_FOUNDRY_V2_9_SEMANTIC_CONFORMANCE_UPGRADE_PLAN.md": "3c8969ff9eab4be2e117eee402a19c58a0785d1c6559578c58231dbcf773848a",
+      "docs/V2_9_CODE_REUSE_MAP.md": "9c8ab517b022957263534c3c637fe6d368f8de9f6cd57b4b2d40c4a7db137886",
+      "docs/V2_9_IMPLEMENTATION_TRACKER.md": "ca160e8b0686c6d810377ba0a04e1d4bc44c23cd840ef863b957295bfc994dad"
+    }
+  },
+  "authoring_program_id": "PROGRAM-HARNESS-FOUNDRY-V2-9-UPGRADE"
+}

@@ -1,0 +1,427 @@
+{
+  "schema_version": "1.0",
+  "readback_id": "V2_9_RELEASE_CLOSURE_CONTROL_PLANE_REMEDIATION",
+  "artifact_kind": "REQUIREMENT_READBACK_PROPOSAL",
+  "status": "PROPOSED_NOT_FROZEN_NOT_AUTHORIZATION",
+  "readback_sha256": "d41ea99fab463ce1eda347813834e887a498c0cf6a4b822b059001899b14506d",
+  "program_id": "PROGRAM-HARNESS-FOUNDRY-V2-9-UPGRADE",
+  "plain_language_summary": {
+    "current_position": "v0_13已经证明通用控制内核能运行三种Fixture节点，但尚未证明低人工成本、产品完成、安全关闭、发布认证或安装完成。",
+    "problem": "新控制内核和v2.8固定流程仍同时存在于权威链路；实现Hash会向上传播到人工授权身份，恢复仍有节点专用入口，复杂度规则没有机器熔断，产品、安全和发布仍被固定单链耦合。",
+    "decision_requested_later": "是否在同一Program中REOPEN到Requirement Epoch 13，并冻结Release Closure控制面修正。",
+    "effect_of_this_readback": "只提供可读提案；不改变Factory、Candidate、Execution Root、Event Store或任何授权状态。"
+  },
+  "authority_snapshot": {
+    "factory_revision": 90,
+    "factory_state": "CANDIDATE_READY_FOR_HUMAN_REVIEW",
+    "factory_state_sha256": "39255afdb44171fba355c8e313f87fd5d31ca5f6b89b8ad54d8f6e718e7f8166",
+    "next_allowed_factory_intents": [
+      "REOPEN"
+    ],
+    "current_requirement_epoch": 12,
+    "current_requirement_freeze_status": "FROZEN",
+    "current_requirement_ir_sha256": "b56e075f193ad64e2781069bb592e02f3c6e261b864b9bbf2d94dff1a42ce79e",
+    "current_candidate_version": "v0_13",
+    "current_candidate_factory_content_sha256": "af8285316fa4b2c28608187b91beba49466dc180bc5dcbfebf3a2d2d9c6f97c0",
+    "current_candidate_runtime_tree_sha256": "fae5de7fd7a2e88402b73a7f870eb567dd1eaca21e84a481a7a27cdc8125a158",
+    "current_candidate_file_count": 259,
+    "current_candidate_status": "START_PACKAGE_CANDIDATE_READY_FOR_HUMAN_REVIEW",
+    "runtime_event_stream_revision": 24,
+    "runtime_last_event_sha256": "e29f007a5046e35619cd2910dbed62f09327a9bbe7552072f50bda4dc5a8ce57",
+    "runtime_completed_transitions": [
+      "PROFILE_READ_VALIDATION",
+      "PROFILE_INTERNAL_STATE",
+      "PROFILE_REVERSIBLE_FIXTURE"
+    ],
+    "runtime_next_declared_transition": null,
+    "runtime_parent_status": "REVOKED",
+    "runtime_root_classification": "UPGRADE_CONSTRUCTION_TRACE_NOT_FINAL_HUMAN_COST_ACCEPTANCE",
+    "release_closure_status": "BLOCKED_PENDING_CONTROL_PLANE_REMEDIATION"
+  },
+  "status_scope_separation": {
+    "candidate_authoring_status": "The immutable Candidate declares planned runtime state and static authoring PASS.",
+    "execution_status": "The separate Execution Root records three committed Fixture transitions through event 24.",
+    "rule": "Authoring and Runtime status fields must retain explicit authority_scope and must not overwrite or contradict each other in a derived Readback.",
+    "current_known_conflict": "The current status projection can expose an old waiting-for-implementation status together with completed transition facts.",
+    "required_failure": "PROJECTION_CONFLICT"
+  },
+  "measured_problem_baseline": {
+    "candidate_inventory": {
+      "physical_files": 259,
+      "json_files": 195,
+      "jsonl_files": 3,
+      "parsed_hash_key_occurrences": 1317,
+      "unique_hash_key_names": 144,
+      "counting_method": "Recursively parse every JSON document and every non-empty JSONL record; count object keys whose lowercase name contains hash or sha256."
+    },
+    "validator": {
+      "lines": 14043,
+      "ast_function_definitions": 194,
+      "function_names_containing_authorized": 35,
+      "confirmed_couplings": [
+        "PYTHON_AST_AND_EXACT_FUNCTION_NAMES",
+        "FIXED_ATTEMPT_AND_RECEIPT_PATHS",
+        "EXACT_CHANGED_FILE_LISTS",
+        "EXACT_CHECK_ORDER_AND_TEST_COUNTS"
+      ]
+    },
+    "workspace_history": {
+      "candidate_directories": 13,
+      "execution_project_directories": 6,
+      "execution_root_directories": 6,
+      "interpretation": "Counts prove retained history and operational growth, not evidence abuse by themselves; Release Closure requires indexing, lifecycle classification and retention rules."
+    },
+    "legacy_release_topology": {
+      "schema_identity": "2.8",
+      "fixed_step_count": 23,
+      "finding": "Product build, Linkage, installability, certification, promotion and real-target installation remain one ordered authority chain."
+    }
+  },
+  "proposed_epoch_transition": {
+    "same_program_required": true,
+    "proposed_requirement_epoch": 13,
+    "proposed_architecture_epoch": 2,
+    "proposed_control_plane_epoch": 2,
+    "created_by_this_readback": false,
+    "reopen_authorized": false,
+    "freeze_requested": false,
+    "freeze_confirmed": false,
+    "successor_candidate_version": null,
+    "successor_candidate_root": null,
+    "successor_execution_root": null,
+    "historical_roots_policy": "Candidate v0_13, Execution Root v0_13 and event revision 24 remain immutable read-only baselines."
+  },
+  "correction_requirements": [
+    {
+      "correction_id": "CORR-29-009",
+      "title": "THREE_LAYER_IDENTITY_SEPARATION",
+      "requirement": "Separate Semantic Contract Identity, Implementation Release Identity and Authorization Risk Identity. Exact implementation bytes remain machine-bound but do not directly define the human authorization identity.",
+      "maps_to": [
+        "ATOM-V29-P0-02",
+        "ATOM-V29-P0-05",
+        "ATOM-V29-P0-10"
+      ]
+    },
+    {
+      "correction_id": "CORR-29-010",
+      "title": "GENERIC_RECOVERY_DECISION_PROTOCOL",
+      "requirement": "One generic Recovery Decision Protocol selects RESULT_VALIDATION_ONLY, FINALIZATION_ONLY, RETRY_EXECUTOR or HUMAN_RISK_REVIEW from receipts, effect certainty, event commit, grant state, checkpoint and retry budget.",
+      "maps_to": [
+        "ATOM-V29-P0-06",
+        "ATOM-V29-P0-07"
+      ]
+    },
+    {
+      "correction_id": "CORR-29-011",
+      "title": "EXECUTABLE_COMPLEXITY_GOVERNOR",
+      "requirement": "Compile deletion budget, authoritative bespoke-path retirement, Human Gate cost and repeated control-fault circuit breaking into executable policy and reconstructable receipts.",
+      "maps_to": [
+        "ATOM-V29-P0-03",
+        "ATOM-V29-P0-05",
+        "ATOM-V29-P0-06"
+      ]
+    },
+    {
+      "correction_id": "CORR-29-012",
+      "title": "INDEPENDENT_PRODUCT_SAFETY_RELEASE_CLOSURE_LANES",
+      "requirement": "Model Product, Safety and Release as independent closure state domains and join their receipts only in Final Release Decision. Move the fixed v2.8 23-step release story behind a Compatibility Adapter.",
+      "maps_to": [
+        "ATOM-V29-P0-03",
+        "ATOM-V29-P0-08",
+        "ATOM-V29-P0-09"
+      ]
+    },
+    {
+      "correction_id": "CORR-29-013",
+      "title": "EVIDENCE_LIFECYCLE_AND_PROJECTION_CONSISTENCY",
+      "requirement": "Add an authority-neutral Evidence Index, explicit retention classes and one rebuildable scoped projection model that fails closed on conflicting status facts.",
+      "maps_to": [
+        "ATOM-V29-P0-01",
+        "ATOM-V29-P0-07",
+        "ATOM-V29-P0-10"
+      ]
+    }
+  ],
+  "identity_contract": {
+    "semantic_contract_identity_binds": [
+      "CONTRACT_ID",
+      "CONTRACT_VERSION",
+      "NORMATIVE_BEHAVIOR",
+      "INPUT_OUTPUT_SCHEMA",
+      "INVARIANTS"
+    ],
+    "implementation_release_identity_binds": [
+      "EXACT_EXECUTOR_BYTES",
+      "ARTIFACT_BYTES",
+      "SBOM",
+      "PROVENANCE",
+      "TOOLCHAIN"
+    ],
+    "authorization_risk_identity_binds": [
+      "SEMANTIC_CONTRACT_VERSION",
+      "SCOPE",
+      "PERMISSIONS",
+      "WRITE_ROOTS",
+      "NETWORK",
+      "SECRET_ACCESS",
+      "EXTERNAL_EFFECT_CLASS",
+      "BUDGET",
+      "STOP_GATES"
+    ],
+    "implementation_only_change_requires_new_human_authorization": false,
+    "semantic_or_risk_change_requires_new_human_authorization": true,
+    "machine_grant_must_bind_exact_implementation": true,
+    "human_manual_hash_input_required": false
+  },
+  "recovery_contract": {
+    "decision_modes": [
+      "RESULT_VALIDATION_ONLY",
+      "FINALIZATION_ONLY",
+      "RETRY_EXECUTOR",
+      "HUMAN_RISK_REVIEW"
+    ],
+    "required_inputs": [
+      "COMMAND_RECEIPT",
+      "EFFECT_CERTAINTY",
+      "RESULT_RECEIPT",
+      "EVENT_COMMIT_STATE",
+      "GRANT_STATE",
+      "CHECKPOINT",
+      "RETRY_BUDGET"
+    ],
+    "node_specific_authoritative_recovery_allowed": false,
+    "unknown_side_effect_default": "HUMAN_RISK_REVIEW",
+    "known_no_effect_and_budget_available_default": "RETRY_EXECUTOR"
+  },
+  "complexity_governor": {
+    "new_node_specific_authorized_paths_max": 0,
+    "new_fixed_attempt_or_receipt_ids_in_core_max": 0,
+    "generic_path_minimum_authoritative_retirements": 1,
+    "active_bespoke_path_delta_must_be_negative": true,
+    "human_gate_requires_nonempty_risk_delta_or_external_authority_boundary": true,
+    "same_control_fault_second_occurrence": "ARCHITECTURE_REVIEW_REQUIRED",
+    "required_machine_outputs": [
+      "COMPLEXITY_BASELINE",
+      "COMPLEXITY_DELTA",
+      "RETIREMENT_MANIFEST",
+      "HUMAN_COST_RESULT",
+      "CIRCUIT_BREAKER_DECISION_RECEIPT"
+    ],
+    "validator_only_closure_allowed": false
+  },
+  "closure_lane_contract": {
+    "lanes": [
+      {
+        "lane_id": "PRODUCT",
+        "closes": [
+          "FUNCTIONAL_IMPLEMENTATION",
+          "BEHAVIOR_TESTS",
+          "PRODUCT_ACCEPTANCE"
+        ]
+      },
+      {
+        "lane_id": "SAFETY",
+        "closes": [
+          "POLICY",
+          "PERMISSION_AND_SANDBOX",
+          "ADVERSARIAL_TESTS",
+          "INDEPENDENT_ORACLE"
+        ]
+      },
+      {
+        "lane_id": "RELEASE",
+        "closes": [
+          "PACKAGING",
+          "PROVENANCE",
+          "INSTALLABILITY",
+          "CERTIFICATION",
+          "PROMOTION"
+        ]
+      }
+    ],
+    "failure_isolation_required": true,
+    "cross_lane_status_overwrite_allowed": false,
+    "final_release_rule": "ALL_THREE_VALID_CLOSURE_RECEIPTS_AND_COMPATIBILITY_LINKAGE_PASS",
+    "three_physical_clis_or_repositories_required": false,
+    "legacy_v2_8_fixed_pipeline_role": "COMPATIBILITY_ADAPTER_ONLY"
+  },
+  "evidence_lifecycle_contract": {
+    "persistent_fact_authority": "SINGLE_APPEND_ONLY_EVENT_STORE",
+    "evidence_index_creates_authority": false,
+    "retention_classes": [
+      "ACTIVE_BASELINE",
+      "HISTORICAL_REGRESSION",
+      "SUPERSEDED",
+      "ARCHIVED"
+    ],
+    "projection_rebuild_required": true,
+    "projection_conflict_behavior": "FAIL_CLOSED",
+    "file_or_directory_count_is_completion_evidence": false
+  },
+  "adjusted_implementation_slices": [
+    {
+      "slice_id": "A",
+      "name": "RELEASE_HOLD_AND_ARCHITECTURE_CORRECTION",
+      "outputs": [
+        "REQUIREMENT_READBACK",
+        "CORRECTION_TRACEABILITY",
+        "IDENTITY_SCHEMA",
+        "RECOVERY_DECISION_SCHEMA",
+        "COMPLEXITY_BUDGET_SCHEMA",
+        "CLOSURE_LANE_SCHEMA",
+        "V0_13_READ_ONLY_BASELINE_BINDING"
+      ],
+      "implementation_or_runtime_allowed": false
+    },
+    {
+      "slice_id": "B",
+      "name": "GENERIC_KERNEL_REMEDIATION",
+      "requirements": [
+        "IDENTITY_SEPARATION",
+        "GENERIC_RECOVERY",
+        "COMPLEXITY_GOVERNOR",
+        "CONSISTENT_PROJECTIONS",
+        "AUTHORITATIVE_BESPOKE_PATH_RETIREMENT"
+      ]
+    },
+    {
+      "slice_id": "C",
+      "name": "REQUIREMENT_EVIDENCE_AND_THREE_LANE_CLOSURE",
+      "requirements": [
+        "MINIMUM_REQUIREMENT_COMPLETION",
+        "PRODUCT_SAFETY_RELEASE_STATE_ISOLATION",
+        "DIRECT_INVALIDATION",
+        "EVIDENCE_INDEX",
+        "FINAL_RELEASE_JOIN"
+      ]
+    },
+    {
+      "slice_id": "D",
+      "name": "REPLACEMENT_CANDIDATE_AND_INDEPENDENT_E2E",
+      "prerequisite": "LATER_EXPLICIT_REQUIREMENT_AND_ARCHITECTURE_FREEZE",
+      "candidate_version_preassigned": false,
+      "clean_acceptance_root_created_by_this_slice_proposal": false
+    }
+  ],
+  "acceptance_cases": [
+    {
+      "case_id": "RC-AC-001",
+      "expectation": "Changing exact implementation bytes while semantic contract and risk stay equal changes Implementation Release and Machine Grant identity but not Human Authorization Risk identity."
+    },
+    {
+      "case_id": "RC-AC-002",
+      "expectation": "Changing contract, scope, permission, network, secret, budget or irreversible effect produces Risk Delta and a human gate."
+    },
+    {
+      "case_id": "RC-AC-003",
+      "expectation": "Every Recovery mode passes positive, negative, crash and idempotent replay tests through one generic protocol."
+    },
+    {
+      "case_id": "RC-AC-004",
+      "expectation": "Adding a generic path without retiring at least one authoritative bespoke path is rejected."
+    },
+    {
+      "case_id": "RC-AC-005",
+      "expectation": "A second occurrence of the same control-fault fingerprint stops at ARCHITECTURE_REVIEW_REQUIRED."
+    },
+    {
+      "case_id": "RC-AC-006",
+      "expectation": "Product, Safety and Release can fail independently; one lane cannot overwrite another lane's closure status."
+    },
+    {
+      "case_id": "RC-AC-007",
+      "expectation": "Final Release fails unless all three current Closure Receipts and their compatibility/linkage decision pass."
+    },
+    {
+      "case_id": "RC-AC-008",
+      "expectation": "A clean future E2E uses one Architecture Freeze, one Parent for three node kinds, zero manual hashes, zero internal-flow human gates and at least one safe recovery."
+    },
+    {
+      "case_id": "RC-AC-009",
+      "expectation": "A derived Readback containing contradictory status facts in the same authority scope fails with PROJECTION_CONFLICT."
+    },
+    {
+      "case_id": "RC-AC-010",
+      "expectation": "Candidate v0_13, Execution Root v0_13 and formal event revision 24 remain byte-for-byte unchanged during proposal authoring."
+    }
+  ],
+  "v2_9_boundary": {
+    "must_close_before_release": [
+      "CORR-29-009",
+      "CORR-29-010",
+      "CORR-29-011",
+      "CORR-29-012",
+      "CORR-29-013"
+    ],
+    "may_remain_historical_behind_compatibility_boundary": [
+      "NON_AUTHORITATIVE_V2_8_VALIDATOR_PATHS",
+      "SUPERSEDED_CANDIDATES_AND_EXECUTION_ROOTS",
+      "HISTORICAL_RECEIPTS"
+    ],
+    "deferred_to_v3_0": [
+      "AUTOMATIC_SEMANTIC_DECOMPOSITION",
+      "LEARNING_REVIEW_ROUTER",
+      "DYNAMIC_TOPOLOGY_OPTIMIZER",
+      "CROSS_PROGRAM_FEDERATION",
+      "GLOBAL_EVIDENCE_OPTIMIZER"
+    ]
+  },
+  "proposal_effect": {
+    "factory_sqlite_modified": false,
+    "factory_reopen_executed": false,
+    "requirement_epoch_created": false,
+    "requirement_freeze_requested": false,
+    "requirement_freeze_confirmed": false,
+    "candidate_generated": false,
+    "execution_root_created": false,
+    "authorization_or_grant_created": false,
+    "driver_started": false,
+    "workpack_started": false,
+    "transition_executed": false,
+    "network_access_authorized": false,
+    "installation_publication_or_certification_authorized": false
+  },
+  "next_action_if_later_explicitly_authorized": {
+    "action": "FACTORY_REOPEN_AND_AUTHOR_REQUIREMENT_EPOCH_13_READBACK",
+    "same_program_required": true,
+    "separate_user_authorization_required": true,
+    "automatic_execution_from_this_proposal": false,
+    "stop_after": "REQUIREMENT_EPOCH_13_READBACK_READY_NOT_FROZEN"
+  },
+  "source_bindings": [
+    {
+      "ref": "docs/HARNESS_FOUNDRY_V2_9_ARCHITECTURE_CORRECTION_PLAN.md",
+      "sha256": "8902bd69fddd1599adaa24f1c0732831d6a79a1077bd148c78fad6f8c45430e8",
+      "role": "CURRENT_RELEASE_CLOSURE_ARCHITECTURE_PROPOSAL"
+    },
+    {
+      "ref": "harness-resource://factory/program/PROGRAM-HARNESS-FOUNDRY-V2-9-UPGRADE/requirement-epoch/12",
+      "sha256": "b56e075f193ad64e2781069bb592e02f3c6e261b864b9bbf2d94dff1a42ce79e",
+      "role": "FROZEN_REQUIREMENT_IR_READ_ONLY_BASELINE"
+    },
+    {
+      "ref": "harness-resource://candidate/v0_13",
+      "sha256": "fae5de7fd7a2e88402b73a7f870eb567dd1eaca21e84a481a7a27cdc8125a158",
+      "role": "READ_ONLY_RUNTIME_BOUND_CANDIDATE_TREE"
+    },
+    {
+      "ref": "harness-resource://execution/v0_13/control-event-stream/revision/24",
+      "sha256": "e29f007a5046e35619cd2910dbed62f09327a9bbe7552072f50bda4dc5a8ce57",
+      "role": "READ_ONLY_CONSTRUCTION_TRACE_TERMINAL_EVENT"
+    }
+  ],
+  "non_claims": [
+    "FACTORY_REQUIREMENTS_REOPENED",
+    "REQUIREMENT_EPOCH_13_CREATED",
+    "REQUIREMENTS_FROZEN",
+    "ARCHITECTURE_FROZEN",
+    "CONTROL_PLANE_REMEDIATION_IMPLEMENTED",
+    "SUCCESSOR_CANDIDATE_GENERATED",
+    "CLEAN_ACCEPTANCE_ROOT_CREATED",
+    "DRIVER_OR_WORKPACK_STARTED",
+    "PRODUCT_LANE_CLOSED",
+    "SAFETY_LANE_CLOSED",
+    "RELEASE_LANE_CLOSED",
+    "V2_9_RELEASED_CERTIFIED_OR_INSTALLED"
+  ]
+}

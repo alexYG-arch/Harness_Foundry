@@ -1,0 +1,58 @@
+{
+  "schema_version": "2.9",
+  "review_id": "V29-V027-HUMAN-REVIEW",
+  "review_mode": "READ_ONLY_NO_HUMAN_GATE_APPROVAL",
+  "program_id": "PROGRAM-HARNESS-FOUNDRY-V2-9-UPGRADE",
+  "candidate_identity": {
+    "candidate_version": "v0_27",
+    "candidate_content_sha256": "cd3f7607a8f081c8b453e398eaaa54fa5edcf5bad6b3b2c37a67813cf651a335",
+    "requirement_ir_sha256": "509ad20773a2a2a9f17c882d4207757c7df57d2afd77a25de3d7ad12b31f5eaa",
+    "factory_revision": 208,
+    "factory_state_sha256": "c344cc49b00fa6e23b8409c7d29fedc63d1fb0f936bdac4d8d914bbc52d678ed"
+  },
+  "reviewed_file_sha256": {
+    "PACKAGE_MANIFEST.json": "19cbd4d51ff03b6d44ec0cb72e805897959b32e82f505886b93c1a10d4c94b7d",
+    "FACTORY_PROVENANCE.json": "4f4bca298249b46d81a5f04c3fd2ddf4f786293124d1da27f81145958bb18a11",
+    "canonical_sources/FROZEN_REQUIREMENT_IR.json": "550675587b61f8b31ea8441fa0115ee80a47ad3046fd18b3b16631b309445152",
+    "canonical_sources/PORTABLE_SOURCE_INDEX.json": "cf97888d6004542bb6312b110eba76d09f12d0df94ca5b65628c2b24ce2a9122",
+    "canonical_sources/SOURCE_MANIFEST.json": "6e553341430032f8ccd1a8a65c8ee417b815e4d36cdc5e411f5557d6a7fc2993",
+    "validation/HUMAN_REVIEW_CLOSURE_RECEIPT.json": "46caef90fc9831ad64591ecd7c1d9dab28bb776135546ee16af3fa72f3251ef3",
+    "tools/self_check.py": "8ea94935e8b779889a3af459dda64ac7fcea02b945ab56b3dae6fd37f76aaf3a",
+    "factory/src/harness_foundry_factory/compiler.py": "c1f28e22cb1cb61c80cb3e4377a994b8a47920cfd1b9dabb819ec03445a0358c",
+    "factory/src/harness_foundry_factory/validator.py": "d92d6044e816ceaec8163e788df3e331d3acbd7727803a3f4c032209ed495cd2",
+    "factory/tests/test_release_closure_candidate.py": "05f538fd66b6dc85a895d59d8ef260715f07a94630c735c8c272dba84346c3ca"
+  },
+  "adversarial_observations": [
+    {
+      "case_id": "HISTORICAL_SUCCESSOR_SYNCHRONIZED_REHASH_TAMPER",
+      "requirement_key": "v0_25_generation_failure_remediation",
+      "mutation": "Change replacement_candidate and successor_binding from v0_26 to v0_27, change matching Closure Receipt identity fields, and recompute requirement_sha256 and portable_requirement_ir_sha256",
+      "standalone_v0_27_semantic_oracle_findings": [],
+      "factory_v0_27_semantic_oracle_findings": [],
+      "standalone_v0_27_verdict": "INCORRECTLY_ACCEPTED",
+      "factory_v0_27_verdict": "INCORRECTLY_ACCEPTED"
+    },
+    {
+      "case_id": "PORTABLE_SOURCE_INDEX_SYNCHRONIZED_REHASH_TAMPER",
+      "standalone_v0_27_verdict": "REJECTED"
+    },
+    {
+      "case_id": "MISSING_RECEIVER_SOURCE_AUTHORITY_POLICY_LOCK",
+      "standalone_v0_27_finding": "SOURCE_AUTHORITY_POLICY_LOCK_REQUIRED"
+    },
+    {
+      "case_id": "CANDIDATE_LOCAL_SOURCE_AUTHORITY_ANCHOR",
+      "standalone_v0_27_finding": "SOURCE_AUTHORITY_POLICY_LOCK_INVALID"
+    }
+  ],
+  "blocking_finding_ids": [
+    "HR-V027-001-HISTORICAL-SUCCESSOR-AUTHORITY-MISSING"
+  ],
+  "review_verdict": "BLOCK_START_PACKAGE_HUMAN_GATE",
+  "candidate_write_performed": false,
+  "execution_root_created": false,
+  "human_gate_consumed": false,
+  "driver_or_workpack_started": false,
+  "authorization_granted": false,
+  "runtime_execution_started": false
+}

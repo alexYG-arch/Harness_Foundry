@@ -1,13 +1,25 @@
 # Harness Foundry Chat Factory guidance
 
+- `DEFAULT_ROUTE_FOUNDRY_CORE` is the default: operate and validate the 41-capability local Foundry product. Do not create a Program, Candidate, Execution Root, Runtime Bind, Driver, Workpack, or A3 unless the user explicitly selects the optional compatibility route.
+- On the default route, use `version`, `validate-core`, `project-core-evidence`, and `package-local`. Internal implementation and validation steps do not require repeated Human Review.
+- `OPTIONAL_ROUTE_START_PACKAGE_COMPATIBILITY` is entered only by an explicit Start Package request. After each Requirement mutation, run `advance-authoring-until-gate`; do not add Human Gates for internal classification, schema coverage, policy, Architecture drafting, evidence applicability, or Readback preparation.
+- `TRUE_GATE_ONLY`: stop for missing user input, exact Requirement or Architecture lock confirmation, changed external state, authority expansion, irreversible risk, unknown side effects, or an explicitly selected Candidate Human Review. Do not ask for generic “继续” between deterministic internal steps.
+- This checkout is the isolated Harness Foundry v2.9 upgrade project. Its imported v2.8 source snapshot is the implementation baseline, not proof that v2.9 is implemented.
+- Never write to, invoke mutable state from, or reuse `runs/` from the v2.8 source checkout. Every v2.9 Program owns this repository's independent `runs/<program_id>/factory.sqlite3`.
+- Treat `docs/HARNESS_FOUNDRY_V2_9_SEMANTIC_CONFORMANCE_UPGRADE_PLAN.md` as the active proposal and `V2_9_UPGRADE_MANIFEST.json` as the import boundary. Historical R6/R7 documents are non-normative archives.
 - Treat the sibling `Harness_Foundry_v2_8_Start_Package` as read-only normative input.
 - For requests to create, revise, resume, or inspect a v2.8 Start Package, use the repo-local `harness-foundry-start-author` skill.
 - Use the Factory CLI and persisted `program_id`; do not keep authoritative state only in chat.
 - Do not directly edit SQLite state, generated candidate files, or immutable source snapshots.
 - Never submit a freeze `confirmation_token` unless a later user message contains it exactly.
-- Never pass a replacement `--spec-root`, generation `target_root`, or generation `staging_root`.
+- Never pass replacement generation overrides through `--spec-root`, `--target-root`/`target_root`, or `--staging-root`/`staging_root`.
+- After an explicit human approval naming exact, absent paths, the Factory `ANSWER` intent may bind `requirement_ir.target.output_root` and `requirement_ir.target.execution_root`. This is Requirement authoring only: it must not create either root, must not grant execution authority, and must not be treated as permission to pass generation-root overrides.
+- Candidate generation must consume only the output root already frozen in authoritative Requirement IR. A planned execution root must remain absent during Candidate authoring unless a later, separate authorization explicitly permits its creation.
 - Preserve each Program's independent `runs/<program_id>/factory.sqlite3`; JSON/JSONL views are derived, not authoritative.
 - Do not execute generated Workpacks, start a Program Driver, install target tools, or claim Harness/Conformance completion.
+- Do not claim v2.9 implementation, migration, release, or certification until the corresponding P0 tracker item has executable tests and runtime evidence.
+- Versioned release files must not contain local absolute paths, implicit sibling repositories, unlisted plugins, or undeclared tools. Local authoring state may bind absolute source paths in ignored `runs/`, but portable outputs must use logical resource identifiers and manifests.
+- Repair production architecture and control flow before adding Validator-only closure. A Validator-only change cannot close a producer root cause.
 - A successful candidate must contain no `.template.*`, unresolved placeholder, fake Hash, `PLANNED-REF`, granted authorization, active Workpack, or started Driver.
 - Run `PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py' -v` after implementation changes.
 - Run `python3 tools/hffactory.py verify-spec --json` and `python3 tools/validate_skill.py` after workflow changes.

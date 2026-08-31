@@ -1,0 +1,54 @@
+{
+  "schema_version": "1.0",
+  "evidence_id": "V2_9_V0_32_HUMAN_REVIEW_EVIDENCE",
+  "program_id": "PROGRAM-HARNESS-FOUNDRY-V2-9-UPGRADE",
+  "review_decision": "FAIL_REOPEN_REQUIRED",
+  "candidate_version": "v0_32",
+  "candidate_content_sha256": "c4f1a7fb1bd852d1a77b033f5728a0bc16f90c36bc884a57ca1131f64886db18",
+  "candidate_file_count": 344,
+  "requirement_epoch": 32,
+  "requirement_ir_sha256": "288831725d421615c5a74fd8fb4860b3d7ca42fdc7371cb7d042e9fad3ee0b34",
+  "review_input_factory_revision": 249,
+  "review_input_factory_state_sha256": "2ddac7e4c4d66bc0787d87d83d0105326ac5fdd0c29fde3d034339477c845d6c",
+  "finding_ids": [
+    "HR-V032-001-BINDER-PREFLIGHT-INCOMPLETE",
+    "HR-V032-002-ADVERSARIAL-DOMAIN-MISROUTED",
+    "HR-V032-003-BINDER-HASH-ATOMICITY-UNBOUND",
+    "HR-V032-004-STANDALONE-CASCADE-FALSE-FINDING"
+  ],
+  "read_only_observations": {
+    "all_discovered_resource_uri_count": 343,
+    "candidate_resource_uri_count": 174,
+    "missing_candidate_resource_uri_count": 0,
+    "runtime_binder_dependency_preflight_present": false,
+    "runtime_binder_receiver_authority_preflight_present": false,
+    "epoch32_cases_declared_under_source_authority": true,
+    "closure_receipt_binds_setup_runtime_sha256": false,
+    "runtime_binding_contract_binds_setup_runtime_sha256": false,
+    "missing_authority_cascade_false_finding_observed": true
+  },
+  "implemented_replacement_evidence": {
+    "compiler_sha256": "dd05fe402b8a9283e8b572e7ff8dd583c46978b75e4991d1dfd78550627a74a5",
+    "factory_validator_sha256": "7910853d67efa398329daba9e925d7b07b15f43cff0588f70380360cc2b38fb5",
+    "release_closure_regression_test_sha256": "22546b2b7ee3f55f0bd4a4ca40a4d9fbaad189da5029d693e92ca4743e6265b1",
+    "full_test_command": "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py' -v",
+    "full_test_result": "PASS_172_OF_172",
+    "spec_verification_result": "PASS_101_FILES",
+    "spec_content_sha256": "be81e6b46573abcbff0a9851812b3b2bb78814928e57a59d65a2b5bb733b8503",
+    "skill_validation_result": "PASS"
+  },
+  "preservation_and_non_execution": {
+    "v0_32_candidate_present": true,
+    "v0_32_execution_root_absent": true,
+    "v0_33_candidate_absent": true,
+    "v0_33_execution_root_absent": true,
+    "human_gate_consumed": false,
+    "driver_started": false,
+    "workpack_started": false,
+    "runtime_authorization_granted": false,
+    "runtime_transition_executed": false
+  },
+  "evidence_authority": "FACTORY_LOCAL_READ_ONLY_HUMAN_REVIEW_AND_TEST_EVIDENCE",
+  "runtime_success_claimed": false,
+  "human_gate_approval_claimed": false
+}

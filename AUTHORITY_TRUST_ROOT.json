@@ -1,0 +1,12 @@
+{
+  "schema_version": "2.9",
+  "trust_root_id": "HF29-RELEASE-AUTHORITY-ED25519-20260806",
+  "algorithm": "ED25519",
+  "public_key_base64": "m/3AOufmXWtl2pJTQQMJmmJ4d/Y3UUI/lwoB9BlB1Sw=",
+  "public_key_sha256": "6b1a6b19cfb9a742871e39f23337e77fe325c539ae6a891d1457eea4748a3284",
+  "purpose": "VERIFY_EVENT_STORE_BINDING_AND_RELEASE_COMMIT_AUTHORIZATION",
+  "private_key_packaged": false,
+  "creates_authority": false,
+  "status": "PINNED_VERIFICATION_ROOT_NOT_AUTHORIZATION",
+  "trust_root_sha256": "602db5fc8e20742e4445f55a5fd7fed800fe98e93e77e5111f68f67f923d60a4"
+}

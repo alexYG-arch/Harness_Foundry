@@ -2,6 +2,8 @@
 
 Run all commands from the Factory repository root. Request files must be absolute paths. Each mutating call emits exactly one JSON object on stdout.
 
+This contract belongs to `OPTIONAL_ROUTE_START_PACKAGE_COMPATIBILITY`. `DEFAULT_ROUTE_FOUNDRY_CORE` creates no Factory Program and uses `version`, `validate-core`, `project-core-evidence`, and `package-local` directly.
+
 ## Request envelope
 
 ```json
@@ -25,6 +27,14 @@ Use a fresh request ID and idempotency key for each different mutation. Reuse bo
 ```bash
 python3 tools/hffactory.py chat-turn --request /absolute/path/request.json --json
 ```
+
+After each Requirement mutation, use bounded Authoring progression:
+
+```bash
+python3 tools/hffactory.py advance-authoring-until-gate --program-id PROGRAM_ID --json
+```
+
+It advances deterministic internal work until `TRUE_GATE_ONLY`; it must not confirm locks, expand authority, or cross into execution.
 
 ## Intents
 

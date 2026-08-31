@@ -1,0 +1,152 @@
+{
+  "acceptance_contract": {
+    "adversarial_cases": [
+      "EPOCH2_REQUIREMENT_WITHOUT_EPOCH2_BUNDLE_MUST_FAIL_FACTORY_VALIDATOR",
+      "EPOCH2_REQUIREMENT_WITHOUT_EPOCH2_BUNDLE_MUST_FAIL_STANDALONE_SELF_CHECK",
+      "UNKNOWN_EPOCH_PAIR_MUST_FAIL_PRODUCER_BEFORE_PUBLICATION",
+      "ACTIVE_EPOCH_DESCRIPTOR_AND_BUNDLE_MISMATCH_MUST_FAIL_BOTH_ORACLES",
+      "HASH_CONSISTENT_CORR_29_009_TO_013_MAPPING_TAMPER_MUST_FAIL_BOTH_ORACLES",
+      "EPOCH1_COMPATIBILITY_ARTIFACT_PRESENT_AS_ACTIVE_AUTHORITY_MUST_FAIL",
+      "REMOVING_REQUIRED_EPOCH2_IMPLEMENTATION_MODULE_MUST_FAIL_BOTH_ORACLES",
+      "FACTORY_PASS_WITH_STANDALONE_FAIL_MUST_BLOCK_ATOMIC_CANDIDATE_PUBLICATION"
+    ],
+    "candidate_requirements": [
+      "FACTORY_VALIDATOR_PASS",
+      "STANDALONE_SELF_CHECK_EXIT_ZERO",
+      "CORR_29_009_TO_013_EXACT_STATIC_COVERAGE_PASS",
+      "EPOCH2_PRODUCTION_BUNDLE_MATERIALIZED_AND_HASH_BOUND",
+      "EPOCH1_COMPATIBILITY_HAS_NO_ACTIVE_AUTHORITY",
+      "NO_GRANTED_AUTHORIZATION",
+      "DRIVER_NOT_STARTED",
+      "ACTIVE_WORKPACK_NULL",
+      "EXECUTION_ROOT_NOT_CREATED"
+    ],
+    "independent_oracle_rule": "Factory Validator and standalone self-check may share normative schemas and declared expected identities, but must not call each other or reuse one implementation function as the verdict source.",
+    "publication_rule": "Atomic Candidate publication is forbidden unless both Factory Validator and standalone self-check independently pass the same active Epoch 2 producer output.",
+    "validator_only_closure_allowed": false
+  },
+  "artifact_kind": "REQUIREMENT_READBACK_PROPOSAL",
+  "authority_snapshot": {
+    "candidate_content_sha256": "25c6dd2b2ca516a86797054a845d584c31561da7a494bc04b57b3a5a12529e9c",
+    "candidate_file_count": 247,
+    "candidate_status": "START_PACKAGE_CANDIDATE_READY_FOR_HUMAN_REVIEW",
+    "candidate_version": "v0_15",
+    "factory_revision": 109,
+    "factory_state": "CANDIDATE_READY_FOR_HUMAN_REVIEW",
+    "factory_state_sha256": "3d81f952b0f16fbda67805ff988a6caef29de16f19671d046657fab1fe56fa4d",
+    "freeze_status": "FROZEN",
+    "next_allowed_factory_intents": [
+      "REOPEN"
+    ],
+    "requirement_epoch": 14,
+    "requirement_ir_sha256": "b869df8b7a7cd65d27125dbfe58713a58b1e7ce2d5735daa1737cb2ff05a15ad",
+    "target_architecture_epoch": 2,
+    "target_control_plane_epoch": 2
+  },
+  "current_attempt_state": {
+    "candidate_mutated": false,
+    "driver_started": false,
+    "execution_project_ref": "harness-resource://execution-project-history/v0_7",
+    "execution_project_static_check_status": "PASS_12_OF_12",
+    "execution_project_unit_test_status": "PASS_9_OF_9",
+    "execution_root_created": false,
+    "human_gate_approval_consumed": false,
+    "parent_risk_envelope_granted": false,
+    "registration_authorization_granted": false,
+    "workpack_started": false
+  },
+  "exact_later_reopen_request": "REOPEN v0_15，修复 Epoch 2 Producer、standalone self-check 与 Factory Validator 一致性，并补齐 CORR-29-009 至 CORR-29-013 的生产实现、Coverage 和 Closure；生成替代 v0_16 Candidate；保留 v0_15、Execution Project v0_7 和失败报告；不创建 Execution Root、不消费 Human Gate、不启动 Driver/Workpack、不授权。",
+  "finding": {
+    "factory_validator": {
+      "active_epoch_condition": "target.architecture_epoch == 1 AND target.control_plane_epoch == 1",
+      "observed_result": "PASS_21_OF_21",
+      "problem": "The V2_9_GENERIC_CONTROL_KERNEL check returns no findings for active Epoch 2 and no replacement Epoch 2 producer check exists. PASS is therefore vacuous for the frozen Epoch 2 requirements."
+    },
+    "finding_id": "FINDING-V0-15-EPOCH2-PRODUCER-ORACLE-DIVERGENCE-001",
+    "producer": {
+      "active_epoch_condition": "target.architecture_epoch == 1 AND target.control_plane_epoch == 1",
+      "observed_result": "EPOCH1_CONTROL_KERNEL_BUNDLE_NOT_MATERIALIZED_AND_SHARED_CONTROL_BASELINE_FALLBACK_MATERIALIZED",
+      "problem": "The compiler has only an Epoch 1 versus fallback branch. Active Epoch 2 is treated as fallback, so CORR-29-009 through CORR-29-013 remain declarations rather than production artifacts."
+    },
+    "standalone_self_check": {
+      "active_condition": "historical control_plane_architecture_correction.correction_traceability.required == true",
+      "finding_codes": [
+        "V2_9_CONTROL_KERNEL_MANIFEST_INVALID",
+        "V2_9_PARENT_BUDGET_ISOLATION_INVALID"
+      ],
+      "observed_result": "FAIL",
+      "problem": "The self-check still demands the retired Epoch 1 file set because its activation condition is not aligned with the active Epoch pair."
+    }
+  },
+  "non_authorization": {
+    "candidate_generation_authorized": false,
+    "candidate_mutation_authorized": false,
+    "driver_or_workpack_authorized": false,
+    "execution_root_creation_authorized": false,
+    "factory_reopen_authorized": false,
+    "freeze_requested": false,
+    "human_gate_consumption_authorized": false,
+    "installation_publication_certification_authorized": false,
+    "registration_or_parent_authorization_granted": false,
+    "transition_execution_authorized": false
+  },
+  "plain_language_summary": {
+    "current_position": "v0_15 has a valid frozen Requirement identity and portable file inventory, but its two validation paths disagree before runtime binding.",
+    "problem": "The producer does not yet know how to build the frozen Epoch 2 control-plane requirements. Factory validation silently skips the missing Epoch 2 implementation, while standalone validation still asks for the former Epoch 1 implementation.",
+    "repair_principle": "Do not merely weaken or skip the failing self-check. First make the producer generate a real Epoch 2 bundle, then make both independent validators check that bundle and block publication on disagreement.",
+    "safe_stop": "This Readback is proposal-only. v0_15 remains immutable, Execution Root v0_15 remains absent, and its Human Gate approval remains unconsumed."
+  },
+  "production_repair_contract": {
+    "active_epoch_dispatch": {
+      "epoch_1": "MATERIALIZE_EPOCH1_GENERIC_CONTROL_KERNEL_AS_HISTORICAL_COMPATIBILITY_BASELINE_WHEN_EXPLICITLY_SELECTED",
+      "epoch_2": "MATERIALIZE_RELEASE_CLOSURE_CONTROL_PLANE_BUNDLE",
+      "selection_source": "FROZEN_TARGET_ARCHITECTURE_EPOCH_AND_CONTROL_PLANE_EPOCH",
+      "unknown_or_mixed_epoch": "FAIL_CLOSED_BEFORE_STAGING_PUBLICATION"
+    },
+    "epoch2_required_artifacts": [
+      "V2_9_RELEASE_CLOSURE_CONTROL_PLANE_MANIFEST.json",
+      "SEMANTIC_IMPLEMENTATION_AUTHORIZATION_IDENTITY_CONTRACT.json",
+      "GENERIC_RECOVERY_DECISION_PROTOCOL.json",
+      "COMPLEXITY_GOVERNOR.json",
+      "PRODUCT_SAFETY_RELEASE_CLOSURE_GRAPH.json",
+      "EVIDENCE_LIFECYCLE_AND_PROJECTION_CONTRACT.json",
+      "canonical_sources/RELEASE_CLOSURE_CORRECTION_COVERAGE_MATRIX.json",
+      "contracts/v2_9_release_closure/RECOVERY_DECISION.schema.json",
+      "contracts/v2_9_release_closure/COMPLEXITY_DECISION.schema.json",
+      "contracts/v2_9_release_closure/CLOSURE_RECEIPT.schema.json",
+      "contracts/v2_9_release_closure/EVIDENCE_INDEX_ENTRY.schema.json",
+      "tools/harness_foundry_runtime/recovery_decision.py",
+      "tools/harness_foundry_runtime/complexity_governor.py",
+      "tools/harness_foundry_runtime/closure_lanes.py",
+      "tools/harness_foundry_runtime/evidence_projection.py"
+    ],
+    "epoch2_required_semantics": [
+      "CORR_29_009_THREE_LAYER_IDENTITY_SEPARATION",
+      "CORR_29_010_GENERIC_RECOVERY_DECISION_PROTOCOL",
+      "CORR_29_011_EXECUTABLE_COMPLEXITY_GOVERNOR_AND_CIRCUIT_BREAKER",
+      "CORR_29_012_INDEPENDENT_PRODUCT_SAFETY_RELEASE_CLOSURE_LANES",
+      "CORR_29_013_AUTHORITY_NEUTRAL_EVIDENCE_INDEX_RETENTION_AND_CONFLICTING_PROJECTION_FAILURE"
+    ],
+    "historical_epoch1_policy": {
+      "active_authority_allowed": false,
+      "compatibility_adapter_or_historical_fixture_only": true,
+      "retention_required_until_epoch2_regression_and_sunset_checks_pass": true,
+      "silent_deletion_or_silent_reactivation_forbidden": true
+    },
+    "producer_first": true
+  },
+  "program_id": "PROGRAM-HARNESS-FOUNDRY-V2-9-UPGRADE",
+  "proposed_replacement": {
+    "candidate_version": "v0_16",
+    "execution_root_creation_in_repair_turn": false,
+    "human_gate_approval_reuse_from_v0_15": false,
+    "new_human_gate_required_after_v0_16_review": true,
+    "output_root_binding_requires_explicit_absent_root_approval": true,
+    "preserve_candidate_v0_15": true,
+    "preserve_execution_project_v0_7": true
+  },
+  "readback_id": "V2_9_V0_15_EPOCH2_PRODUCER_AND_VALIDATOR_ALIGNMENT",
+  "readback_sha256": "fa31f86c61356062936c9387d9d654bf84cbaa0f1bbf37e5bf3deecc838c96f3",
+  "schema_version": "1.0",
+  "status": "PROPOSED_NOT_FROZEN_NOT_AUTHORIZATION"
+}

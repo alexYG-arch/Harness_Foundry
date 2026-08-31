@@ -1,0 +1,42 @@
+{
+  "schema_version": "1.0",
+  "evidence_id": "V2_9_V0_31_RUNTIME_BINDING_FAILURE_EVIDENCE",
+  "program_id": "PROGRAM-HARNESS-FOUNDRY-V2-9-UPGRADE",
+  "candidate_version": "v0_31",
+  "candidate_content_sha256": "1a5512106deae078fffd843157831be1408f4d56328f38b739ad507c98b3af61",
+  "candidate_file_count": 337,
+  "requirement_epoch": 31,
+  "requirement_ir_sha256": "0762fc8ec05e9001110df35eb171ec562844225180dcad46dbd459731b714068",
+  "binding_observation": {
+    "binder": "tools/setup_runtime.py",
+    "status": "FAIL_CLOSED_BEFORE_HUMAN_GATE_CONSUMPTION",
+    "error": "Candidate Resource URI is dangling: harness-resource://candidate/tools/harness_foundry_runtime/store.py",
+    "all_discovered_resource_uri_count": 339,
+    "candidate_resource_uri_count": 170,
+    "candidate_directory_uri_count": 1,
+    "missing_candidate_resource_uri_count": 1,
+    "missing_candidate_resource_uris": [
+      "harness-resource://candidate/tools/harness_foundry_runtime/store.py"
+    ]
+  },
+  "post_failure_state": {
+    "candidate_preserved_unchanged": true,
+    "partial_execution_root_was_empty": true,
+    "partial_execution_root_removed": true,
+    "execution_root_exists": false,
+    "human_gate_consumed": false,
+    "driver_started": false,
+    "workpack_started": false,
+    "runtime_authorization_granted": false
+  },
+  "root_cause": {
+    "producer_packaged_store_module": false,
+    "portable_requirement_ir_retained_store_module_uri": true,
+    "factory_validator_scanned_all_candidate_resource_uris": false,
+    "standalone_scanned_all_candidate_resource_uris": false,
+    "binder_created_root_before_completing_uri_validation": true
+  },
+  "evidence_authority": "FACTORY_LOCAL_READ_ONLY_OBSERVATION_FOR_REQUIREMENT_REMEDIATION",
+  "runtime_success_claimed": false,
+  "human_gate_approval_claimed_consumed": false
+}

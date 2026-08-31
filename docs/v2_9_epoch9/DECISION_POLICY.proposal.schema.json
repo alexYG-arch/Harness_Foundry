@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "harness-resource://epoch9-proposal/schemas/DECISION_POLICY.proposal.schema.json",
+  "title": "Harness Foundry v2.9 Executable Decision Policy Proposal",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "policy_id",
+    "rule_language_id",
+    "rule_language_version",
+    "evaluator_ref",
+    "evaluator_sha256",
+    "declared_input_schema_ref",
+    "rules",
+    "precedence",
+    "conflict_policy",
+    "unknown_policy",
+    "decision_receipt_schema_ref",
+    "status"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "policy_id": {"type": "string", "minLength": 1},
+    "status": {"enum": ["PROPOSED", "FROZEN", "INVALIDATED"]},
+    "rule_language_id": {"const": "HF29_DETERMINISTIC_JSON_RULES"},
+    "rule_language_version": {"const": "1.0"},
+    "evaluator_ref": {"type": "string", "pattern": "^harness-resource://"},
+    "evaluator_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "declared_input_schema_ref": {"type": "string", "pattern": "^harness-resource://"},
+    "rules": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["rule_id", "authority_layer", "when", "decision", "reason_code"],
+        "properties": {
+          "rule_id": {"type": "string", "minLength": 1},
+          "authority_layer": {
+            "enum": [
+              "PLATFORM_SAFETY",
+              "FROZEN_CHARTER",
+              "FROZEN_REQUIREMENT",
+              "ARCHITECTURE_POLICY",
+              "TRANSITION_LOCAL"
+            ]
+          },
+          "when": {"type": "object"},
+          "decision": {
+            "enum": [
+              "MACHINE_CONTINUE",
+              "MACHINE_REVIEW_THEN_CONTINUE",
+              "HUMAN_AUTHORITY_REQUIRED",
+              "HARD_STOP_UNKNOWN_SIDE_EFFECT",
+              "POLICY_CONFLICT",
+              "POLICY_UNKNOWN"
+            ]
+          },
+          "reason_code": {"type": "string", "minLength": 1},
+          "next_transition_selector": {"type": ["string", "null"]}
+        }
+      }
+    },
+    "precedence": {
+      "const": [
+        "PLATFORM_SAFETY",
+        "FROZEN_CHARTER",
+        "FROZEN_REQUIREMENT",
+        "ARCHITECTURE_POLICY",
+        "TRANSITION_LOCAL"
+      ]
+    },
+    "conflict_policy": {"const": "FAIL_CLOSED_POLICY_CONFLICT"},
+    "unknown_policy": {"const": "FAIL_CLOSED_POLICY_UNKNOWN"},
+    "semantic_slot_authority": {"const": "PROPOSAL_ONLY_NO_DIRECT_STATE_TRANSITION"},
+    "decision_receipt_schema_ref": {"type": "string", "pattern": "^harness-resource://"}
+  }
+}

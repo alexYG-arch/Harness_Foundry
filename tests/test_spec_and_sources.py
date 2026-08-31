@@ -12,7 +12,11 @@ from unittest.mock import patch
 
 from harness_foundry_factory.models import SpecVerificationError
 from harness_foundry_factory.service import FactoryService
-from harness_foundry_factory.spec_lock import build_spec_lock, verify_spec_lock
+from harness_foundry_factory.spec_lock import (
+    SpecLockError,
+    build_spec_lock,
+    verify_spec_lock,
+)
 from harness_foundry_factory.store import SQLiteEventStore
 
 
@@ -58,6 +62,28 @@ class SpecAndSourceTests(unittest.TestCase):
         self.assertEqual(verify_spec_lock(changed_aggregate, SPEC)["status"], "FAIL")
         after = {path: (path.stat().st_mtime_ns, hashlib.sha256(path.read_bytes()).hexdigest()) for path in before}
         self.assertEqual(after, before)
+
+    def test_spec_lock_is_portable_between_physical_sibling_layouts(self) -> None:
+        lock = build_spec_lock(SPEC)
+
+        self.assertNotIn("spec_root_abs", lock)
+        self.assertEqual(
+            lock["spec_root_binding"],
+            "PHYSICAL_SIBLING_NAME_AND_CONTENT_HASH",
+        )
+        self.assertEqual(verify_spec_lock(lock, SPEC)["status"], "PASS")
+
+    def test_spec_lock_rejects_symlink_sibling(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            symlink = root / "Harness_Foundry_v2_8_Start_Package"
+            symlink.symlink_to(SPEC, target_is_directory=True)
+            with patch(
+                "harness_foundry_factory.spec_lock.default_spec_root",
+                return_value=symlink,
+            ):
+                with self.assertRaises(SpecLockError):
+                    build_spec_lock(symlink)
 
     def test_service_verify_spec_consumes_committed_lock(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

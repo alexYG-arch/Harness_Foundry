@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "harness-resource://epoch9-proposal/schemas/ASSURANCE_PROFILE.proposal.schema.json",
+  "title": "Harness Foundry v2.9 Assurance Profile Proposal",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "profile_id",
+    "risk_inputs",
+    "activated_capabilities",
+    "control_domain_template_id",
+    "program_graph_template_id",
+    "human_attention_budget",
+    "status"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "profile_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "enum": [
+        "PROPOSED",
+        "FROZEN",
+        "INVALIDATED"
+      ]
+    },
+    "risk_inputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "external_effect",
+        "irreversibility",
+        "data_sensitivity",
+        "network_mode",
+        "secret_access",
+        "semantic_uncertainty",
+        "recovery_difficulty",
+        "certification_level",
+        "common_mode_failure_risk"
+      ],
+      "properties": {
+        "external_effect": {"enum": ["NONE", "LOCAL", "EXTERNAL"]},
+        "irreversibility": {"enum": ["REVERSIBLE", "PARTIALLY_REVERSIBLE", "IRREVERSIBLE"]},
+        "data_sensitivity": {"enum": ["PUBLIC", "INTERNAL", "SENSITIVE", "RESTRICTED"]},
+        "network_mode": {"enum": ["DENY", "DECLARED_READ", "DECLARED_WRITE"]},
+        "secret_access": {"type": "boolean"},
+        "semantic_uncertainty": {"enum": ["LOW", "MEDIUM", "HIGH"]},
+        "recovery_difficulty": {"enum": ["LOW", "MEDIUM", "HIGH"]},
+        "certification_level": {"enum": ["NONE", "COORDINATED", "INDEPENDENT_INTERNAL"]},
+        "common_mode_failure_risk": {"enum": ["LOW", "MEDIUM", "HIGH"]}
+      }
+    },
+    "activated_capabilities": {
+      "type": "array",
+      "items": {"type": "string"},
+      "uniqueItems": true
+    },
+    "control_domain_template_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "program_graph_template_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "human_attention_budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_architecture_freezes",
+        "max_parent_risk_authorizations",
+        "max_manual_hash_inputs",
+        "internal_flow_human_gates"
+      ],
+      "properties": {
+        "max_architecture_freezes": {"type": "integer", "minimum": 0},
+        "max_parent_risk_authorizations": {"type": "integer", "minimum": 0},
+        "max_manual_hash_inputs": {"type": "integer", "minimum": 0},
+        "internal_flow_human_gates": {"type": "integer", "minimum": 0}
+      }
+    },
+    "profile_policy_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

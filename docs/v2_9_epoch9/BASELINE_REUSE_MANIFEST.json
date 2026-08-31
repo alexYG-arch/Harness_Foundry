@@ -1,0 +1,152 @@
+{
+  "schema_version": "1.0",
+  "manifest_id": "BASELINE-REUSE-V29-EPOCH9-001",
+  "status": "PROPOSED_FOR_ARCHITECTURE_FREEZE_NOT_IMPLEMENTATION",
+  "program_id": "PROGRAM-HARNESS-FOUNDRY-V2-9-UPGRADE",
+  "requirement_epoch": 9,
+  "proposed_architecture_epoch": 1,
+  "proposed_control_plane_epoch": 1,
+  "upgrade_class": "CONTROL_PLANE_REFACTOR_INSIDE_VERSION_UPGRADE",
+  "source_baseline": {
+    "project_id": "HARNESS_FOUNDRY_V2_8_CHAT_FACTORY_V0_1",
+    "git_commit": "8ba998c59c8fd6fa8558554bec893b694e13564e",
+    "import_policy": "TRACKED_HEAD_PLUS_EXPLICIT_TESTED_WORKTREE_DELTA",
+    "tracked_worktree_delta_sha256": "7ba9102a32f4e75a69ea157ecf7534a32a08d2656ade875c489d74ac282c20c6",
+    "baseline_test_count": 78,
+    "baseline_test_status": "PASS",
+    "normative_spec_content_sha256": "be81e6b46573abcbff0a9851812b3b2bb78814928e57a59d65a2b5bb733b8503",
+    "normative_spec_file_count": 101
+  },
+  "historical_v0_9_lock": {
+    "access_policy": "READ_ONLY_HISTORICAL_FIXTURE_NOT_EPOCH9_AUTHORITY",
+    "historical_resource_root": "harness-resource://baseline/v0_9",
+    "factory_candidate_content_sha256": "08c7e4d2579b4a21746f4aaf576092f5fb0d54c31746fa4889c65b819447fee5",
+    "portable_candidate_identity_sha256": "b39380cc3b25ad690995f06cd597c2bd742f366eb1bd23176c41b96b5ccdedd0",
+    "portable_candidate_identity_algorithm": "SHA256_OF_CANONICAL_PORTABLE_FILE_MANIFEST_FILE_MAP",
+    "candidate_file_count": 207,
+    "requirement_ir_sha256": "fdb9551d1e9ef321c83c098d6421dbff60c95c09a0e8c0e06d72a3366c555ae7",
+    "shared_control_result_canonical_sha256": "ba9686f95c95ab740c25a1a27ef32b2dd80513eab4f72b3d0e3728b8faa08072",
+    "shared_control_result_file_sha256": "0976a18a682f6deb00b07f3028ff23c7d3e33cf8f1a0ee7377ab59cfaa182169",
+    "program_control_state_file_sha256": "db8ea3381594f6506c9f40420d0c3789a0439e6191ea4b92c80b1337c53b6780",
+    "program_control_events_file_sha256": "cf07a479a085fb51bd28be9208f8e989f2390e5a4b48aea30b719988710ddfd0",
+    "transaction_file_sha256": "b2aa8d6b256f26252a29e159ad94e294660c09a89c66a53e3151d51e5de4c311",
+    "recovery_receipt_file_sha256": "d05cb34524b38773a202b272d99f5fc7c308045b4702087fc3b4766eb580a454",
+    "human_gate_receipt_file_sha256": "d745392108d770698b2aa79aa440c92dfb67def2377c4ac6ae15c8d2ecb4d16e",
+    "registration_grant_receipt_file_sha256": "ee29ffb614a15dd8f9525a389b827f298dbe76bbb82452282d26b1ab38dcef10",
+    "allowed_use": [
+      "REGRESSION_FIXTURE",
+      "COMPATIBILITY_COMPARISON",
+      "HUMAN_COST_BASELINE"
+    ],
+    "forbidden_use": [
+      "EPOCH9_RUNTIME_AUTHORITY",
+      "EPOCH9_GRANT_REUSE",
+      "EPOCH9_CLAIM_CLOSURE",
+      "OLD_SUCCESSOR_EXECUTION"
+    ]
+  },
+  "components": [
+    {
+      "path": "src/harness_foundry_factory/models.py",
+      "current_sha256": "9ec4b6aa062197e828a8b782a9829f3cb949fe9da108241dc12fa2876d6aff98",
+      "baseline_relation": "UNCHANGED_FROM_TRACKED_BASELINE",
+      "disposition": "REUSE_AND_EXTEND",
+      "epoch9_responsibility": "Canonical JSON and Hash plus Transition, Grant, Decision Policy, Assurance Profile and minimum Requirement Completion models",
+      "regression_obligation": "Existing canonical serialization and request validation remain deterministic"
+    },
+    {
+      "path": "src/harness_foundry_factory/store.py",
+      "current_sha256": "19e00b34c177258daa2ebc327e31ebc03a9d6d4944d0053ca44dc33d18a4113c",
+      "baseline_relation": "UNCHANGED_FROM_TRACKED_BASELINE",
+      "disposition": "REUSE_AND_EXTEND",
+      "epoch9_responsibility": "Single append-only SQLite Event Store, CAS, idempotency and Grant or Completion event substreams",
+      "regression_obligation": "No second writable authority; projections rebuild from the event chain"
+    },
+    {
+      "path": "src/harness_foundry_factory/service.py",
+      "current_sha256": "2e7024a416f47da6abd524e0df7e5997b0e673edffd1fc58e2b2a6c295546935",
+      "baseline_relation": "V2_9_MODIFIED_AFTER_IMPORT",
+      "disposition": "REFACTOR_BEHIND_COMPATIBILITY_ENTRYPOINT",
+      "epoch9_responsibility": "Authoring advance-until-real-gate and deterministic risk decisions while preserving freeze confirmation",
+      "regression_obligation": "Existing Chat intents remain compatible; internal checks do not create default human stops"
+    },
+    {
+      "path": "src/harness_foundry_factory/compiler.py",
+      "current_sha256": "3f5464a3c6a461698ca4155b84b93d0266bf8e2de3edf46408b648e99863c660",
+      "baseline_relation": "IMPORTED_WORKTREE_DELTA_THEN_V2_9_MODIFIED",
+      "disposition": "SPLIT",
+      "epoch9_responsibility": "Separate IR compilation, Profile instantiation, rendering, portability and v2.8 compatibility",
+      "regression_obligation": "Producer outputs precede Validator closure; no fixed three-project topology in the epoch9 core"
+    },
+    {
+      "path": "src/harness_foundry_factory/validator.py",
+      "current_sha256": "7a2935f5b390f47c0a1a583ecdcd1d94309bdc7a2ae5fc45489601364a937aa8",
+      "baseline_relation": "IMPORTED_WORKTREE_DELTA_THEN_V2_9_MODIFIED",
+      "disposition": "REPLACE_BESPOKE_PATHS_WITH_GENERIC_VALIDATORS",
+      "epoch9_responsibility": "Validate generic Schema, Transition, Grant, Decision, Profile, direct evidence binding and portability contracts",
+      "regression_obligation": "No new node-specific authorized path; Validator-only changes cannot close producer defects"
+    },
+    {
+      "path": "src/harness_foundry_factory/traceability.py",
+      "current_sha256": "1c6173a59fa06cf97dc21dd6ebf865f3d4d7da4ed0da588dde54b2b92e70c901",
+      "baseline_relation": "UNCHANGED_FROM_TRACKED_BASELINE",
+      "disposition": "EXTEND_MINIMALLY",
+      "epoch9_responsibility": "Direct Requirement to Transition, Case, Evidence and Claim references plus declared invalidation",
+      "regression_obligation": "Do not create a v3.0 Reverse Index, Readiness Matrix or Coverage optimizer"
+    },
+    {
+      "path": "src/harness_foundry_factory/spec_lock.py",
+      "current_sha256": "9fd684cb84653405cf00bbcf5e48dd796bbeefb1e6e744a8cb53f212c970f01e",
+      "baseline_relation": "V2_9_MODIFIED_AFTER_IMPORT",
+      "disposition": "REUSE_AND_VERSION",
+      "epoch9_responsibility": "Preserve the physical sibling v2.8 lock and add explicit v2.9 extension identity",
+      "regression_obligation": "v2.8 content hash remains be81e6b4 and verification performs zero writes"
+    },
+    {
+      "path": "src/harness_foundry_factory/cli.py",
+      "current_sha256": "536c0b6c60ee0297771dae9cff236ea28855cce95b4a8655b395b54e9eec38f0",
+      "baseline_relation": "UNCHANGED_FROM_TRACKED_BASELINE",
+      "disposition": "KEEP_COMPACT_AND_EXTEND",
+      "epoch9_responsibility": "Expose combined authoring commands and detailed diagnostic views without per-check operator choreography",
+      "regression_obligation": "Fine-grained inspection remains optional and read-only"
+    },
+    {
+      "path": "src/harness_foundry_factory/constants.py",
+      "current_sha256": "c2542fbaaaeff14755b6ce9c3fa821db30be5a98dd297670b3049fbc664fcdca",
+      "baseline_relation": "IMPORTED_WORKTREE_DELTA_UNCHANGED",
+      "disposition": "RETIRE_PROGRAM_SPECIFIC_TO_PROFILE_DATA",
+      "epoch9_responsibility": "Retain generic identifiers only; move project, node and Workpack topology to Profile data",
+      "regression_obligation": "No epoch9 core constant requires Main, Lab and Linkage for every Program"
+    },
+    {
+      "path": "src/harness_foundry_factory/semantic_contracts.py",
+      "current_sha256": "2c9018aa9047fbb568f141a798fd9c28d0af6cd9f099602ef510a779c552b680",
+      "baseline_relation": "V2_9_ADDED",
+      "disposition": "ABSORB_INTO_REQUIREMENT_EVIDENCE_GRAPH",
+      "epoch9_responsibility": "Preserve explicit Artifact Obligations and add minimum Completion or direct Invalidation",
+      "regression_obligation": "No automatic semantic decomposition or platform readiness gate"
+    },
+    {
+      "path": "src/harness_foundry_factory/resources/shared_control_baseline.py",
+      "current_sha256": "c2a10681a72a4db7371f2ab62ae9c30dc076dfa155957b67d49e95dea7d4fad7",
+      "baseline_relation": "V2_9_ADDED",
+      "disposition": "REUSE_AS_GOLDEN_FIXTURE_THEN_GENERALIZE",
+      "epoch9_responsibility": "Preserve the committed v0.9 success, replay and crash behavior as a regression fixture; move generic transaction behavior into the Transition Engine",
+      "regression_obligation": "Golden fixture remains PASS without granting old successor execution"
+    }
+  ],
+  "anti_rewrite_invariants": [
+    "Every modified component cites at least one CORR-29 requirement",
+    "Every generic replacement retires at least one bespoke branch, duplicated contract or manual action",
+    "Unchanged v2.8 behavior remains the regression floor unless explicitly superseded in Requirement Epoch 9",
+    "Candidate v0_9 and Execution Root v0_9 receive zero writes",
+    "No implementation begins before Architecture Freeze"
+  ],
+  "non_claims": [
+    "V2_9_IMPLEMENTED",
+    "V2_9_CANDIDATE_GENERATED",
+    "DRIVER_STARTED",
+    "WORKPACK_EXECUTED",
+    "RELEASED_OR_CERTIFIED"
+  ]
+}

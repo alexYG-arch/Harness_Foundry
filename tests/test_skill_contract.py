@@ -25,6 +25,25 @@ class SkillContractTests(unittest.TestCase):
         self.assertEqual(report["status"], "PASS")
         self.assertFalse(report["writes_performed"])
 
+    def test_chat_surface_defaults_to_core_and_auto_advances_internal_checks(self) -> None:
+        skill = (ROOT / ".agents/skills/harness-foundry-start-author/SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        chat_usage = (ROOT / "docs/CHAT_USAGE.md").read_text(encoding="utf-8")
+        agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        agent_config = (
+            ROOT / ".agents/skills/harness-foundry-start-author/agents/openai.yaml"
+        ).read_text(encoding="utf-8")
+
+        for content in (skill, chat_usage, agents, agent_config):
+            self.assertIn("DEFAULT_ROUTE_FOUNDRY_CORE", content)
+        for content in (skill, chat_usage):
+            self.assertIn("OPTIONAL_ROUTE_START_PACKAGE_COMPATIBILITY", content)
+            self.assertIn("advance-authoring-until-gate", content)
+            self.assertIn("TRUE_GATE_ONLY", content)
+        self.assertIn("validate-core", agent_config)
+        self.assertIn("package-local", agent_config)
+
 
 if __name__ == "__main__":
     unittest.main()

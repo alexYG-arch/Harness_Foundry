@@ -1,0 +1,66 @@
+{
+  "schema_version": "2.9",
+  "review_id": "V29-V029-HUMAN-REVIEW",
+  "review_mode": "READ_ONLY_NO_HUMAN_GATE_APPROVAL",
+  "program_id": "PROGRAM-HARNESS-FOUNDRY-V2-9-UPGRADE",
+  "candidate_identity": {
+    "candidate_version": "v0_29",
+    "candidate_content_sha256": "ac601217edbb7141a0a1be9e44d0977ea6f9bfd0e4c554e67c0736183db14c28",
+    "candidate_file_count": 323,
+    "factory_frozen_requirement_ir_sha256": "cfef882c903475aa7d0fcef812aefae73a4c5dc25e1660ff31a19a95f6be2960",
+    "portable_requirement_ir_file_sha256": "c6223a08007aa92ccc060e7053a155abe09b958872eba113e3bbd40ee6a48777",
+    "factory_revision": 224,
+    "factory_state_sha256": "2c95c102030169746a4df8fca4eceb6b9961587ae0c1fba6041e97b9b5130880"
+  },
+  "reviewed_file_sha256": {
+    "PACKAGE_MANIFEST.json": "f07c15284a4f8a85e77515fc81d4e51556be4a4ab4fc3c6c80f6b3e421688861",
+    "FACTORY_PROVENANCE.json": "84ae9e1f5d7244f7c30a297440d8785b12fc4b44899bd1f2678f1471f4f7d19e",
+    "canonical_sources/FROZEN_REQUIREMENT_IR.json": "c6223a08007aa92ccc060e7053a155abe09b958872eba113e3bbd40ee6a48777",
+    "validation/START_PACKAGE_VALIDATION_REPORT.json": "b444a0d8486650f48ea73f0eb375916d551de1ccba065cef9383b85017c47f12",
+    "validation/HUMAN_REVIEW_CLOSURE_RECEIPT.json": "4d3c9c6d9f85ff066586168c41e1ebcf25b2cc2f8341622da77f54cde4f247b2",
+    "validation/PORTABLE_FILE_MANIFEST.json": "cda14fe06cff4ad5506fc26a7f57bc390214a58e57f8f2fc44239c68774ea5c1",
+    "tools/self_check.py": "0c37263f03575dedef1288cc34a667b8b18c154f0e2030eba87abc4239e62388"
+  },
+  "adversarial_observations": [
+    {
+      "case_id": "DELETED_VALIDATION_REPORT_AUTHORITY_PROVENANCE",
+      "mutation": "Remove authority_input and authority_provenance from both embedded Factory external-Oracle report entries on a temporary copy",
+      "factory_authority_source": "FACTORY_REVISION_224_SOURCE_REGISTRY_AND_REQUIREMENT_IR",
+      "factory_v0_29_verdict": "INCORRECTLY_ACCEPTED",
+      "factory_v0_29_status": "PASS",
+      "factory_v0_29_blocking_findings": [],
+      "standalone_authority_source": "RECEIVER_PINNED_SIGNED_SOURCE_AUTHORITY_POLICY",
+      "standalone_v0_29_verdict": "INCORRECTLY_ACCEPTED",
+      "standalone_v0_29_status": "PASS",
+      "standalone_v0_29_findings": []
+    }
+  ],
+  "required_epoch30_adversarial_cases": [
+    "DELETED_VALIDATION_REPORT_AUTHORITY_PROVENANCE",
+    "REPLACED_VALIDATION_REPORT_PROVENANCE_HASH",
+    "SWAPPED_ORACLE_AUTHORITY_PROVENANCE",
+    "SYNCHRONIZED_VALIDATION_REPORT_AND_RECEIPT_REHASH_TAMPER",
+    "DELETED_VALIDATION_REPORT",
+    "DELETED_VALIDATION_REPORT_RECEIPT"
+  ],
+  "remediation_implementation_evidence": {
+    "compiler_sha256": "fce4f0e8ae33af023d42cf19bf42799fc30a3398c46a0983b0f8d358d14a7d1f",
+    "validator_sha256": "324b7f8d6e1a6199ecf8c149f88c21f234feef263513b279d5f9895d9cbc800f",
+    "regression_test_sha256": "eaf7bd10eca6be13add2f0cdcf6d1aec994df2393c4329a754877a8d79c8d007",
+    "targeted_epoch30_tests": "PASS_2_OF_2",
+    "full_factory_test_suite": "PASS_162_OF_162",
+    "spec_lock_validation": "PASS_101_FILES_be81e6b46573abcbff0a9851812b3b2bb78814928e57a59d65a2b5bb733b8503",
+    "skill_contract_validation": "PASS"
+  },
+  "blocking_finding_ids": [
+    "HR-V029-001-VALIDATION-REPORT-PROVENANCE-NOT-INTEGRITY-BOUND"
+  ],
+  "review_verdict": "BLOCK_START_PACKAGE_HUMAN_GATE",
+  "candidate_write_performed": false,
+  "replacement_candidate_created": false,
+  "execution_root_created": false,
+  "human_gate_consumed": false,
+  "driver_or_workpack_started": false,
+  "authorization_granted": false,
+  "runtime_execution_started": false
+}

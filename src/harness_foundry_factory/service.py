@@ -25,6 +25,7 @@ from .constants import (
 from .models import (
     CandidateValidationError,
     ChatRequest,
+    ContractGateError,
     InvalidTransitionError,
     ProgramRecord,
     RequestValidationError,
@@ -36,10 +37,93 @@ from .models import (
     content_sha256,
 )
 from .store import SQLiteEventStore
+from .semantic_contracts import (
+    EXPLICIT_PRODUCTION_MODE,
+    explicit_production_enabled,
+    validate_explicit_production_contracts,
+)
 from .traceability import WORKPACK_PROJECTS, normalize_ir_coverage
 
 
 Clock = Callable[[], str]
+
+
+def _factory_authority_provenance(
+    snapshot: Mapping[str, Any],
+    *,
+    event_store_revision: int | None = None,
+    event_store_tip_sha256: str | None = None,
+) -> dict[str, Any]:
+    source_registry = snapshot.get("source_registry", [])
+    requirement_ir = snapshot.get("requirement_ir", {})
+    return {
+        "event_store_revision": (
+            int(event_store_revision)
+            if event_store_revision is not None
+            else int(snapshot.get("revision", 0))
+        ),
+        "event_store_tip_sha256": (
+            event_store_tip_sha256 or content_sha256(snapshot)
+        ),
+        "requirement_epoch": int(snapshot.get("requirement_epoch", 0)),
+        "source_registry_sha256": content_sha256(source_registry),
+        "requirement_ir_sha256": content_sha256(requirement_ir),
+    }
+
+
+def _candidate_generation_commit_binding(
+    candidate_path: Path,
+    *,
+    program_id: str,
+    requirement_epoch: int,
+    requirement_ir: Mapping[str, Any],
+    authority_provenance: Mapping[str, Any],
+    request: ChatRequest,
+    compiler_result: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Build the non-circular binding later sealed by the Factory event."""
+
+    report_ref = "validation/START_PACKAGE_VALIDATION_REPORT.json"
+    receipt_ref = "validation/START_PACKAGE_VALIDATION_REPORT_RECEIPT.json"
+    report_path = candidate_path / report_ref
+    receipt_path = candidate_path / receipt_ref
+    package_path = candidate_path / "PACKAGE_MANIFEST.json"
+    try:
+        package = json.loads(package_path.read_text(encoding="utf-8"))
+        report_hash = hashlib.sha256(report_path.read_bytes()).hexdigest()
+        receipt_hash = hashlib.sha256(receipt_path.read_bytes()).hexdigest()
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise CandidateValidationError(
+            "candidate generation commit inputs are unavailable",
+            details={"error": str(exc)},
+        ) from exc
+    candidate_hash, file_count = _tree_hash(candidate_path)
+    if (
+        compiler_result.get("content_sha256") != candidate_hash
+        or compiler_result.get("file_count") != file_count
+    ):
+        raise CandidateValidationError(
+            "compiler result does not match the published Candidate bytes"
+        )
+    binding = {
+        "schema_version": "1.0",
+        "binding_kind": "FACTORY_CANDIDATE_GENERATION_COMMIT",
+        "program_id": program_id,
+        "candidate_version": package.get("candidate_version"),
+        "candidate_content_sha256": candidate_hash,
+        "candidate_file_count": file_count,
+        "validation_report_ref": report_ref,
+        "validation_report_sha256": report_hash,
+        "validation_report_receipt_ref": receipt_ref,
+        "validation_report_receipt_sha256": receipt_hash,
+        "requirement_epoch": requirement_epoch,
+        "requirement_ir_sha256": content_sha256(requirement_ir),
+        "validation_basis": dict(authority_provenance),
+        "generation_request_id": request.request_id,
+        "generation_idempotency_key": request.idempotency_key,
+    }
+    binding["binding_sha256"] = content_sha256(binding)
+    return binding
 
 
 class FactoryService:
@@ -96,6 +180,14 @@ class FactoryService:
                 "PREPARE_READBACK": self._prepare_readback,
                 "REQUEST_FREEZE": self._request_freeze,
                 "CONFIRM_FREEZE": self._confirm_freeze,
+                "PREPARE_ARCHITECTURE_READBACK": (
+                    self._prepare_architecture_readback
+                ),
+                "REQUEST_ARCHITECTURE_LOCK": self._request_architecture_lock,
+                "CONFIRM_ARCHITECTURE_LOCK": self._confirm_architecture_lock,
+                "ADVANCE_AUTHORING_UNTIL_GATE": (
+                    self._advance_authoring_until_gate
+                ),
                 "GENERATE": self._generate,
                 "REOPEN": self._reopen,
             }[request.intent]
@@ -104,6 +196,37 @@ class FactoryService:
         response = self.store.apply(request, now, mutate)
         self._export_program_views(str(response["program_id"]))
         return response
+
+    def advance_authoring_until_gate(self, program_id: str) -> dict[str, Any]:
+        """Advance internal Authoring checks in one CAS to the next real gate."""
+
+        record = self.store.get_program(program_id)
+        if record.factory_state in {
+            "BLOCKED_REQUIREMENT_GAP",
+            "BLOCKED_SOURCE_CONFLICT",
+            "BLOCKED_AUTHORING_RISK",
+            "REQUIREMENTS_READBACK_READY",
+            "WAITING_REQUIREMENTS_FREEZE",
+            "REQUIREMENTS_FROZEN",
+            TERMINAL_CANDIDATE_STATE,
+        }:
+            return self._authoring_real_gate_response(record)
+        request = ChatRequest.from_dict(
+            {
+                "request_id": f"AUTO-AUTHORING-{record.state_hash}",
+                "idempotency_key": f"AUTO-AUTHORING-{record.state_hash}",
+                "program_id": program_id,
+                "expected_state_hash": record.state_hash,
+                "actor": {
+                    "type": "HUMAN_VIA_CODEX_CHAT",
+                    "chat_thread_id": "FACTORY-PUBLIC-CLI",
+                    "turn_id": f"AUTO-AUTHORING-{record.revision}",
+                },
+                "intent": "ADVANCE_AUTHORING_UNTIL_GATE",
+                "payload": {},
+            }
+        )
+        return self.handle_chat_turn(request)
 
     def status(self, program_id: str) -> dict[str, Any]:
         record = self.store.get_program(program_id)
@@ -153,6 +276,149 @@ class FactoryService:
         }
         self._export_program_views(program_id)
         return response
+
+    def requirement_readback(self, program_id: str) -> dict[str, Any]:
+        """Project the authoritative frozen Requirement and its human lock."""
+
+        record = self.store.get_program(program_id)
+        return self._requirement_readback_from_snapshot(
+            record.snapshot,
+            state_hash=record.state_hash,
+            revision=record.revision,
+        )
+
+    def architecture_readback(self, program_id: str) -> dict[str, Any]:
+        """Project the production architecture without changing Program state."""
+
+        record = self.store.get_program(program_id)
+        requirement = self._requirement_readback_from_snapshot(record.snapshot)
+        readback = self._build_architecture_readback(record.snapshot)
+        readback_hash = content_sha256(readback)
+        lifecycle = record.snapshot.get("architecture_lifecycle", {})
+        architecture_lock = None
+        lock_status = "NOT_LOCKED"
+        if isinstance(lifecycle, Mapping):
+            lock_status = str(lifecycle.get("status") or "NOT_LOCKED")
+            stored_readback = lifecycle.get("architecture_readback")
+            if stored_readback is not None and content_sha256(stored_readback) != readback_hash:
+                self._contract_gate(
+                    "ARCHITECTURE_LOCK_STALE",
+                    "architecture input changed after readback preparation",
+                )
+            if lock_status == "LOCKED":
+                candidate_lock = lifecycle.get("architecture_lock")
+                if not isinstance(candidate_lock, Mapping):
+                    self._contract_gate(
+                        "ARCHITECTURE_LOCK_MISSING",
+                        "architecture lifecycle says LOCKED without a lock",
+                    )
+                architecture_lock = deepcopy(dict(candidate_lock))
+        return {
+            "schema_version": "2.9",
+            "status": "PASS",
+            "response_type": "ARCHITECTURE_READBACK",
+            "program_id": program_id,
+            "revision": record.revision,
+            "state_hash": record.state_hash,
+            "requirement_lock_sha256": requirement["requirement_lock"][
+                "requirement_lock_sha256"
+            ],
+            "architecture_readback": readback,
+            "architecture_readback_sha256": readback_hash,
+            "lock_status": lock_status,
+            "architecture_lock": architecture_lock,
+            "writes_performed": False,
+            "execution_started": False,
+        }
+
+    def compile_contract(self, program_id: str) -> dict[str, Any]:
+        """Compile the current dual lock entirely in memory."""
+
+        record = self.store.get_program(program_id)
+        requirement = self._requirement_readback_from_snapshot(record.snapshot)
+        architecture = self.architecture_readback(program_id)
+        architecture_lock = architecture.get("architecture_lock")
+        if not isinstance(architecture_lock, Mapping):
+            self._contract_gate(
+                "ARCHITECTURE_LOCK_MISSING",
+                "compile requires an explicitly confirmed Architecture Lock",
+            )
+        try:
+            from .compiler import compile_requirement_architecture_contract
+
+            result = compile_requirement_architecture_contract(
+                record.snapshot["requirement_ir"],
+                requirement_lock=requirement["requirement_lock"],
+                architecture_readback=architecture["architecture_readback"],
+                architecture_lock=architecture_lock,
+            )
+        except ValueError as exc:
+            gate_code = str(exc).split(":", 1)[0]
+            self._contract_gate(gate_code, str(exc))
+        return result
+
+    def generation_readiness(self, program_id: str) -> dict[str, Any]:
+        """Evaluate the active local-profile Candidate gate without writes."""
+
+        record = self.store.get_program(program_id)
+        return self._generation_readiness_from_snapshot(record.snapshot)
+
+    def _generation_readiness_from_snapshot(
+        self, snapshot: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        from .compiler import compile_requirement_architecture_contract
+        from .core_validation import validate_core
+        from .generation_readiness import (
+            GenerationReadinessError,
+            evaluate_generation_readiness,
+        )
+
+        requirement = self._requirement_readback_from_snapshot(snapshot)
+        architecture_readback = self._build_architecture_readback(snapshot)
+        lifecycle = snapshot.get("architecture_lifecycle")
+        architecture_lock = (
+            lifecycle.get("architecture_lock")
+            if isinstance(lifecycle, Mapping)
+            else None
+        )
+        if not isinstance(architecture_lock, Mapping):
+            self._contract_gate(
+                "GENERATION_ARCHITECTURE_LOCK_MISSING",
+                "Candidate generation requires the active confirmed Architecture Lock",
+            )
+        try:
+            compiled = compile_requirement_architecture_contract(
+                snapshot["requirement_ir"],
+                requirement_lock=requirement["requirement_lock"],
+                architecture_readback=architecture_readback,
+                architecture_lock=architecture_lock,
+            )
+            validation = validate_core()
+            if validation.get("status") != "PASS":
+                self._contract_gate(
+                    "GENERATION_CORE_VALIDATION_NOT_PASS",
+                    "fresh official core validation did not pass",
+                )
+            from .core_validation import _project_validated_core_evidence
+
+            projection = _project_validated_core_evidence(validation)
+            return evaluate_generation_readiness(
+                snapshot,
+                requirement_lock=requirement["requirement_lock"],
+                architecture_readback=architecture_readback,
+                architecture_lock=architecture_lock,
+                compiled_contract=compiled,
+                core_validation=validation,
+                core_evidence_projection=projection,
+            )
+        except GenerationReadinessError as exc:
+            self._contract_gate(exc.code, exc.message)
+        except ValueError as exc:
+            self._contract_gate(
+                "GENERATION_COMPILED_CONTRACT_STALE",
+                str(exc),
+            )
+        raise AssertionError("unreachable generation readiness boundary")
 
     def verify_run(self, program_id: str) -> dict[str, Any]:
         report = self.store.verify_run(program_id)
@@ -285,6 +551,10 @@ class FactoryService:
         self,
         candidate_root: str | Path,
         spec_lock: Mapping[str, Any] | None = None,
+        authoritative_sources: Iterable[Mapping[str, Any]] | None = None,
+        authoritative_requirement_ir: Mapping[str, Any] | None = None,
+        authority_provenance: Mapping[str, Any] | None = None,
+        authority_events: Iterable[Mapping[str, Any]] | None = None,
     ) -> dict[str, Any]:
         root = Path(candidate_root).expanduser().resolve()
         try:
@@ -293,7 +563,20 @@ class FactoryService:
             raise CandidateValidationError(
                 "candidate validator module is unavailable", details={"error": str(exc)}
             ) from exc
-        report = validate_candidate(root, spec_lock=spec_lock)
+        report = validate_candidate(
+            root,
+            spec_lock=spec_lock,
+            authoritative_sources=(
+                list(authoritative_sources)
+                if authoritative_sources is not None
+                else None
+            ),
+            authoritative_requirement_ir=authoritative_requirement_ir,
+            authority_provenance=authority_provenance,
+            authority_events=(
+                list(authority_events) if authority_events is not None else None
+            ),
+        )
         if not isinstance(report, Mapping):
             raise CandidateValidationError("validator returned a non-object report")
         normalized = dict(report)
@@ -311,7 +594,325 @@ class FactoryService:
                 "program has no generated candidate",
                 details={"program_id": program_id},
             )
-        return self.validate_candidate(candidate_path, record.snapshot.get("spec_lock"))
+        return self.validate_candidate(
+            candidate_path,
+            record.snapshot.get("spec_lock"),
+            record.snapshot.get("source_registry", []),
+            record.snapshot.get("requirement_ir"),
+            _factory_authority_provenance(
+                record.snapshot,
+                event_store_revision=record.revision,
+                event_store_tip_sha256=record.state_hash,
+            ),
+            self.store.list_events(program_id),
+        )
+
+    @staticmethod
+    def _contract_gate(gate_code: str, message: str) -> None:
+        raise ContractGateError(
+            message,
+            details={"gate_code": gate_code},
+        )
+
+    def _requirement_readback_from_snapshot(
+        self,
+        snapshot: Mapping[str, Any],
+        *,
+        state_hash: str | None = None,
+        revision: int | None = None,
+    ) -> dict[str, Any]:
+        requirement_ir = snapshot.get("requirement_ir")
+        freeze = snapshot.get("freeze")
+        if not isinstance(requirement_ir, Mapping) or not isinstance(freeze, Mapping):
+            self._contract_gate(
+                "REQUIREMENT_LOCK_MISSING",
+                "Requirement IR or Freeze record is missing",
+            )
+        requirement_ir_hash = content_sha256(requirement_ir)
+        if (
+            freeze.get("status") != "FROZEN"
+            or freeze.get("requirement_ir_sha256") != requirement_ir_hash
+        ):
+            self._contract_gate(
+                "REQUIREMENT_LOCK_STALE",
+                "Requirement Freeze does not bind the current Requirement IR",
+            )
+        open_conflicts = self._source_conflicts(snapshot)
+        gaps = self._requirement_gaps(snapshot)
+        if open_conflicts or gaps:
+            self._contract_gate(
+                "REQUIREMENT_CONFLICT_OPEN",
+                "Requirement Readback has unresolved conflicts or gaps",
+            )
+
+        readback_basis_hash = content_sha256(
+            {
+                "requirement_ir": requirement_ir,
+                "source_registry": snapshot.get("source_registry", []),
+                "requirement_epoch": snapshot.get("requirement_epoch"),
+            }
+        )
+        prepared = snapshot.get("readback")
+        if (
+            not isinstance(prepared, Mapping)
+            or prepared.get("readback_sha256") != readback_basis_hash
+        ):
+            self._contract_gate(
+                "REQUIREMENT_LOCK_STALE",
+                "approved Requirement Readback no longer matches current inputs",
+            )
+        target = requirement_ir.get("target")
+        target = target if isinstance(target, Mapping) else {}
+        source_hashes = {
+            str(item.get("source_id")): str(
+                item.get("sha256") or item.get("content_sha256") or ""
+            )
+            for item in snapshot.get("source_registry", [])
+            if isinstance(item, Mapping) and item.get("source_id")
+        }
+        atom_ids = [
+            str(item["atom_id"])
+            for item in requirement_ir.get("atoms", [])
+            if isinstance(item, Mapping) and item.get("atom_id")
+        ]
+        readback = {
+            "atom_ids": atom_ids,
+            "scope": deepcopy(target.get("scope", [])),
+            "non_goals": deepcopy(target.get("non_goals", [])),
+            "decisions": deepcopy(snapshot.get("decisions", [])),
+            "open_conflicts": [],
+            "source_hashes": source_hashes,
+            "acceptance_case_ids_by_atom": self._case_ids_by_atom(
+                requirement_ir.get("acceptance_cases", [])
+            ),
+            "negative_case_ids_by_atom": self._case_ids_by_atom(
+                requirement_ir.get("negative_cases", [])
+            ),
+        }
+        approval_request_id = str(
+            freeze.get("decision_evidence", {}).get("request_id") or "UNKNOWN"
+        )
+        requirement_lock = {
+            "schema_version": "2.9",
+            "status": "LOCKED",
+            "requirement_epoch": snapshot.get("requirement_epoch"),
+            "readback_sha256": readback_basis_hash,
+            "requirement_ir_sha256": requirement_ir_hash,
+            "approval_receipt_ref": (
+                f"factory-event://{snapshot.get('program_id')}/{approval_request_id}"
+            ),
+            "conflicts_closed": True,
+            "locked_at": freeze.get("approved_at"),
+        }
+        requirement_lock["requirement_lock_sha256"] = content_sha256(
+            requirement_lock
+        )
+        return {
+            "schema_version": "2.9",
+            "status": "PASS",
+            "response_type": "REQUIREMENT_READBACK",
+            "program_id": snapshot.get("program_id"),
+            "revision": revision,
+            "state_hash": state_hash,
+            "requirement_epoch": snapshot.get("requirement_epoch"),
+            "requirement_readback": readback,
+            "readback_sha256": readback_basis_hash,
+            "requirement_ir_sha256": requirement_ir_hash,
+            "requirement_lock": requirement_lock,
+            "writes_performed": False,
+            "execution_started": False,
+        }
+
+    @staticmethod
+    def _case_ids_by_atom(cases: Any) -> dict[str, list[str]]:
+        result: dict[str, list[str]] = {}
+        if not isinstance(cases, list):
+            return result
+        for item in cases:
+            if not isinstance(item, Mapping) or not item.get("case_id"):
+                continue
+            atom_ids = item.get("atom_ids")
+            if not isinstance(atom_ids, list) and item.get("atom_id"):
+                atom_ids = [item["atom_id"]]
+            if not isinstance(atom_ids, list):
+                continue
+            for atom_id in atom_ids:
+                result.setdefault(str(atom_id), []).append(str(item["case_id"]))
+        return result
+
+    def _build_architecture_readback(
+        self, snapshot: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        requirement_ir = snapshot.get("requirement_ir")
+        if not isinstance(requirement_ir, Mapping):
+            self._contract_gate(
+                "REQUIREMENT_LOCK_MISSING", "Requirement IR is missing"
+            )
+        target = requirement_ir.get("target")
+        if not isinstance(target, Mapping):
+            self._contract_gate(
+                "ARCHITECTURE_DECISION_INCOMPLETE", "target is missing"
+            )
+        architecture_epoch = target.get("architecture_epoch")
+        control_plane_epoch = target.get("control_plane_epoch")
+        epoch_contract = target.get("epoch4_architecture_control_plane_contract")
+        expected_architecture = (
+            epoch_contract.get("architecture_epoch")
+            if isinstance(epoch_contract, Mapping)
+            else architecture_epoch
+        )
+        expected_control = (
+            epoch_contract.get("control_plane_epoch")
+            if isinstance(epoch_contract, Mapping)
+            else control_plane_epoch
+        )
+        if (
+            not isinstance(architecture_epoch, int)
+            or not isinstance(control_plane_epoch, int)
+            or architecture_epoch != control_plane_epoch
+            or architecture_epoch != expected_architecture
+            or control_plane_epoch != expected_control
+        ):
+            self._contract_gate(
+                "MIXED_EPOCH",
+                "Architecture and Control Plane epochs must be one supported pair",
+            )
+
+        fields = (
+            "capabilities",
+            "stages",
+            "subharnesses",
+            "modules",
+            "rules",
+            "policies",
+            "tools",
+            "interfaces",
+            "failure_returns",
+            "unresolved_decisions",
+        )
+        explicit = target.get("architecture_input")
+        if isinstance(explicit, Mapping):
+            missing = [field for field in fields if field not in explicit]
+            if missing:
+                self._contract_gate(
+                    "ARCHITECTURE_DECISION_INCOMPLETE",
+                    "architecture_input is missing: " + ", ".join(missing),
+                )
+            readback = {field: deepcopy(explicit[field]) for field in fields}
+        else:
+            readback = self._derive_architecture_readback(requirement_ir, target)
+        if any(not isinstance(readback.get(field), list) for field in fields):
+            self._contract_gate(
+                "ARCHITECTURE_DECISION_INCOMPLETE",
+                "every Architecture Readback section must be an array",
+            )
+        required_nonempty = (
+            "capabilities",
+            "stages",
+            "subharnesses",
+            "modules",
+            "rules",
+            "policies",
+            "interfaces",
+            "failure_returns",
+        )
+        empty = [field for field in required_nonempty if not readback[field]]
+        if empty or readback["unresolved_decisions"]:
+            self._contract_gate(
+                "ARCHITECTURE_DECISION_INCOMPLETE",
+                "unresolved or empty Architecture sections: "
+                + ", ".join(empty or ["unresolved_decisions"]),
+            )
+        return {
+            "schema_version": "2.9",
+            "program_id": snapshot.get("program_id"),
+            "requirement_epoch": snapshot.get("requirement_epoch"),
+            "architecture_epoch": architecture_epoch,
+            "control_plane_epoch": control_plane_epoch,
+            **readback,
+        }
+
+    def _derive_architecture_readback(
+        self,
+        requirement_ir: Mapping[str, Any],
+        target: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        epoch38 = target.get("v2_9_charter_architecture_correction_epoch38")
+        topology = (
+            epoch38.get("planned_owned_core_topology")
+            if isinstance(epoch38, Mapping)
+            else {}
+        )
+        topology = topology if isinstance(topology, Mapping) else {}
+        atoms = [
+            item
+            for item in requirement_ir.get("atoms", [])
+            if isinstance(item, Mapping) and item.get("atom_id")
+        ]
+        edges = [
+            item
+            for item in requirement_ir.get("coverage_edges", [])
+            if isinstance(item, Mapping)
+        ]
+        rules: list[Any] = []
+        policies: list[Any] = []
+        failure_returns: list[Any] = []
+        for atom in atoms:
+            rules.extend(deepcopy(atom.get("order_constraints", [])))
+            policies.extend(deepcopy(atom.get("compatibility_constraints", [])))
+            policies.extend(deepcopy(atom.get("defaults", [])))
+            failure_returns.extend(deepcopy(atom.get("error_semantics", [])))
+            contract = atom.get("production_contract")
+            if not isinstance(contract, Mapping):
+                continue
+            policies.extend(deepcopy(contract.get("forbidden_inferences", [])))
+            for obligation in contract.get("workpack_obligations", []):
+                if not isinstance(obligation, Mapping):
+                    continue
+                rules.extend(deepcopy(obligation.get("deterministic_steps", [])))
+                policies.extend(deepcopy(obligation.get("forbidden_inferences", [])))
+                for artifact in obligation.get("artifact_obligations", []):
+                    if isinstance(artifact, Mapping) and artifact.get("failure_return"):
+                        failure_returns.append(deepcopy(artifact["failure_return"]))
+        unresolved = deepcopy(requirement_ir.get("open_questions", []))
+        unresolved.extend(deepcopy(requirement_ir.get("source_conflicts", [])))
+        return {
+            "capabilities": [
+                {
+                    "atom_id": str(atom["atom_id"]),
+                    "statement": atom.get("text_or_lossless_paraphrase"),
+                    "owner": atom.get("owner"),
+                    "delivery_tier": atom.get("delivery_tier"),
+                }
+                for atom in atoms
+            ],
+            "stages": self._unique_values(
+                value for edge in edges for value in edge.get("stage_ids", [])
+            ),
+            "subharnesses": self._unique_values(
+                value for edge in edges for value in edge.get("workpack_ids", [])
+            ),
+            "modules": deepcopy(topology.get("source_modules", [])),
+            "rules": self._unique_values(rules),
+            "policies": self._unique_values(policies),
+            "tools": deepcopy(target.get("required_tools", [])),
+            "interfaces": deepcopy(
+                topology.get("required_public_capabilities", [])
+            ),
+            "failure_returns": self._unique_values(failure_returns),
+            "unresolved_decisions": unresolved,
+        }
+
+    @staticmethod
+    def _unique_values(values: Iterable[Any]) -> list[Any]:
+        result: list[Any] = []
+        seen: set[str] = set()
+        for value in values:
+            key = content_sha256(value)
+            if key not in seen:
+                seen.add(key)
+                result.append(deepcopy(value))
+        return result
 
     def _create(
         self,
@@ -441,7 +1042,48 @@ class FactoryService:
         now: str,
     ) -> TransitionOutcome:
         self._require_mutable_requirements(snapshot)
+        supported_fields = {
+            "requirement_ir",
+            "requirements",
+            "target",
+            "atoms",
+            "acceptance_cases",
+            "acceptance_criteria",
+            "negative_cases",
+            "negative_tests",
+            "assumptions",
+            "open_questions",
+            "decisions",
+            "user_adjustments",
+            "automation",
+            "source_conflicts",
+            "target_id",
+            "target_name",
+            "target_type",
+            "selected_profile",
+            "profile",
+            "target_root",
+            "output_root",
+            "mission",
+            "scope",
+            "non_goals",
+            "primary_runtime",
+            "description",
+        }
+        unknown_fields = sorted(set(request.payload) - supported_fields)
+        if unknown_fields:
+            raise RequestValidationError(
+                "UPDATE_REQUIREMENTS unknown payload fields: "
+                + ", ".join(unknown_fields)
+            )
         patch = self._normalize_requirement_patch(request.payload)
+        material_patch = {
+            key: value for key, value in patch.items() if key != "schema_version"
+        }
+        if not _has_material_requirement_patch(material_patch):
+            raise RequestValidationError(
+                "UPDATE_REQUIREMENTS requires a non-empty requirement patch"
+            )
         snapshot["requirement_ir"] = _deep_merge(snapshot["requirement_ir"], patch)
         if isinstance(patch.get("decisions"), list):
             snapshot["decisions"] = _merge_json_records(
@@ -543,6 +1185,366 @@ class FactoryService:
                 "next_allowed_intents": self._next_allowed_intents("CLARIFYING"),
             },
         )
+
+    def _advance_authoring_until_gate(
+        self,
+        snapshot: dict[str, Any],
+        request: ChatRequest,
+        now: str,
+    ) -> TransitionOutcome:
+        if snapshot.get("factory_state") not in {
+            "INTAKE_OPEN",
+            "CLARIFYING",
+            "BLOCKED_REQUIREMENT_GAP",
+        }:
+            raise InvalidTransitionError(
+                "ADVANCE_AUTHORING_UNTIL_GATE is not allowed from current state",
+                details={"factory_state": snapshot.get("factory_state")},
+            )
+        self._validate_authoring_epoch_pair(snapshot)
+        source_conflicts = self._source_conflicts(snapshot)
+        if source_conflicts:
+            blocker = self._typed_authoring_blocker(
+                blocker_type="WAITING_EXTERNAL_STATE",
+                owner="SOURCE_OWNER",
+                finding="A registered local source changed or became unavailable.",
+                evidence=source_conflicts,
+                intents=["REOPEN"],
+            )
+            snapshot["factory_state"] = "BLOCKED_SOURCE_CONFLICT"
+            snapshot["blockers"] = [blocker]
+            return TransitionOutcome(
+                snapshot=snapshot,
+                event_type="AUTHORING_AUTO_ADVANCE_STOPPED",
+                response={
+                    "status": "STOPPED_AT_REAL_GATE",
+                    "response_type": "AUTHORING_GATE",
+                    "engine_id": "GenericTransitionEngine",
+                    "stop_reason": "WAITING_EXTERNAL_STATE",
+                    "trace": [],
+                    "blockers": [blocker],
+                    "next_allowed_intents": ["REOPEN"],
+                },
+            )
+
+        target = snapshot.get("requirement_ir", {}).get("target", {})
+        if isinstance(target, Mapping):
+            self._validate_authoring_policy(target)
+            declared_gate = self._declared_authoring_risk_gate(target)
+            if declared_gate is not None:
+                snapshot["factory_state"] = "BLOCKED_AUTHORING_RISK"
+                snapshot["blockers"] = [declared_gate]
+                return TransitionOutcome(
+                    snapshot=snapshot,
+                    event_type="AUTHORING_AUTO_ADVANCE_STOPPED",
+                    response={
+                        "status": "STOPPED_AT_REAL_GATE",
+                        "response_type": "AUTHORING_GATE",
+                        "engine_id": "GenericTransitionEngine",
+                        "stop_reason": declared_gate["blocker_type"],
+                        "trace": [],
+                        "blockers": [declared_gate],
+                        "next_allowed_intents": declared_gate[
+                            "minimum_return_path"
+                        ]["intents"],
+                    },
+                )
+
+        transitions = (
+            "REQUIREMENT_CLASSIFICATION",
+            "CHARTER_CLAUSE_DISPOSITION",
+            "POLICY_COVERAGE",
+            "ARCHITECTURE_CANDIDATE",
+            "RUN_CONTRACT",
+            "EVIDENCE_APPLICABILITY",
+            "AUTHORING_READBACK",
+        )
+        requirement_ir = snapshot["requirement_ir"]
+        authoring_basis_sha256 = content_sha256(
+            {
+                "program_id": snapshot["program_id"],
+                "requirement_epoch": snapshot["requirement_epoch"],
+                "requirement_ir": requirement_ir,
+                "source_registry": snapshot["source_registry"],
+            }
+        )
+        step_evidence = {
+            "REQUIREMENT_CLASSIFICATION": {
+                "atom_count": len(requirement_ir.get("atoms", [])),
+                "acceptance_case_count": len(
+                    requirement_ir.get("acceptance_cases", [])
+                ),
+                "negative_case_count": len(
+                    requirement_ir.get("negative_cases", [])
+                ),
+            },
+            "CHARTER_CLAUSE_DISPOSITION": {
+                "scope_count": len(target.get("scope", [])),
+                "non_goal_count": len(target.get("non_goals", [])),
+                "disposition": "BOUND_TO_REQUIREMENT_IR",
+            },
+            "POLICY_COVERAGE": {
+                "policy_status": target.get("authoring_policy_status", "READY"),
+                "unknown_policy": "FAIL_CLOSED",
+                "conflict_policy": "FAIL_CLOSED",
+            },
+            "ARCHITECTURE_CANDIDATE": {
+                "profile": target.get("profile"),
+                "primary_runtime": target.get("primary_runtime"),
+                "architecture_epoch": target.get("architecture_epoch"),
+            },
+            "RUN_CONTRACT": {
+                "execution_mode": "AUTHORING_ONLY",
+                "execution_started": False,
+                "state_commit": "SINGLE_CAS",
+            },
+            "EVIDENCE_APPLICABILITY": {
+                "acceptance_cases_applicable": True,
+                "negative_cases_applicable": True,
+                "validator_substitution_allowed": False,
+            },
+            "AUTHORING_READBACK": {
+                "requirement_ir_sha256": content_sha256(requirement_ir),
+                "source_registry_sha256": content_sha256(
+                    snapshot["source_registry"]
+                ),
+            },
+        }
+        contracts = {
+            transition_id: {
+                "transition_id": transition_id,
+                "authoring_basis_sha256": authoring_basis_sha256,
+                "next_transition_id": (
+                    transitions[index + 1]
+                    if index + 1 < len(transitions)
+                    else None
+                ),
+            }
+            for index, transition_id in enumerate(transitions)
+        }
+        gaps = self._requirement_gaps(snapshot)
+
+        def execute(contract: Mapping[str, Any]) -> dict[str, Any]:
+            transition_id = str(contract["transition_id"])
+            if transition_id == "REQUIREMENT_CLASSIFICATION" and gaps:
+                return {
+                    "status": "STOPPED",
+                    "transition_id": transition_id,
+                    "stop_reason": "BLOCKING_HIGH_CONFLICT",
+                    "finding": "Requirement classification is incomplete.",
+                    "evidence": deepcopy(gaps),
+                }
+            return {
+                "status": "COMMITTED",
+                "transition_id": transition_id,
+                "next_transition_id": contract.get("next_transition_id"),
+                "authoring_basis_sha256": contract["authoring_basis_sha256"],
+                "finding": f"{transition_id} completed without a real human gate.",
+                "evidence": deepcopy(step_evidence[transition_id]),
+                "human_gate": False,
+            }
+
+        from .control_kernel import GenericTransitionEngine
+
+        advanced = GenericTransitionEngine.advance_path_until_gate(
+            start_transition_id=transitions[0],
+            resolve_transition=contracts.get,
+            execute_transition=execute,
+            max_transitions=len(transitions),
+        )
+        trace = [
+            {
+                **item,
+                "status": (
+                    "COMPLETED" if item.get("status") == "COMMITTED" else "STOPPED"
+                ),
+            }
+            for item in advanced["trace"]
+        ]
+        if gaps:
+            blocker = self._typed_authoring_blocker(
+                blocker_type="BLOCKING_HIGH_CONFLICT",
+                owner="REQUIREMENT_OWNER",
+                finding="Requirement classification found blocking gaps or conflicts.",
+                evidence=gaps,
+                intents=["UPDATE_REQUIREMENTS", "ANSWER"],
+            )
+            snapshot["factory_state"] = "BLOCKED_REQUIREMENT_GAP"
+            snapshot["blockers"] = [blocker]
+            self._sync_ir_metadata(snapshot, open_questions=gaps)
+            return TransitionOutcome(
+                snapshot=snapshot,
+                event_type="AUTHORING_AUTO_ADVANCE_STOPPED",
+                response={
+                    "status": "STOPPED_AT_REAL_GATE",
+                    "response_type": "AUTHORING_GATE",
+                    "engine_id": "GenericTransitionEngine",
+                    "stop_reason": "BLOCKING_HIGH_CONFLICT",
+                    "trace": trace,
+                    "blockers": [blocker],
+                    "questions": gaps[:3],
+                    "question_count": len(gaps),
+                    "next_allowed_intents": ["UPDATE_REQUIREMENTS", "ANSWER"],
+                },
+            )
+
+        readback = self._prepare_readback(snapshot, request, now)
+        snapshot = readback.snapshot
+        snapshot["authoring_auto_advance"] = {
+            "engine_id": "GenericTransitionEngine",
+            "status": "STOPPED_AT_REAL_GATE",
+            "stop_reason": "WAITING_REQUIREMENT_FREEZE",
+            "trace": trace,
+            "authoring_basis_sha256": authoring_basis_sha256,
+            "completed_at": now,
+        }
+        return TransitionOutcome(
+            snapshot=snapshot,
+            event_type="AUTHORING_AUTO_ADVANCED_TO_REAL_GATE",
+            response={
+                "status": "STOPPED_AT_REAL_GATE",
+                "response_type": "AUTHORING_READBACK",
+                "engine_id": "GenericTransitionEngine",
+                "stop_reason": "WAITING_REQUIREMENT_FREEZE",
+                "trace": trace,
+                "readback_sha256": readback.response["readback_sha256"],
+                "next_allowed_intents": readback.response[
+                    "next_allowed_intents"
+                ],
+                "human_summary": (
+                    "Internal Authoring checks completed in one CAS; Requirement Freeze is the next real gate."
+                ),
+            },
+        )
+
+    def _authoring_real_gate_response(self, record: ProgramRecord) -> dict[str, Any]:
+        blockers = deepcopy(record.snapshot.get("blockers", []))
+        stop_reason = {
+            "BLOCKED_REQUIREMENT_GAP": "BLOCKING_HIGH_CONFLICT",
+            "BLOCKED_SOURCE_CONFLICT": "WAITING_EXTERNAL_STATE",
+            "BLOCKED_AUTHORING_RISK": (
+                blockers[0].get("blocker_type", "POLICY_UNKNOWN")
+                if blockers and isinstance(blockers[0], Mapping)
+                else "POLICY_UNKNOWN"
+            ),
+            "REQUIREMENTS_READBACK_READY": "WAITING_REQUIREMENT_FREEZE",
+            "WAITING_REQUIREMENTS_FREEZE": "WAITING_REQUIREMENT_FREEZE_CONFIRMATION",
+            "REQUIREMENTS_FROZEN": "REQUIREMENTS_FROZEN",
+            TERMINAL_CANDIDATE_STATE: "WAITING_CANDIDATE_HUMAN_REVIEW",
+        }[record.factory_state]
+        auto = record.snapshot.get("authoring_auto_advance", {})
+        return {
+            "schema_version": "2.9",
+            "status": "ALREADY_AT_REAL_GATE",
+            "response_type": "AUTHORING_GATE",
+            "program_id": record.program_id,
+            "revision": record.revision,
+            "state_hash": record.state_hash,
+            "factory_state": record.factory_state,
+            "engine_id": "GenericTransitionEngine",
+            "stop_reason": stop_reason,
+            "trace": deepcopy(auto.get("trace", [])),
+            "blockers": blockers,
+            "next_allowed_intents": self._next_allowed_intents(
+                record.factory_state
+            ),
+            "writes_performed": False,
+            "execution_started": False,
+        }
+
+    def _validate_authoring_epoch_pair(self, snapshot: Mapping[str, Any]) -> None:
+        target = snapshot.get("requirement_ir", {}).get("target", {})
+        if not isinstance(target, Mapping):
+            return
+        architecture_epoch = target.get("architecture_epoch")
+        control_plane_epoch = target.get("control_plane_epoch")
+        if architecture_epoch is None and control_plane_epoch is None:
+            return
+        if (
+            not isinstance(architecture_epoch, int)
+            or isinstance(architecture_epoch, bool)
+            or not isinstance(control_plane_epoch, int)
+            or isinstance(control_plane_epoch, bool)
+            or architecture_epoch != control_plane_epoch
+        ):
+            self._contract_gate(
+                "MIXED_EPOCH",
+                "Authoring Architecture and Control Plane epochs must match",
+            )
+
+    def _validate_authoring_policy(self, target: Mapping[str, Any]) -> None:
+        status = target.get("authoring_policy_status")
+        if status is None or status == "READY":
+            return
+        if status == "CONFLICT":
+            self._contract_gate(
+                "POLICY_CONFLICT",
+                "Authoring policy inputs conflict at the active authority precedence",
+            )
+        self._contract_gate(
+            "POLICY_UNKNOWN",
+            "Authoring policy status is unknown or unsupported",
+        )
+
+    @staticmethod
+    def _typed_authoring_blocker(
+        *,
+        blocker_type: str,
+        owner: str,
+        finding: str,
+        evidence: Any,
+        intents: list[str],
+    ) -> dict[str, Any]:
+        return {
+            "blocker_type": blocker_type,
+            "owner": owner,
+            "finding": finding,
+            "evidence": deepcopy(evidence),
+            "prohibited_substitute_evidence": [
+                "VALIDATOR_PASS_ONLY",
+                "MANIFEST_PRESENCE_ONLY",
+                "CHAT_MEMORY_ONLY",
+            ],
+            "minimum_return_path": {"intents": intents},
+            "human_gate": True,
+        }
+
+    def _declared_authoring_risk_gate(
+        self, target: Mapping[str, Any]
+    ) -> dict[str, Any] | None:
+        cases = (
+            (
+                bool(target.get("external_state_required")),
+                "external_state_required",
+                "WAITING_EXTERNAL_STATE",
+                "EXTERNAL_STATE_OWNER",
+                "A declared external state dependency is not ready.",
+            ),
+            (
+                bool(target.get("authority_expansion_required")),
+                "authority_expansion_required",
+                "AUTHORITY_EXPANSION",
+                "AUTHORITY_OWNER",
+                "The next Authoring transition requires expanded authority.",
+            ),
+            (
+                bool(target.get("irreversible_risk")),
+                "irreversible_risk",
+                "IRREVERSIBLE_RISK",
+                "RISK_OWNER",
+                "The next Authoring transition declares irreversible risk.",
+            ),
+        )
+        for active, target_field, blocker_type, owner, finding in cases:
+            if active:
+                return self._typed_authoring_blocker(
+                    blocker_type=blocker_type,
+                    owner=owner,
+                    finding=finding,
+                    evidence={"target_field": target_field, "value": True},
+                    intents=["REOPEN"],
+                )
+        return None
 
     def _prepare_readback(
         self,
@@ -764,6 +1766,241 @@ class FactoryService:
             },
         )
 
+    def _prepare_architecture_readback(
+        self,
+        snapshot: dict[str, Any],
+        request: ChatRequest,
+        now: str,
+    ) -> TransitionOutcome:
+        if snapshot.get("factory_state") != "REQUIREMENTS_FROZEN":
+            raise InvalidTransitionError(
+                "PREPARE_ARCHITECTURE_READBACK requires REQUIREMENTS_FROZEN",
+                details={"factory_state": snapshot.get("factory_state")},
+            )
+        requirement = self._requirement_readback_from_snapshot(snapshot)
+        readback = self._build_architecture_readback(snapshot)
+        readback_hash = content_sha256(readback)
+        snapshot["architecture_lifecycle"] = {
+            "status": "READBACK_READY",
+            "requirement_lock_sha256": requirement["requirement_lock"][
+                "requirement_lock_sha256"
+            ],
+            "architecture_epoch": readback["architecture_epoch"],
+            "control_plane_epoch": readback["control_plane_epoch"],
+            "architecture_readback": readback,
+            "architecture_readback_sha256": readback_hash,
+            "prepared_at": now,
+            "prepared_by": request.actor.as_dict(),
+        }
+        return TransitionOutcome(
+            snapshot=snapshot,
+            event_type="ARCHITECTURE_READBACK_PREPARED",
+            response={
+                "response_type": "ARCHITECTURE_READBACK",
+                "architecture_readback": readback,
+                "architecture_readback_sha256": readback_hash,
+                "next_allowed_intents": [
+                    "REQUEST_ARCHITECTURE_LOCK",
+                    "REOPEN",
+                ],
+                "human_summary": (
+                    "Architecture Readback is ready; no lock or execution was granted."
+                ),
+            },
+        )
+
+    def _request_architecture_lock(
+        self,
+        snapshot: dict[str, Any],
+        request: ChatRequest,
+        now: str,
+    ) -> TransitionOutcome:
+        lifecycle = snapshot.get("architecture_lifecycle")
+        if (
+            snapshot.get("factory_state") != "REQUIREMENTS_FROZEN"
+            or not isinstance(lifecycle, Mapping)
+            or lifecycle.get("status") != "READBACK_READY"
+        ):
+            raise InvalidTransitionError(
+                "REQUEST_ARCHITECTURE_LOCK requires an Architecture Readback",
+                details={"factory_state": snapshot.get("factory_state")},
+            )
+        requirement = self._requirement_readback_from_snapshot(snapshot)
+        readback = self._build_architecture_readback(snapshot)
+        readback_hash = content_sha256(readback)
+        if (
+            lifecycle.get("architecture_readback_sha256") != readback_hash
+            or lifecycle.get("requirement_lock_sha256")
+            != requirement["requirement_lock"]["requirement_lock_sha256"]
+        ):
+            self._contract_gate(
+                "ARCHITECTURE_LOCK_STALE",
+                "Architecture or Requirement Lock changed after readback preparation",
+            )
+        challenge_id = f"ARCH-FREEZE-{uuid.uuid4().hex.upper()}"
+        confirmation_token = (
+            f"CONFIRM_ARCHITECTURE_LOCK {challenge_id} {readback_hash}"
+        )
+        snapshot["architecture_lifecycle"] = {
+            **deepcopy(dict(lifecycle)),
+            "status": "WAITING_HUMAN_CONFIRMATION",
+            "challenge_id": challenge_id,
+            "confirmation_token": confirmation_token,
+            "requested_at": now,
+            "requested_by": request.actor.as_dict(),
+        }
+        return TransitionOutcome(
+            snapshot=snapshot,
+            event_type="ARCHITECTURE_LOCK_REQUESTED",
+            response={
+                "status": "WAITING_USER",
+                "response_type": "APPROVAL_REQUIRED",
+                "approval_challenge": {
+                    "challenge_id": challenge_id,
+                    "architecture_readback_sha256": readback_hash,
+                    "requirement_lock_sha256": lifecycle[
+                        "requirement_lock_sha256"
+                    ],
+                    "architecture_epoch": lifecycle["architecture_epoch"],
+                    "control_plane_epoch": lifecycle["control_plane_epoch"],
+                    "confirmation_token": confirmation_token,
+                    "requested_at": now,
+                    "requested_by": request.actor.as_dict(),
+                },
+                "next_allowed_intents": [
+                    "CONFIRM_ARCHITECTURE_LOCK",
+                    "REOPEN",
+                ],
+                "human_summary": (
+                    "Exact later human confirmation is required; the Factory cannot self-lock Architecture."
+                ),
+            },
+        )
+
+    def _confirm_architecture_lock(
+        self,
+        snapshot: dict[str, Any],
+        request: ChatRequest,
+        now: str,
+    ) -> TransitionOutcome:
+        lifecycle = snapshot.get("architecture_lifecycle")
+        if (
+            snapshot.get("factory_state") != "REQUIREMENTS_FROZEN"
+            or not isinstance(lifecycle, Mapping)
+            or lifecycle.get("status") != "WAITING_HUMAN_CONFIRMATION"
+        ):
+            raise InvalidTransitionError(
+                "CONFIRM_ARCHITECTURE_LOCK requires a pending challenge"
+            )
+        challenge_id = request.payload.get("challenge_id")
+        readback_hash = request.payload.get("architecture_readback_sha256")
+        confirmation_text = request.payload.get("confirmation_text")
+        decision = str(request.payload.get("decision", "")).upper()
+        approved = request.payload.get("approved") is True or decision in {
+            "APPROVE",
+            "APPROVED",
+            "CONFIRM",
+        }
+        if challenge_id != lifecycle.get("challenge_id"):
+            raise InvalidTransitionError("architecture challenge_id does not match")
+        if readback_hash != lifecycle.get("architecture_readback_sha256"):
+            raise InvalidTransitionError(
+                "architecture readback hash does not match"
+            )
+        if confirmation_text != lifecycle.get("confirmation_token"):
+            raise InvalidTransitionError(
+                "architecture confirmation_text must exactly repeat the bound token"
+            )
+        requested_by = lifecycle.get("requested_by", {})
+        if (
+            request.actor.chat_thread_id != requested_by.get("chat_thread_id")
+            or request.actor.turn_id == requested_by.get("turn_id")
+        ):
+            raise InvalidTransitionError(
+                "architecture confirmation must come from a later user turn in the same Chat"
+            )
+        if not approved:
+            raise InvalidTransitionError(
+                "architecture confirmation must explicitly approve"
+            )
+        requirement = self._requirement_readback_from_snapshot(snapshot)
+        readback = self._build_architecture_readback(snapshot)
+        if content_sha256(readback) != readback_hash:
+            self._contract_gate(
+                "ARCHITECTURE_LOCK_STALE",
+                "Architecture input changed after lock challenge",
+            )
+        requirement_lock_sha256 = requirement["requirement_lock"][
+            "requirement_lock_sha256"
+        ]
+        if lifecycle.get("requirement_lock_sha256") != requirement_lock_sha256:
+            self._contract_gate(
+                "REQUIREMENT_LOCK_STALE",
+                "Requirement Lock changed after Architecture challenge",
+            )
+        topology = {
+            field: deepcopy(readback[field])
+            for field in (
+                "capabilities",
+                "stages",
+                "subharnesses",
+                "modules",
+                "rules",
+                "policies",
+                "tools",
+                "interfaces",
+            )
+        }
+        architecture_lock = {
+            "schema_version": "2.9",
+            "status": "LOCKED",
+            "requirement_lock_sha256": requirement_lock_sha256,
+            "architecture_readback_sha256": readback_hash,
+            "topology_sha256": content_sha256(topology),
+            "policy_refs": [
+                f"architecture-readback://policies/{index}"
+                for index, _ in enumerate(readback["policies"])
+            ],
+            "tool_manifest_ref": "architecture-readback://tools",
+            "failure_return_map_sha256": content_sha256(
+                readback["failure_returns"]
+            ),
+            "requirement_epoch": snapshot.get("requirement_epoch"),
+            "architecture_epoch": readback["architecture_epoch"],
+            "control_plane_epoch": readback["control_plane_epoch"],
+            "locked_at": now,
+            "approval_receipt_ref": (
+                f"factory-event://{snapshot.get('program_id')}/{request.request_id}"
+            ),
+        }
+        architecture_lock["architecture_lock_sha256"] = content_sha256(
+            architecture_lock
+        )
+        snapshot["architecture_lifecycle"] = {
+            **deepcopy(dict(lifecycle)),
+            "status": "LOCKED",
+            "locked_at": now,
+            "locked_by": request.actor.as_dict(),
+            "decision_evidence": {
+                "request_id": request.request_id,
+                "chat_thread_id": request.actor.chat_thread_id,
+                "turn_id": request.actor.turn_id,
+            },
+            "architecture_lock": architecture_lock,
+        }
+        return TransitionOutcome(
+            snapshot=snapshot,
+            event_type="ARCHITECTURE_LOCKED_BY_HUMAN",
+            response={
+                "response_type": "RESULT",
+                "architecture_lock": architecture_lock,
+                "next_allowed_intents": ["REOPEN"],
+                "human_summary": (
+                    "Architecture is locked; compile is read-only and no execution is authorized."
+                ),
+            },
+        )
+
     def _generate(
         self,
         snapshot: dict[str, Any],
@@ -781,6 +2018,18 @@ class FactoryService:
             snapshot["requirement_ir"]
         ):
             raise InvalidTransitionError("frozen requirement hash no longer matches")
+        unexpected_overrides = sorted(
+            key for key in ("staging_root", "target_root") if key in request.payload
+        )
+        if unexpected_overrides:
+            raise RequestValidationError(
+                "GENERATE cannot override frozen output or Factory staging paths",
+                details={"forbidden_fields": unexpected_overrides},
+            )
+        generation_readiness: dict[str, Any] | None = None
+        if int(snapshot.get("requirement_epoch", 0)) >= 38:
+            generation_readiness = self._generation_readiness_from_snapshot(snapshot)
+        authority_provenance = _factory_authority_provenance(snapshot)
         snapshot["generation_trace"] = [
             {
                 "state": "GENERATING",
@@ -814,14 +2063,6 @@ class FactoryService:
         program_id = snapshot["program_id"]
         program_root = self.runs_root / program_id
         frozen_output_root = snapshot["requirement_ir"]["target"]["output_root"]
-        unexpected_overrides = sorted(
-            key for key in ("staging_root", "target_root") if key in request.payload
-        )
-        if unexpected_overrides:
-            raise RequestValidationError(
-                "GENERATE cannot override frozen output or Factory staging paths",
-                details={"forbidden_fields": unexpected_overrides},
-            )
         target_root = Path(frozen_output_root).expanduser().resolve()
         protected_roots = [
             self.spec_root,
@@ -861,6 +2102,8 @@ class FactoryService:
                 target_root,
                 snapshot["created_at"],
                 snapshot["spec_lock"],
+                authority_provenance=authority_provenance,
+                generation_readiness=generation_readiness,
             )
         except FileExistsError as exc:
             snapshot["factory_state"] = "OUTPUT_COLLISION"
@@ -883,6 +2126,9 @@ class FactoryService:
             )
         if isinstance(result, Mapping):
             compiler_result = dict(result)
+            prepublication_validation_report = compiler_result.pop(
+                "_prepublication_validation_report", None
+            )
             candidate_path = Path(
                 compiler_result.get("candidate_path")
                 or compiler_result.get("candidate_root")
@@ -892,13 +2138,37 @@ class FactoryService:
         elif isinstance(result, (str, os.PathLike)):
             candidate_path = Path(result).expanduser().resolve()
             compiler_result = {"candidate_path": str(candidate_path)}
+            prepublication_validation_report = None
         else:
             candidate_path = target_root
             compiler_result = {"candidate_path": str(candidate_path)}
+            prepublication_validation_report = None
 
-        validation_report = self.validate_candidate(
-            candidate_path, snapshot.get("spec_lock")
-        )
+        requirement_epoch = int(snapshot.get("requirement_epoch", 0))
+        generation_commit_binding: dict[str, Any] | None = None
+        if requirement_epoch >= 31:
+            if not isinstance(prepublication_validation_report, Mapping):
+                raise CandidateValidationError(
+                    "Epoch 31 generation requires the compiler's constrained prepublication validation report"
+                )
+            validation_report = dict(prepublication_validation_report)
+            generation_commit_binding = _candidate_generation_commit_binding(
+                candidate_path,
+                program_id=program_id,
+                requirement_epoch=requirement_epoch,
+                requirement_ir=snapshot["requirement_ir"],
+                authority_provenance=authority_provenance,
+                request=request,
+                compiler_result=compiler_result,
+            )
+        else:
+            validation_report = self.validate_candidate(
+                candidate_path,
+                snapshot.get("spec_lock"),
+                snapshot.get("source_registry", []),
+                snapshot.get("requirement_ir"),
+                authority_provenance,
+            )
         snapshot["generation_trace"].append(
             {
                 "state": "VALIDATING",
@@ -952,6 +2222,10 @@ class FactoryService:
             "auto_start_generated_workpacks": False,
             "human_approval_status": "PENDING",
         }
+        if generation_commit_binding is not None:
+            snapshot["candidate"][
+                "generation_commit_binding"
+            ] = generation_commit_binding
         return TransitionOutcome(
             snapshot=snapshot,
             event_type="START_PACKAGE_CANDIDATE_READY_FOR_HUMAN_REVIEW",
@@ -980,6 +2254,7 @@ class FactoryService:
             "REQUIREMENTS_FROZEN",
             "BLOCKED_REQUIREMENT_GAP",
             "BLOCKED_SOURCE_CONFLICT",
+            "BLOCKED_AUTHORING_RISK",
             "OUTPUT_COLLISION",
             TERMINAL_CANDIDATE_STATE,
             "REOPEN_REQUIRED",
@@ -993,6 +2268,7 @@ class FactoryService:
             raise RequestValidationError("REOPEN requires a non-empty reason")
         previous_freeze = snapshot.get("freeze")
         previous_candidate = snapshot.get("candidate")
+        previous_architecture = snapshot.get("architecture_lifecycle")
         previous_candidate_path = (
             previous_candidate.get("candidate_path")
             if isinstance(previous_candidate, Mapping)
@@ -1013,6 +2289,15 @@ class FactoryService:
             "reason": reason,
             "invalidated_candidate_path": previous_candidate_path,
         }
+        if previous_architecture is not None:
+            snapshot["architecture_lifecycle"] = {
+                "status": "INVALIDATED_BY_REOPEN",
+                "invalidated_at": now,
+                "previous_architecture_sha256": content_sha256(
+                    previous_architecture
+                ),
+                "reason": reason,
+            }
         if previous_candidate_path:
             target = snapshot.get("requirement_ir", {}).get("target", {})
             if isinstance(target, dict):
@@ -1330,6 +2615,15 @@ class FactoryService:
                     "requirement_ir.target.output_root",
                 )
             )
+        production_semantics_mode = target.get("production_semantics_mode")
+        if production_semantics_mode not in (None, "", EXPLICIT_PRODUCTION_MODE):
+            questions.append(
+                _question(
+                    "REQ-PRODUCTION-SEMANTICS-MODE-INVALID",
+                    f"production_semantics_mode must be {EXPLICIT_PRODUCTION_MODE} when present.",
+                    "requirement_ir.target.production_semantics_mode",
+                )
+            )
         for key, question_id, prompt in (
             ("atoms", "REQ-ATOMS", "Provide at least one atomic normative requirement."),
             ("acceptance_cases", "REQ-ACCEPTANCE", "Provide at least one positive acceptance case."),
@@ -1364,6 +2658,17 @@ class FactoryService:
                     "requirement_ir.atoms",
                 )
             )
+        if explicit_production_enabled(ir):
+            production_findings = validate_explicit_production_contracts(ir)
+            if production_findings:
+                questions.append(
+                    _question(
+                        "REQ-EXPLICIT-PRODUCTION-CONTRACTS",
+                        "Every routed Atom must define an exact Workpack Task Bundle, portable Artifact Obligations, schemas, production and validation rules, Oracle, and failure return. "
+                        f"Current findings: {[item['code'] for item in production_findings[:8]]}",
+                        "requirement_ir.atoms[*].production_contract",
+                    )
+                )
         coverage_edges = [
             item
             for item in ir.get("coverage_edges", [])
@@ -1742,10 +3047,17 @@ class FactoryService:
             "CLARIFYING": ["ADD_SOURCES", "UPDATE_REQUIREMENTS", "ANSWER", "PREPARE_READBACK"],
             "BLOCKED_REQUIREMENT_GAP": ["UPDATE_REQUIREMENTS", "ANSWER", "REOPEN"],
             "BLOCKED_SOURCE_CONFLICT": ["REOPEN"],
+            "BLOCKED_AUTHORING_RISK": ["REOPEN"],
             "OUTPUT_COLLISION": ["REOPEN"],
             "REQUIREMENTS_READBACK_READY": ["REQUEST_FREEZE", "UPDATE_REQUIREMENTS", "ANSWER"],
             "WAITING_REQUIREMENTS_FREEZE": ["CONFIRM_FREEZE", "REOPEN"],
-            "REQUIREMENTS_FROZEN": ["GENERATE", "REOPEN"],
+            "REQUIREMENTS_FROZEN": [
+                "PREPARE_ARCHITECTURE_READBACK",
+                "REQUEST_ARCHITECTURE_LOCK",
+                "CONFIRM_ARCHITECTURE_LOCK",
+                "GENERATE",
+                "REOPEN",
+            ],
             TERMINAL_CANDIDATE_STATE: ["REOPEN"],
         }.get(factory_state, [])
 
@@ -1788,6 +3100,14 @@ def _deep_merge(base: Mapping[str, Any], patch: Mapping[str, Any]) -> dict[str, 
         else:
             result[key] = deepcopy(value)
     return result
+
+
+def _has_material_requirement_patch(value: Any) -> bool:
+    if isinstance(value, Mapping):
+        return bool(value) and any(
+            _has_material_requirement_patch(item) for item in value.values()
+        )
+    return True
 
 
 def _path_hash(path: Path) -> tuple[str, int]:

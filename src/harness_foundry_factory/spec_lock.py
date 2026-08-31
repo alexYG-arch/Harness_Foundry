@@ -19,7 +19,9 @@ from .constants import (
 
 
 SPEC_PACKAGE_VERSION = "2.8.0"
-SPEC_LOCK_VERSION = "1.0"
+SPEC_LOCK_VERSION = "2.0"
+SPEC_LOCK_KIND = "HARNESS_FOUNDRY_V2_8_PORTABLE_SIBLING_SPEC_LOCK"
+SPEC_ROOT_BINDING = "PHYSICAL_SIBLING_NAME_AND_CONTENT_HASH"
 IGNORED_NAMES = {".DS_Store"}
 
 
@@ -102,11 +104,13 @@ def _run_spec_validator(spec_root: Path) -> dict[str, Any]:
 
 
 def _require_sibling_path(spec_root: Path) -> Path:
-    expected = default_spec_root().resolve()
-    actual = spec_root.resolve()
+    expected = default_spec_root().absolute()
+    actual = spec_root.expanduser().absolute()
     if actual != expected:
         raise SpecLockError(f"spec root must be the sibling path {expected}")
-    return actual
+    if actual.is_symlink():
+        raise SpecLockError("spec root must be a physical sibling, not a symlink")
+    return actual.resolve()
 
 
 def load_spec_lock(lock_path: Path | None = None) -> dict[str, Any]:
@@ -136,8 +140,8 @@ def build_spec_lock(spec_root: Path | None = None) -> dict[str, Any]:
     validator_ref = "tools/validate_package.py"
     return {
         "schema_version": SPEC_LOCK_VERSION,
-        "lock_kind": "HARNESS_FOUNDRY_V2_8_SIBLING_SPEC_LOCK",
-        "spec_root_abs": str(root),
+        "lock_kind": SPEC_LOCK_KIND,
+        "spec_root_binding": SPEC_ROOT_BINDING,
         "spec_root_name": root.name,
         "package_id": manifest["package_id"],
         "package_version": manifest["version"],
@@ -167,9 +171,13 @@ def verify_spec_lock(
     except SpecLockError as exc:
         return {"status": "FAIL", "valid": False, "findings": [{"code": "SPEC_PATH_MISMATCH", "message": str(exc)}]}
 
-    if lock.get("spec_root_abs") != str(root):
-        fail("SPEC_PATH_MISMATCH", "lock does not bind the current sibling path")
-    if lock.get("schema_version") != SPEC_LOCK_VERSION or lock.get("lock_kind") != "HARNESS_FOUNDRY_V2_8_SIBLING_SPEC_LOCK":
+    if "spec_root_abs" in lock:
+        fail("SPEC_ABSOLUTE_PATH_FORBIDDEN", "portable lock must not contain spec_root_abs")
+    if lock.get("spec_root_name") != root.name:
+        fail("SPEC_PATH_MISMATCH", "lock does not bind the required sibling name")
+    if lock.get("spec_root_binding") != SPEC_ROOT_BINDING:
+        fail("SPEC_PATH_BINDING_INVALID", "lock does not require the physical sibling contract")
+    if lock.get("schema_version") != SPEC_LOCK_VERSION or lock.get("lock_kind") != SPEC_LOCK_KIND:
         fail("SPEC_LOCK_SCHEMA_INVALID", "lock schema_version or lock_kind is invalid")
     if lock.get("package_id") != HF28_PACKAGE_ID:
         fail("SPEC_IDENTITY_MISMATCH", "lock package_id is not Harness Foundry v2.8")

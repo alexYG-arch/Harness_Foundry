@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "harness-resource://epoch9-proposal/schemas/CONTROL_DOMAIN_CONTRACT.proposal.schema.json",
+  "title": "Harness Foundry v2.9 Control Domain Contract Proposal",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "claim_id",
+    "assurance_level",
+    "producer_domain_id",
+    "oracle_domain_id",
+    "signer_id",
+    "producer_implementation_sha256",
+    "oracle_implementation_sha256",
+    "credential_scope_ids",
+    "workspace_binding_ids",
+    "state_store_ids",
+    "parent_task_ids",
+    "blind_input_policy",
+    "common_mode_failure_classes",
+    "independence_decision"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "claim_id": {"type": "string", "minLength": 1},
+    "assurance_level": {
+      "enum": [
+        "COORDINATED_SEPARATION",
+        "INDEPENDENT_INTERNAL_CERTIFICATION"
+      ]
+    },
+    "producer_domain_id": {"type": "string", "minLength": 1},
+    "oracle_domain_id": {"type": "string", "minLength": 1},
+    "signer_id": {"type": "string", "minLength": 1},
+    "producer_implementation_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "oracle_implementation_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "credential_scope_ids": {
+      "type": "array",
+      "items": {"type": "string"},
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "workspace_binding_ids": {
+      "type": "array",
+      "items": {"type": "string"},
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "state_store_ids": {
+      "type": "array",
+      "items": {"type": "string"},
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "parent_task_ids": {
+      "type": "array",
+      "items": {"type": "string"},
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "blind_input_policy": {
+      "enum": ["NONE", "HIDE_PRODUCER_REASONING", "MINIMUM_CLAIM_AND_ARTIFACT_ONLY"]
+    },
+    "common_mode_failure_classes": {
+      "type": "array",
+      "items": {"type": "string"},
+      "uniqueItems": true
+    },
+    "independence_decision": {
+      "enum": ["PASS", "DOWNGRADE_TO_COORDINATED", "FAIL_CLOSED"]
+    },
+    "decision_reason_codes": {
+      "type": "array",
+      "items": {"type": "string"},
+      "uniqueItems": true
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "assurance_level": {"const": "INDEPENDENT_INTERNAL_CERTIFICATION"}
+        }
+      },
+      "then": {
+        "properties": {
+          "independence_decision": {"const": "PASS"}
+        }
+      }
+    }
+  ]
+}

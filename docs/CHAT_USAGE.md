@@ -1,36 +1,62 @@
 # Codex Chat usage
 
-Open this repository as the Codex project. The user-facing interface is natural language; the bundled repository skill operates the Factory CLI and persists all authoritative state.
+Codex must select one route before acting. Natural language is the user interface; the repository CLI is the engineering interface.
 
-## Start a program
+## DEFAULT_ROUTE_FOUNDRY_CORE
 
-Example:
+This is the default route. It operates and validates the local 41-capability Harness Foundry product without creating a Factory Program or building a target Harness.
 
-> 为一个多阶段代码生成 Harness 创建符合 Harness Foundry v2.8 的宪章 Start Package。需求资料位于 `/absolute/path/to/requirements.md`，候选包输出到 `/absolute/path/to/output`。
+```bash
+python3 tools/hffactory.py version --json
+python3 tools/hffactory.py validate-core --json
+python3 tools/hffactory.py project-core-evidence --json
+python3 tools/hffactory.py package-local --json
+```
 
-Codex must register the request and sources before proposing normalized requirements. The Factory returns at most three high-priority questions per turn.
+Consecutive implementation, focused regression, core validation, evidence projection, and temporary relocation smoke are one engineering flow. They do not need per-step Human Review or generic “继续” prompts. A failing implementation or test is a repair signal, not a new governance ceremony.
 
-## Freeze requirements
+This route must not create a Program, Candidate, Execution Root, Runtime Bind, Driver, Workpack, or A3. It must not run dynamic adversarial reproduction, optional security hardening, external certification, installation, or publication.
 
-When required fields, blocking questions, source conflicts, acceptance cases, and negative cases are closed, the Factory emits a readback and a freeze challenge bound to the current Requirement IR, Source Registry, and Spec Lock Hashes. It also returns an exact `confirmation_token`. Codex must show it and wait; only a later user message repeating that exact token may be submitted as `confirmation_text`.
+## OPTIONAL_ROUTE_START_PACKAGE_COMPATIBILITY
 
-Changing semantics after freeze creates a new epoch and invalidates the prior candidate attempt. If a candidate was already published, the old directory is preserved and `output_root` is cleared so the user must select a new empty path before another freeze.
+Enter this route only when the user explicitly requests a Start Package Candidate or names an existing Factory `program_id`. The Factory CLI and SQLite-backed Program remain authoritative; Chat history does not.
 
-## Resume in another Chat
+1. Verify the pinned specification and create or resume the Program.
+2. Register sources and apply the requested Requirement mutation.
+3. After each mutation, run:
 
-Example:
+   ```bash
+   python3 tools/hffactory.py advance-authoring-until-gate --program-id PROGRAM_ID --json
+   ```
 
-> 继续 Factory Program `HF28-...`，先 readback 当前状态和合法下一动作。
+4. The bounded advance performs internal classification, charter-clause disposition, policy coverage, Architecture Candidate, Run Contract, evidence applicability, and Readback progression using one state CAS. Do not ask the user to approve these deterministic internal steps.
+5. If the result contains a real blocking gap, ask at most three highest-priority questions, record the answers, and invoke the bounded advance again without requesting an extra continuation message.
 
-Codex reads the SQLite-backed state by `program_id`; it must not reconstruct state from a prior chat summary.
+### TRUE_GATE_ONLY
 
-## Candidate stop
+Return to the user only for a true gate:
 
-Successful generation ends at:
+- missing user-owned requirement information or a blocking high conflict;
+- changed external state or stale bindings that cannot be refreshed read-only;
+- exact Requirement Freeze or Architecture Lock confirmation;
+- authority expansion, irreversible effects, or unknown side effects;
+- an explicitly selected Candidate Human Review.
+
+Never auto-confirm a lock, consume a token not supplied in a later user message, widen scope, or cross an execution boundary.
+
+## Freeze, generate, and stop
+
+When the Readback is complete, the Factory may return a Hash-bound freeze challenge and exact `confirmation_token`. Codex must show it and wait. Only a later user message containing the exact token may be submitted.
+
+Generate only after a separate exact authorization. Do not override the frozen output or staging roots. Successful optional-route generation stops at:
 
 ```text
 START_PACKAGE_CANDIDATE_READY_FOR_HUMAN_REVIEW
 AUTHORING_STOP
 ```
 
-The same workflow must not approve or register the candidate, execute its Workpacks, start the generated Driver contract, build the three projects, install a Harness, or claim conformance.
+The authoring workflow must not approve or register the Candidate, create or bind an Execution Root, execute Workpacks, start a Driver, install a target, or claim Harness/Conformance completion.
+
+## Resume safely
+
+For an existing `program_id`, read `status` and `readback`, then continue from the persisted SQLite state and current State Hash. Replaying an identical bounded-advance request is read-only/idempotent; a state conflict requires a fresh status read, not a guessed retry.

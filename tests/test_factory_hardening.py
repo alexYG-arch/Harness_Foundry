@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 from copy import deepcopy
 import json
 from pathlib import Path
@@ -316,6 +317,7 @@ class FactoryHardeningTests(unittest.TestCase):
             target_root: Path,
             created_at: str,
             spec_lock: dict,
+            **_kwargs: object,
         ) -> dict:
             target_root.mkdir(parents=True)
             (target_root / "START_CONTEXT.json").write_text(
@@ -334,7 +336,11 @@ class FactoryHardeningTests(unittest.TestCase):
             )
             return {"candidate_path": str(target_root), "content_sha256": "abc"}
 
-        def validate_candidate(root: Path, spec_lock: dict | None = None) -> dict:
+        def validate_candidate(
+            root: Path,
+            spec_lock: dict | None = None,
+            **_kwargs: object,
+        ) -> dict:
             return {"status": "PASS", "candidate_root": str(root)}
 
         compiler_module.compile_candidate = compile_candidate  # type: ignore[attr-defined]
@@ -387,7 +393,7 @@ class FactoryHardeningTests(unittest.TestCase):
 
     def test_verify_run_detects_factory_state_and_snapshot_read_model_tamper(self) -> None:
         self._create()
-        with sqlite3.connect(self.database) as connection:
+        with closing(sqlite3.connect(self.database)) as connection:
             original_state, snapshot_json = connection.execute(
                 "SELECT factory_state, snapshot_json FROM programs WHERE program_id = ?",
                 ("PROGRAM-HARDENING",),
@@ -406,7 +412,7 @@ class FactoryHardeningTests(unittest.TestCase):
 
         forged_snapshot = json.loads(snapshot_json)
         forged_snapshot["factory_state"] = "FORGED_SNAPSHOT_STATE"
-        with sqlite3.connect(self.database) as connection:
+        with closing(sqlite3.connect(self.database)) as connection:
             connection.execute(
                 "UPDATE programs SET factory_state = ?, snapshot_json = ? WHERE program_id = ?",
                 (

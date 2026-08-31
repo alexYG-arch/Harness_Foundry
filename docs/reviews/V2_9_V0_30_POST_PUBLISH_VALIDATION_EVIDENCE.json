@@ -1,0 +1,77 @@
+{
+  "schema_version": "1.0",
+  "evidence_id": "V2_9_V0_30_POST_PUBLISH_VALIDATION_EVIDENCE",
+  "program_id": "PROGRAM-HARNESS-FOUNDRY-V2-9-UPGRADE",
+  "superseded_candidate": "candidate-v0_30",
+  "replacement_candidate": "candidate-v0_31",
+  "candidate_evidence": {
+    "content_sha256": "5ed10eed9ef9e32a09d6841e8561b827ae64cb53a2c8c5d972e8ba2768e2f60e",
+    "file_count": 331,
+    "validation_report_sha256": "091f43e97216808f08b54a02f1fb1d4c1ca2f706d8c209ca215d16cc4090ed89",
+    "validation_report_receipt_sha256": "3a8f90d68523d4d955a61beb57a0981eb5461ab31621ba8cfc92a4467c2cf832",
+    "requirement_ir_sha256": "1cc0a8090d387b619e45bf1ff9a8539125841e249327ed6be7ef447c7e173e91",
+    "preserved_unchanged": true,
+    "execution_root_exists": false
+  },
+  "validation_basis": {
+    "event_store_revision": 232,
+    "event_store_tip_sha256": "3915a4b3b15f3418c822a6effaea763c444db6922418b46f3ba974cd0cf04088",
+    "source_registry_sha256": "de9de90b6a3b2122a77bfc3581bd1611b2fe2f5693b9c68411cbf94f7fccda60"
+  },
+  "candidate_generation_event": {
+    "revision": 233,
+    "event_type": "START_PACKAGE_CANDIDATE_READY_FOR_HUMAN_REVIEW",
+    "request_id": "REQ-20260810-GENERATE-EPOCH30-V030",
+    "previous_state_hash": "3915a4b3b15f3418c822a6effaea763c444db6922418b46f3ba974cd0cf04088",
+    "new_state_hash": "69d49ed1771ecba795a30c4a71e0e93f7bc8ec7e79e0b3fb50e24c4ca291409b",
+    "event_hash": "91045c015559bb03f3e6d65d04192f53386171c1947cebf0d835a51dc5cd88b6"
+  },
+  "observed_failure": {
+    "status": "FAIL",
+    "finding_code": "VALIDATION_REPORT_AUTHORITY_BINDING_INVALID",
+    "event_store_chain_status": "PASS",
+    "root_cause": "IMMUTABLE_VALIDATION_BASIS_WAS_COMPARED_FOR_EXACT_EQUALITY_WITH_MUTABLE_CURRENT_EVENT_STORE_HEAD"
+  },
+  "reopen_event": {
+    "revision": 234,
+    "event_type": "REQUIREMENTS_REOPENED_AND_DOWNSTREAM_INVALIDATED",
+    "request_id": "REQ-20260810-REOPEN-V030-POST-PUBLISH-AUTHORITY-TIMING",
+    "previous_state_hash": "69d49ed1771ecba795a30c4a71e0e93f7bc8ec7e79e0b3fb50e24c4ca291409b",
+    "new_state_hash": "7c8cd2ad894ad8574e0f2eb630a884fabf74edee6966e37a9399e22ed8c51d42",
+    "event_hash": "42f2fbb6207b30aa4c802f6d3042260b7ef1c9e173a770b9a491185a6791644d"
+  },
+  "epoch31_required_verdicts": {
+    "public_validation_without_authoritative_commit": "FAIL",
+    "immediate_post_publish_revalidation": "PASS",
+    "later_legitimate_descendant_event": "PASS",
+    "forged_validation_basis_ancestor": "FAIL",
+    "forked_current_event_store_tip": "FAIL",
+    "replayed_candidate_generation_commit": "FAIL",
+    "synchronized_candidate_rehash_without_authority_commit": "FAIL"
+  },
+  "verification": {
+    "release_closure_tests": {
+      "passed": 41,
+      "failed": 0
+    },
+    "full_unit_tests": {
+      "passed": 165,
+      "failed": 0
+    },
+    "v2_8_spec_lock": {
+      "status": "PASS",
+      "file_count": 101,
+      "content_sha256": "be81e6b46573abcbff0a9851812b3b2bb78814928e57a59d65a2b5bb733b8503"
+    },
+    "factory_skill_validation": "PASS"
+  },
+  "authoring_boundary": {
+    "v0_31_candidate_created": false,
+    "v0_31_execution_root_created": false,
+    "human_gate_consumed": false,
+    "driver_started": false,
+    "workpack_started": false,
+    "authorization_granted": false,
+    "runtime_execution_started": false
+  }
+}

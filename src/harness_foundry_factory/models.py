@@ -100,6 +100,13 @@ class CandidateValidationError(FactoryError):
     exit_code = 7
 
 
+class ContractGateError(FactoryError):
+    """A Requirement/Architecture compile precondition failed closed."""
+
+    code = "CONTRACT_GATE_BLOCKED"
+    exit_code = 6
+
+
 class IdempotencyConflictError(FactoryError):
     code = "IDEMPOTENCY_KEY_CONFLICT"
     exit_code = 4
@@ -165,6 +172,10 @@ SUPPORTED_INTENTS = {
     "PREPARE_READBACK",
     "REQUEST_FREEZE",
     "CONFIRM_FREEZE",
+    "PREPARE_ARCHITECTURE_READBACK",
+    "REQUEST_ARCHITECTURE_LOCK",
+    "CONFIRM_ARCHITECTURE_LOCK",
+    "ADVANCE_AUTHORING_UNTIL_GATE",
     "GENERATE",
     "REOPEN",
 }
