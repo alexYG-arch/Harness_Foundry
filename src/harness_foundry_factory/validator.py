@@ -49,15 +49,17 @@ from .semantic_contracts import (
     CASE_EXECUTION_RESULT_ROOT_REF,
     ORACLE_EVALUATOR_REGISTRY_REF,
     PUBLIC_SKILL_JOB_INTERFACE_REF,
+    PUBLIC_SKILL_METAMORPHIC_CASE_ID,
+    PUBLIC_SKILL_METAMORPHIC_REPOSITORY_URL,
+    PUBLIC_SKILL_METAMORPHIC_RESOLUTION_RECEIPT_REF,
+    PUBLIC_SKILL_SOURCE_RESOLUTION_ENTRYPOINT,
     build_artifact_obligation_manifest,
     explicit_production_enabled,
     oracle_evaluator_registry,
-    public_skill_job_interface,
     case_result_ref,
     registry_case_result_ref,
     required_artifact_kinds_for_case,
     repository_job_bindings,
-    schema_invariant_contracts_are_complete,
     task_bundle_for_workpack,
     validate_composite_dependency_graph,
     validate_explicit_production_contracts,
@@ -726,11 +728,7 @@ def _expected_workpack_commands(
             if shared_roots
             else "NONE"
         )
-        is_case_runner = command_id in {
-            "LAB-RUN-ACCEPTANCE-CASE",
-            "LAB-RUN-NEGATIVE-CASE",
-            "LAB-RUN-REGISTRY-CASE",
-        }
+        is_case_runner = command_id == "LAB-RUN-CASE-PARTITION"
         lease_eligible = is_coding_command or (
             workpack_id == CASE_EVIDENCE_WRITER_WORKPACK_ID
             and is_case_runner
@@ -826,11 +824,7 @@ def _job_artifact_lease_contract_is_valid(
     is_lab_case_runner = (
         workpack_id == CASE_EVIDENCE_WRITER_WORKPACK_ID
         and str(command.get("command_id") or "")
-        in {
-            "LAB-RUN-ACCEPTANCE-CASE",
-            "LAB-RUN-NEGATIVE-CASE",
-            "LAB-RUN-REGISTRY-CASE",
-        }
+        == "LAB-RUN-CASE-PARTITION"
     )
     required = (is_coding or is_lab_case_runner) and bool(job_ids)
     if command.get("job_artifact_lease_required") is not required:
@@ -1302,8 +1296,65 @@ def _strict_case_result_schema(schema: Any) -> bool:
         if isinstance(mutation_items, Mapping)
         else set()
     )
+    partition_results = schema_properties.get("job_partition_results")
+    partition_items = (
+        partition_results.get("items")
+        if isinstance(partition_results, Mapping)
+        else None
+    )
+    partition_required = (
+        set(partition_items.get("required", []))
+        if isinstance(partition_items, Mapping)
+        else set()
+    )
     all_of = schema.get("allOf")
     serialized_conditions = json.dumps(all_of, sort_keys=True, default=str)
+    expected_ref_bindings = [
+        {
+            "ref_pointer": "/command_receipt_ref",
+            "sha256_pointer": "/command_receipt_sha256",
+            "pairing": "SINGLE",
+        },
+        {
+            "ref_pointer": "/job_partition_results/*/lease_receipt_ref",
+            "sha256_pointer": (
+                "/job_partition_results/*/lease_receipt_sha256"
+            ),
+            "pairing": "SAME_ARRAY_ITEM",
+        },
+        {
+            "ref_pointer": "/job_partition_results/*/result_fragment_ref",
+            "sha256_pointer": (
+                "/job_partition_results/*/result_fragment_sha256"
+            ),
+            "pairing": "SAME_ARRAY_ITEM",
+        },
+        {
+            "ref_pointer": (
+                "/job_partition_results/*/fragment_artifact_manifest_ref"
+            ),
+            "sha256_pointer": (
+                "/job_partition_results/*/fragment_artifact_manifest_sha256"
+            ),
+            "pairing": "SAME_ARRAY_ITEM",
+        },
+        {
+            "ref_pointer": "/aggregation_receipt_ref",
+            "sha256_pointer": "/aggregation_receipt_sha256",
+            "pairing": "SINGLE",
+        },
+    ]
+    expected_lineage_evaluator = {
+        "evaluator_id": "CASE_RESULT_REF_SHA256_LINEAGE_V1",
+        "implementation_entrypoint": (
+            "external_lab.oracle:verify_ref_sha256_bindings_v1"
+        ),
+        "algorithm_version": "1.0",
+        "hash_algorithm": "SHA-256",
+        "byte_mode": "EXACT_REFERENCED_BYTES_NO_REENCODING",
+        "unknown_or_unresolved_ref_disposition": "FAIL_CLOSED",
+        "failure_code": "CASE_RESULT_BYTE_LINEAGE_MISMATCH",
+    }
     return bool(
         schema.get("type") == "object"
         and schema.get("additionalProperties") is False
@@ -1314,6 +1365,10 @@ def _strict_case_result_schema(schema: Any) -> bool:
             "assertion_manifest_sha256",
             "command_receipt_ref",
             "command_receipt_sha256",
+            "job_partition_results",
+            "job_partition_manifest_sha256",
+            "aggregation_receipt_ref",
+            "aggregation_receipt_sha256",
             "assertion_results",
             "oracle_decision",
             "status",
@@ -1344,6 +1399,35 @@ def _strict_case_result_schema(schema: Any) -> bool:
         }.issubset(set(properties["operator"]["enum"]))
         and properties.get("passed", {}).get("type") == "boolean"
         and properties.get("evidence_refs", {}).get("minItems", 0) >= 1
+        and isinstance(partition_results, Mapping)
+        and partition_results.get("type") == "array"
+        and partition_results.get("uniqueItems") is True
+        and isinstance(partition_items, Mapping)
+        and partition_items.get("additionalProperties") is False
+        and {
+            "job_id",
+            "lease_receipt_ref",
+            "lease_receipt_sha256",
+            "result_fragment_ref",
+            "result_fragment_sha256",
+            "fragment_artifact_manifest_ref",
+            "fragment_artifact_manifest_sha256",
+        }.issubset(partition_required)
+        and schema_properties.get("job_partition_manifest_sha256", {}).get(
+            "pattern"
+        )
+        == "^[0-9a-f]{64}$"
+        and schema_properties.get("aggregation_receipt_ref", {}).get(
+            "minLength"
+        )
+        == 1
+        and schema_properties.get("aggregation_receipt_sha256", {}).get(
+            "pattern"
+        )
+        == "^[0-9a-f]{64}$"
+        and schema.get("x-ref-sha256-bindings") == expected_ref_bindings
+        and schema.get("x-byte-lineage-evaluator")
+        == expected_lineage_evaluator
         and isinstance(artifact_checks, Mapping)
         and artifact_checks.get("type") == "array"
         and artifact_checks.get("minItems", 0) >= 1
@@ -1414,7 +1498,11 @@ def _strict_case_result_schema(schema: Any) -> bool:
 
 
 def _strict_case_specific_result_schema(
-    schema: Any, fixture: Any, *, negative: bool
+    schema: Any,
+    fixture: Any,
+    *,
+    negative: bool,
+    job_read_partitions: Sequence[Mapping[str, Any]],
 ) -> bool:
     if not isinstance(schema, Mapping) or not isinstance(fixture, Mapping):
         return False
@@ -1434,6 +1522,15 @@ def _strict_case_specific_result_schema(
         else None
     )
     required = set(schema.get("required", []))
+    partition_results = properties.get("job_partition_results")
+    partition_constraints = (
+        partition_results.get("allOf")
+        if isinstance(partition_results, Mapping)
+        else None
+    )
+    serialized_partitions = json.dumps(
+        partition_constraints, ensure_ascii=False, sort_keys=True
+    )
     if not (
         properties.get("case_id", {}).get("const") == fixture.get("case_id")
         and properties.get("case_kind", {}).get("const")
@@ -1446,6 +1543,39 @@ def _strict_case_specific_result_schema(
         and assertion_results.get("maxItems") == len(assertions)
         and isinstance(assertion_constraints, list)
         and len(assertion_constraints) == len(assertions)
+        and {
+            "job_partition_results",
+            "job_partition_manifest_sha256",
+            "aggregation_receipt_ref",
+            "aggregation_receipt_sha256",
+        }.issubset(required)
+        and properties.get("job_partition_manifest_sha256", {}).get("const")
+        == _json_hash([dict(item) for item in job_read_partitions])
+        and properties.get("aggregation_receipt_ref", {}).get("const")
+        == (
+            f"{CASE_EXECUTION_RESULT_ROOT_REF}/aggregation/"
+            f"{str(fixture.get('case_kind')).lower()}-"
+            f"{_slug(str(fixture.get('case_id'))).lower()}.receipt.json"
+        )
+        and isinstance(partition_results, Mapping)
+        and partition_results.get("uniqueItems") is True
+        and partition_results.get("minItems") == len(job_read_partitions)
+        and partition_results.get("maxItems") == len(job_read_partitions)
+        and isinstance(partition_constraints, list)
+        and len(partition_constraints) == len(job_read_partitions)
+        and all(
+            json.dumps(str(item.get("job_id") or ""))
+            in serialized_partitions
+            and json.dumps(str(item.get("lease_receipt_ref") or ""))
+            in serialized_partitions
+            and json.dumps(str(item.get("result_fragment_ref") or ""))
+            in serialized_partitions
+            and json.dumps(
+                str(item.get("fragment_artifact_manifest_ref") or "")
+            )
+            in serialized_partitions
+            for item in job_read_partitions
+        )
     ):
         return False
     serialized_assertions = json.dumps(
@@ -1547,6 +1677,74 @@ def _strict_case_specific_result_schema(
         and source_jobs.get("minItems") == len(source_manifest)
         and source_jobs.get("maxItems") == len(source_manifest)
         and len(source_jobs.get("allOf", [])) == len(source_manifest)
+    )
+
+
+def _strict_case_aggregation_receipt_schema(
+    schema: Any,
+    *,
+    case_id: str,
+    case_kind: str,
+    fragment_manifest_ref: str,
+    fragment_refs: Sequence[str],
+    result_ref: str,
+) -> bool:
+    if not isinstance(schema, Mapping):
+        return False
+    properties = schema.get("properties")
+    if not isinstance(properties, Mapping):
+        return False
+    expected_bindings = [
+        {
+            "ref_pointer": "/fragment_manifest_ref",
+            "sha256_pointer": "/fragment_manifest_sha256",
+            "pairing": "SINGLE",
+        },
+        {
+            "ref_pointer": "/fragment_refs/*",
+            "sha256_pointer": "/fragment_sha256s/*",
+            "pairing": "SAME_INDEX_EXACT_CARDINALITY",
+        },
+        {
+            "ref_pointer": "/aggregation_command_receipt_ref",
+            "sha256_pointer": "/aggregation_command_receipt_sha256",
+            "pairing": "SINGLE",
+        },
+    ]
+    expected_evaluator = {
+        "evaluator_id": "CASE_AGGREGATION_REF_SHA256_LINEAGE_V1",
+        "implementation_entrypoint": (
+            "external_lab.oracle:verify_ref_sha256_bindings_v1"
+        ),
+        "algorithm_version": "1.0",
+        "hash_algorithm": "SHA-256",
+        "byte_mode": "EXACT_REFERENCED_BYTES_NO_REENCODING",
+        "unknown_or_unresolved_ref_disposition": "FAIL_CLOSED",
+        "failure_code": "CASE_AGGREGATION_BYTE_LINEAGE_MISMATCH",
+    }
+    return bool(
+        schema.get("type") == "object"
+        and schema.get("additionalProperties") is False
+        and properties.get("case_id", {}).get("const") == case_id
+        and properties.get("case_kind", {}).get("const") == case_kind
+        and properties.get("fragment_manifest_ref", {}).get("const")
+        == fragment_manifest_ref
+        and properties.get("fragment_refs", {}).get("const")
+        == list(fragment_refs)
+        and properties.get("fragment_sha256s", {}).get("minItems")
+        == len(fragment_refs)
+        and properties.get("fragment_sha256s", {}).get("maxItems")
+        == len(fragment_refs)
+        and properties.get("result_ref", {}).get("const") == result_ref
+        and schema.get("x-ref-sha256-bindings") == expected_bindings
+        and schema.get("x-byte-lineage-evaluator") == expected_evaluator
+        and schema.get("x-invariants")
+        == [
+            "FRAGMENT_REFS_AND_SHA256S_HAVE_EQUAL_CARDINALITY",
+            "EVERY_FRAGMENT_SHA256_MATCHES_REFERENCED_BYTES",
+            "FRAGMENT_MANIFEST_SHA256_MATCHES_REFERENCED_BYTES",
+            "AGGREGATION_COMMAND_RECEIPT_SHA256_MATCHES_REFERENCED_BYTES",
+        ]
     )
 
 
@@ -1762,6 +1960,302 @@ def _check_nonexecutable_negative_fixture_schema(
     return findings
 
 
+def _public_skill_job_interface_is_valid(
+    interface: Any, frozen_ir: Mapping[str, Any]
+) -> bool:
+    """Independently validate the public URL boundary and resolved identity."""
+
+    if not isinstance(interface, Mapping):
+        return False
+    request_schema = interface.get("job_request_schema")
+    specialization = interface.get("dynamic_specialization_contract")
+    vector = interface.get("metamorphic_acceptance_vector")
+    frozen_fixtures = interface.get("frozen_certification_fixtures")
+    if not all(
+        isinstance(value, Mapping)
+        for value in (request_schema, specialization, vector)
+    ) or not isinstance(frozen_fixtures, list):
+        return False
+    schema_properties = request_schema.get("properties")
+    input_value = vector.get("input")
+    resolution = vector.get("resolution_contract")
+    expected = vector.get("expected")
+    if not all(
+        isinstance(value, Mapping)
+        for value in (schema_properties, input_value, resolution, expected)
+    ):
+        return False
+    resolution_schema = resolution.get("resolution_receipt_schema")
+    if not isinstance(resolution_schema, Mapping):
+        return False
+    resolution_properties = resolution_schema.get("properties")
+    resolution_required = set(resolution_schema.get("required", []))
+    if not isinstance(resolution_properties, Mapping):
+        return False
+    skill_url_schema = schema_properties.get("skill_url")
+    skill_url = str(input_value.get("skill_url") or "")
+    normalized_url = skill_url.removesuffix(".git").rstrip("/")
+    frozen_urls = {
+        str(item.get("repository_url") or "")
+        for item in frozen_fixtures
+        if isinstance(item, Mapping)
+    }
+    identity_fields = [
+        "request_id",
+        "normalized_skill_url",
+        "resolved_commit_sha",
+        "resolved_git_tree_oid",
+        "resolved_tree_sha256",
+    ]
+    expected_resolution_required = {
+        "request_id",
+        "skill_url",
+        "requested_revision",
+        "normalized_skill_url",
+        "resolved_commit_sha",
+        "resolved_git_tree_oid",
+        "resolved_tree_ref",
+        "resolved_tree_sha256",
+        "resolution_command_receipt_ref",
+        "resolution_command_receipt_sha256",
+        "repository_readable",
+        "status",
+    }
+    expected_resolution_bindings = [
+        {
+            "ref_pointer": "/resolved_tree_ref",
+            "sha256_pointer": "/resolved_tree_sha256",
+        },
+        {
+            "ref_pointer": "/resolution_command_receipt_ref",
+            "sha256_pointer": "/resolution_command_receipt_sha256",
+        },
+    ]
+    catalog = frozen_ir.get("target", {}).get("artifact_schema_catalog", {})
+    expected_templates = sorted(
+        [
+            {
+                "atom_id": str(atom_id),
+                "artifact_kind": str(profile.get("artifact_kind") or ""),
+                "schema_sha256": _json_hash(profile.get("schema")),
+            }
+            for atom_id, profile in (
+                catalog.items() if isinstance(catalog, Mapping) else []
+            )
+            if isinstance(profile, Mapping)
+            and isinstance(profile.get("schema"), Mapping)
+        ],
+        key=lambda item: (item["atom_id"], item["artifact_kind"]),
+    )
+    return bool(
+        interface.get("schema_version") == "1.0"
+        and interface.get("interface_id")
+        == "PUBLIC-SKILL-URL-TO-VIDEO-JOB-V1"
+        and interface.get("status") == "DECLARE_ONLY_NOT_RUN"
+        and interface.get("execution_started") is False
+        and request_schema.get("type") == "object"
+        and request_schema.get("additionalProperties") is False
+        and isinstance(skill_url_schema, Mapping)
+        and "const" not in skill_url_schema
+        and "enum" not in skill_url_schema
+        and isinstance(skill_url_schema.get("pattern"), str)
+        and re.fullmatch(skill_url_schema["pattern"], skill_url) is not None
+        and skill_url == PUBLIC_SKILL_METAMORPHIC_REPOSITORY_URL
+        and frozen_fixtures == repository_job_bindings(frozen_ir)
+        and skill_url not in frozen_urls
+        and vector.get("case_id") == PUBLIC_SKILL_METAMORPHIC_CASE_ID
+        and "resolved_source" not in vector
+        and resolution.get("status")
+        == "RUNTIME_RESOLUTION_REQUIRED_NOT_RUN"
+        and resolution.get("resolution_receipt_ref")
+        == PUBLIC_SKILL_METAMORPHIC_RESOLUTION_RECEIPT_REF
+        and resolution.get("network_access_mode")
+        == "READ_ONLY_HTTPS_FOR_DECLARED_PUBLIC_SKILL_URL"
+        and resolution.get("allowed_hosts") == ["github.com"]
+        and resolution.get("simulated_resolution_values_forbidden") is True
+        and resolution_schema.get("type") == "object"
+        and resolution_schema.get("additionalProperties") is False
+        and expected_resolution_required.issubset(resolution_required)
+        and resolution_properties.get("request_id", {}).get("const")
+        == input_value.get("request_id")
+        and resolution_properties.get("skill_url", {}).get("const")
+        == skill_url
+        and resolution_properties.get("requested_revision", {}).get("const")
+        == input_value.get("requested_revision")
+        and resolution_properties.get("normalized_skill_url", {}).get(
+            "const"
+        )
+        == normalized_url
+        and resolution_properties.get("resolved_commit_sha", {}).get(
+            "pattern"
+        )
+        == "^[0-9a-f]{40}$"
+        and resolution_properties.get("resolved_git_tree_oid", {}).get(
+            "pattern"
+        )
+        == "^[0-9a-f]{40}$"
+        and resolution_properties.get("resolved_tree_sha256", {}).get(
+            "pattern"
+        )
+        == "^[0-9a-f]{64}$"
+        and resolution_schema.get("x-ref-sha256-bindings")
+        == expected_resolution_bindings
+        and specialization.get("job_id_derivation")
+        == "SHA256_CANONICAL_RESOLVED_JOB_IDENTITY_PREFIX_16"
+        and specialization.get("job_identity_derivation_stage")
+        == "AFTER_EXACT_SOURCE_RESOLUTION"
+        and specialization.get("job_identity_fields")
+        == identity_fields
+        and specialization.get(
+            "mutable_request_fields_excluded_from_final_identity"
+        )
+        == ["requested_revision"]
+        and specialization.get("source_resolution_entrypoint")
+        == "external_lab.sources:resolve_public_skill_source_v1"
+        and specialization.get("source_resolution_receipt_required") is True
+        and specialization.get(
+            "source_resolution_receipt_bytes_must_hash_match"
+        )
+        is True
+        and specialization.get("resolved_tree_bytes_must_hash_match") is True
+        and specialization.get("schema_template_bindings")
+        == expected_templates
+        and expected.get("job_id_derivation")
+        == specialization.get("job_id_derivation")
+        and "expected_job_id" not in expected
+        and expected.get("expected_job_id_source")
+        == "HASH_VERIFIED_RUNTIME_RESOLUTION_RECEIPT_FIELDS"
+        and expected.get("input_skill_count") == 1
+        and expected.get("output_video_count") == 1
+        and expected.get("source_is_frozen_before_analysis") is True
+        and expected.get("source_resolution_receipt_required") is True
+        and expected.get("target_skill_execution_enabled") is False
+        and vector.get("oracle", {}).get("algorithm_id")
+        == "PUBLIC-SKILL-JOB-METAMORPHIC-ORACLE-V2"
+        and vector.get("oracle", {}).get("implementation_entrypoint")
+        == "external_lab.oracle:evaluate_public_skill_job_v2"
+        and vector.get("status") == "PLANNED_NOT_RUN"
+        and interface.get("interface_sha256")
+        == _hash_without_field(interface, "interface_sha256")
+    )
+
+
+def _strict_public_metamorphic_result_schema(
+    schema: Any, vector: Mapping[str, Any]
+) -> bool:
+    if not isinstance(schema, Mapping):
+        return False
+    properties = schema.get("properties")
+    if not isinstance(properties, Mapping):
+        return False
+    required = {
+        "case_id",
+        "case_kind",
+        "request_sha256",
+        "request_id",
+        "normalized_skill_url",
+        "requested_revision",
+        "resolution_receipt_ref",
+        "resolution_receipt_sha256",
+        "resolved_commit_sha",
+        "resolved_git_tree_oid",
+        "resolved_tree_ref",
+        "resolved_tree_sha256",
+        "derived_job_id",
+        "output_video_count",
+        "source_is_frozen_before_analysis",
+        "target_skill_execution_enabled",
+        "command_receipt_ref",
+        "command_receipt_sha256",
+        "side_effects_started",
+        "oracle_decision",
+        "status",
+    }
+    resolution = vector.get("resolution_contract")
+    input_value = vector.get("input")
+    if not isinstance(resolution, Mapping) or not isinstance(
+        input_value, Mapping
+    ):
+        return False
+    ref_bindings = [
+        {
+            "ref_pointer": "/resolution_receipt_ref",
+            "sha256_pointer": "/resolution_receipt_sha256",
+        },
+        {
+            "ref_pointer": "/resolved_tree_ref",
+            "sha256_pointer": "/resolved_tree_sha256",
+        },
+        {
+            "ref_pointer": "/command_receipt_ref",
+            "sha256_pointer": "/command_receipt_sha256",
+        },
+    ]
+    identity_contract = {
+        "algorithm": "SHA256_CANONICAL_RESOLVED_JOB_IDENTITY_PREFIX_16",
+        "canonicalization": (
+            "UTF8_JSON_SORT_KEYS_COMPACT_SEPARATORS_PRESERVE_ARRAY_ORDER_V1"
+        ),
+        "identity_field_pointers": [
+            "/request_id",
+            "/normalized_skill_url",
+            "/resolved_commit_sha",
+            "/resolved_git_tree_oid",
+            "/resolved_tree_sha256",
+        ],
+        "output_pointer": "/derived_job_id",
+        "output_format": "JOB-UPPERCASE-FIRST-16-SHA256-HEX",
+        "resolution_receipt_field_equality_required": True,
+    }
+    return bool(
+        schema.get("type") == "object"
+        and schema.get("additionalProperties") is False
+        and required.issubset(set(schema.get("required", [])))
+        and properties.get("case_id", {}).get("const")
+        == vector.get("case_id")
+        and properties.get("case_kind", {}).get("const") == "METAMORPHIC"
+        and properties.get("request_sha256", {}).get("const")
+        == _json_hash(input_value)
+        and properties.get("request_id", {}).get("const")
+        == input_value.get("request_id")
+        and properties.get("normalized_skill_url", {}).get("const")
+        == str(input_value.get("skill_url") or "")
+        .removesuffix(".git")
+        .rstrip("/")
+        and properties.get("requested_revision", {}).get("const")
+        == input_value.get("requested_revision")
+        and properties.get("resolution_receipt_ref", {}).get("const")
+        == resolution.get("resolution_receipt_ref")
+        and properties.get("resolution_receipt_sha256", {}).get("pattern")
+        == "^[0-9a-f]{64}$"
+        and properties.get("resolved_commit_sha", {}).get("pattern")
+        == "^[0-9a-f]{40}$"
+        and properties.get("resolved_git_tree_oid", {}).get("pattern")
+        == "^[0-9a-f]{40}$"
+        and properties.get("resolved_tree_sha256", {}).get("pattern")
+        == "^[0-9a-f]{64}$"
+        and properties.get("derived_job_id", {}).get("pattern")
+        == "^JOB-[0-9A-F]{16}$"
+        and properties.get("output_video_count", {}).get("const") == 1
+        and properties.get("source_is_frozen_before_analysis", {}).get(
+            "const"
+        )
+        is True
+        and properties.get("target_skill_execution_enabled", {}).get("const")
+        is False
+        and properties.get("side_effects_started", {}).get("const") is False
+        and schema.get("x-ref-sha256-bindings") == ref_bindings
+        and schema.get("x-job-identity-derivation") == identity_contract
+        and schema.get("x-invariants")
+        == [
+            "RESOLUTION_RECEIPT_SHA256_MATCHES_REFERENCED_BYTES",
+            "RESOLVED_TREE_SHA256_MATCHES_REFERENCED_BYTES",
+            "RESULT_RESOLVED_FIELDS_EQUAL_HASH_VERIFIED_RESOLUTION_RECEIPT",
+            "DERIVED_JOB_ID_EQUALS_CANONICAL_RESOLVED_IDENTITY_HASH",
+        ]
+    )
+
+
 def _check_executable_acceptance_and_oracles(
     root: Path,
 ) -> list[dict[str, Any]]:
@@ -1796,18 +2290,21 @@ def _check_executable_acceptance_and_oracles(
         if public_job_interface_path.is_file()
         else None
     )
-    expected_public_job_interface = (
-        public_skill_job_interface(frozen_ir)
-        if isinstance(frozen_ir, Mapping)
-        else None
-    )
     if (
-        not isinstance(public_job_interface, Mapping)
-        or public_job_interface != expected_public_job_interface
+        not isinstance(frozen_ir, Mapping)
+        or not _public_skill_job_interface_is_valid(
+            public_job_interface, frozen_ir
+        )
     ):
         findings.append(
             _finding(
                 "PUBLIC_SKILL_JOB_INTERFACE_INVALID",
+                "validation/PUBLIC_SKILL_JOB_INTERFACE.json",
+            )
+        )
+        findings.append(
+            _finding(
+                "PUBLIC_SKILL_JOB_IDENTITY_NOT_IMMUTABLY_RESOLVED",
                 "validation/PUBLIC_SKILL_JOB_INTERFACE.json",
             )
         )
@@ -1888,6 +2385,9 @@ def _check_executable_acceptance_and_oracles(
         "LAB-RUN-ACCEPTANCE-CASE",
         "LAB-RUN-NEGATIVE-CASE",
         "LAB-RUN-REGISTRY-CASE",
+        "LAB-RUN-CASE-PARTITION",
+        "LAB-AGGREGATE-CASE-PARTITIONS",
+        "LAB-RUN-METAMORPHIC-CASE",
         "LAB-EVALUATE-CASE-ORACLE",
     }
     expected_registry_invocations = []
@@ -1938,6 +2438,91 @@ def _check_executable_acceptance_and_oracles(
                         ],
                     }
                 )
+    public_vector = (
+        public_job_interface.get("metamorphic_acceptance_vector", {})
+        if isinstance(public_job_interface, Mapping)
+        else {}
+    )
+    public_case_id = str(public_vector.get("case_id") or "")
+    public_result_ref = case_result_ref("METAMORPHIC", public_case_id)
+    public_schema_relative = (
+        "validation/schemas/cases/"
+        f"metamorphic-{_slug(public_case_id).lower()}.result.schema.json"
+    )
+    public_schema_path = root / public_schema_relative
+    public_schema_ref = f"{LOGICAL_CANDIDATE_ROOT}/{public_schema_relative}"
+    public_schema = (
+        _read_json(public_schema_path, findings)
+        if public_schema_path.is_file()
+        else None
+    )
+    public_fixture_ref = (
+        f"{PUBLIC_SKILL_JOB_INTERFACE_REF}#/metamorphic_acceptance_vector"
+    )
+    expected_metamorphic_invocations = [
+        {
+            "case_id": public_case_id,
+            "case_kind": "METAMORPHIC",
+            "owner_workpack_id": CASE_EVIDENCE_WRITER_WORKPACK_ID,
+            "executor_command_id": "LAB-RUN-METAMORPHIC-CASE",
+            "source_resolution_entrypoint": (
+                PUBLIC_SKILL_SOURCE_RESOLUTION_ENTRYPOINT
+            ),
+            "fixture_ref": public_fixture_ref,
+            "fixture_fragment_sha256": _json_hash(public_vector),
+            "result_ref": public_result_ref,
+            "result_schema_ref": public_schema_ref,
+            "result_schema_sha256": (
+                _file_hash(public_schema_path)
+                if public_schema_path.is_file()
+                else None
+            ),
+            "executor_argv": [
+                f"{LOGICAL_EXECUTION_ROOT}/project_start_packages/"
+                "external_lab/.venv/bin/python",
+                "-m",
+                "external_lab",
+                "run-metamorphic-case",
+                "--fixture-ref",
+                public_fixture_ref,
+                "--resolution-receipt-ref",
+                public_vector.get("resolution_contract", {}).get(
+                    "resolution_receipt_ref"
+                ),
+                "--result-ref",
+                public_result_ref,
+            ],
+            "oracle_contract": {
+                **deepcopy(
+                    public_vector.get("oracle", {})
+                    if isinstance(public_vector, Mapping)
+                    else {}
+                ),
+                "executor_command_id": "LAB-EVALUATE-CASE-ORACLE",
+                "result_schema_ref": public_schema_ref,
+                "result_schema_sha256": (
+                    _file_hash(public_schema_path)
+                    if public_schema_path.is_file()
+                    else None
+                ),
+            },
+        }
+    ]
+    metamorphic_closure_valid = bool(
+        public_case_id == PUBLIC_SKILL_METAMORPHIC_CASE_ID
+        and manifest.get("metamorphic_case_invocations")
+        == expected_metamorphic_invocations
+        and _strict_public_metamorphic_result_schema(
+            public_schema, public_vector
+        )
+    ) if isinstance(manifest, Mapping) else False
+    if not metamorphic_closure_valid:
+        findings.append(
+            _finding(
+                "PUBLIC_SKILL_JOB_CASE_CLOSURE_INCOMPLETE",
+                "validation/CASE_EXECUTION_MANIFEST.json",
+            )
+        )
     acceptance_document_for_refs = _read_json(
         root / "validation/ACCEPTANCE_CASES.json", findings
     )
@@ -1970,6 +2555,7 @@ def _check_executable_acceptance_and_oracles(
                 str(item["result_ref"])
                 for item in expected_registry_invocations
             ],
+            public_result_ref,
         ]
     )
     command_ownership_valid = all(
@@ -1991,6 +2577,146 @@ def _check_executable_acceptance_and_oracles(
         == CASE_EXECUTION_RESULT_ROOT_REF
         for command_id in expected_case_command_ids
     )
+    expected_parameter_flags = {
+        "LAB-RUN-ACCEPTANCE-CASE": ["--fixture-ref", "--result-ref"],
+        "LAB-RUN-NEGATIVE-CASE": ["--fixture-ref", "--result-ref"],
+        "LAB-RUN-REGISTRY-CASE": ["--fixture-ref", "--result-ref"],
+        "LAB-RUN-CASE-PARTITION": [
+            "--fixture-ref",
+            "--job-id",
+            "--lease-receipt-ref",
+            "--result-fragment-ref",
+            "--fragment-artifact-manifest-ref",
+        ],
+        "LAB-AGGREGATE-CASE-PARTITIONS": [
+            "--fixture-ref",
+            "--fragment-manifest-ref",
+            "--aggregation-receipt-ref",
+            "--aggregation-receipt-schema-ref",
+            "--result-ref",
+        ],
+        "LAB-RUN-METAMORPHIC-CASE": [
+            "--fixture-ref",
+            "--resolution-receipt-ref",
+            "--result-ref",
+        ],
+        "LAB-EVALUATE-CASE-ORACLE": ["--fixture-ref", "--result-ref"],
+    }
+    command_parameter_contracts_valid = all(
+        commands.get(command_id, {}).get("parameter_contract", {}).get(
+            "required_flags"
+        )
+        == flags
+        for command_id, flags in expected_parameter_flags.items()
+    ) and (
+        commands.get("LAB-RUN-CASE-PARTITION", {}).get("allowed_read_roots")
+        == [LOGICAL_CANDIDATE_ROOT]
+        and commands.get("LAB-RUN-METAMORPHIC-CASE", {}).get(
+            "allowed_read_roots"
+        )
+        == [LOGICAL_CANDIDATE_ROOT]
+        and commands.get("LAB-RUN-METAMORPHIC-CASE", {}).get(
+            "implementation_entrypoint"
+        )
+        == PUBLIC_SKILL_SOURCE_RESOLUTION_ENTRYPOINT
+        and commands.get("LAB-RUN-METAMORPHIC-CASE", {}).get(
+            "parameter_contract", {}
+        ).get("source_resolution_entrypoint")
+        == PUBLIC_SKILL_SOURCE_RESOLUTION_ENTRYPOINT
+        and commands.get("LAB-RUN-METAMORPHIC-CASE", {}).get(
+            "network_access_contract"
+        )
+        == {
+            "mode": "READ_ONLY_HTTPS_FOR_DECLARED_PUBLIC_SKILL_URL",
+            "allowed_hosts": ["github.com"],
+            "request_url_pointer": "/input/skill_url",
+            "resolution_receipt_required": True,
+            "resolved_tree_bytes_required": True,
+            "target_skill_execution_forbidden": True,
+        }
+        and commands.get("LAB-AGGREGATE-CASE-PARTITIONS", {}).get(
+            "allowed_read_roots"
+        )
+        == [LOGICAL_CANDIDATE_ROOT, CASE_EXECUTION_RESULT_ROOT_REF]
+    )
+    lab_cli_bundle_path = (
+        root
+        / "project_start_packages/external_lab/task_bundles/"
+        "LAB-CLI.task_bundle.json"
+    )
+    semantic_lab_bundle_required = bool(
+        isinstance(frozen_ir, Mapping)
+        and explicit_production_enabled(frozen_ir)
+    )
+    lab_cli_bundle = (
+        _read_json(lab_cli_bundle_path, findings)
+        if semantic_lab_bundle_required or lab_cli_bundle_path.is_file()
+        else None
+    )
+    lab_cli_case_contract = (
+        lab_cli_bundle.get("lab_case_execution_contract", {})
+        if isinstance(lab_cli_bundle, Mapping)
+        else {}
+    )
+    resolver_obligation = (
+        "Implement and invoke "
+        f"{PUBLIC_SKILL_SOURCE_RESOLUTION_ENTRYPOINT} from "
+        "run-metamorphic-case before content analysis."
+    )
+    metamorphic_invocations = (
+        manifest.get("metamorphic_case_invocations", [])
+        if isinstance(manifest, Mapping)
+        else []
+    )
+    metamorphic_invocation = (
+        metamorphic_invocations[0]
+        if len(metamorphic_invocations) == 1
+        and isinstance(metamorphic_invocations[0], Mapping)
+        else {}
+    )
+    metamorphic_command = commands.get("LAB-RUN-METAMORPHIC-CASE", {})
+    resolver_bindings = [
+        (
+            public_job_interface.get("dynamic_specialization_contract", {})
+            .get("source_resolution_entrypoint")
+            if isinstance(public_job_interface, Mapping)
+            else None
+        ),
+        metamorphic_invocation.get("source_resolution_entrypoint"),
+        metamorphic_command.get("implementation_entrypoint"),
+        metamorphic_command.get("parameter_contract", {}).get(
+            "source_resolution_entrypoint"
+        ),
+    ]
+    if semantic_lab_bundle_required or lab_cli_bundle_path.is_file():
+        resolver_bindings.append(
+            lab_cli_case_contract.get("required_source_resolution_entrypoint")
+        )
+    resolver_missing = any(value is None for value in resolver_bindings)
+    if semantic_lab_bundle_required or lab_cli_bundle_path.is_file():
+        resolver_missing = resolver_missing or (
+            resolver_obligation
+            not in lab_cli_case_contract.get("implementation_obligations", [])
+        )
+    resolver_mismatch = any(
+        value is not None
+        and value != PUBLIC_SKILL_SOURCE_RESOLUTION_ENTRYPOINT
+        for value in resolver_bindings
+    )
+    if resolver_missing:
+        findings.append(
+            _finding(
+                "PUBLIC_SKILL_SOURCE_RESOLVER_UNREACHABLE",
+                "LAB-RUN-METAMORPHIC-CASE",
+            )
+        )
+    if resolver_mismatch:
+        findings.append(
+            _finding(
+                "PUBLIC_SKILL_SOURCE_RESOLVER_BINDING_MISMATCH",
+                "LAB-RUN-METAMORPHIC-CASE",
+            )
+        )
     fixture_acceptance_artifacts = [
         artifact
         for artifact in (
@@ -2028,6 +2754,12 @@ def _check_executable_acceptance_and_oracles(
         or manifest.get("expected_case_result_refs") != expected_result_refs
         or manifest.get("registry_case_invocations")
         != expected_registry_invocations
+        or manifest.get("metamorphic_case_invocations")
+        != expected_metamorphic_invocations
+        or public_case_id != PUBLIC_SKILL_METAMORPHIC_CASE_ID
+        or not _strict_public_metamorphic_result_schema(
+            public_schema, public_vector
+        )
         or expected_oracle_registry is None
         or registry != expected_oracle_registry
         or manifest.get("oracle_evaluator_registry_ref")
@@ -2055,6 +2787,7 @@ def _check_executable_acceptance_and_oracles(
         != _hash_without_field(manifest, "manifest_sha256")
         or set(commands) != expected_case_command_ids
         or not command_ownership_valid
+        or not command_parameter_contracts_valid
         or not fixture_evidence_binding_valid
         or any(
             command.get("command_sha256")
@@ -2176,7 +2909,7 @@ def _check_executable_acceptance_and_oracles(
                     "lease_receipt_ref": (
                         f"{LOGICAL_EXECUTION_ROOT}/evidence/"
                         "job_artifact_leases/LAB-CERTIFICATION/"
-                        f"{expected_command_id}/{job_id}.lease.json"
+                        f"LAB-RUN-CASE-PARTITION/{job_id}.lease.json"
                     ),
                     "result_fragment_ref": (
                         f"{CASE_EXECUTION_RESULT_ROOT_REF}/fragments/"
@@ -2184,9 +2917,128 @@ def _check_executable_acceptance_and_oracles(
                         f"{_slug(str(case.get('case_id'))).lower()}/"
                         f"{_slug(job_id).lower()}.result.json"
                     ),
+                    "fragment_artifact_manifest_ref": (
+                        f"{CASE_EXECUTION_RESULT_ROOT_REF}/fragments/"
+                        f"{'negative' if negative else 'acceptance'}-"
+                        f"{_slug(str(case.get('case_id'))).lower()}/"
+                        f"{_slug(job_id).lower()}.artifact-manifest.json"
+                    ),
                 }
                 for job_id in expected_partition_job_ids
             ]
+            expected_fragment_manifest_ref = (
+                f"{CASE_EXECUTION_RESULT_ROOT_REF}/fragments/"
+                f"{'negative' if negative else 'acceptance'}-"
+                f"{_slug(str(case.get('case_id'))).lower()}/manifest.json"
+            )
+            expected_aggregation_receipt_ref = (
+                f"{CASE_EXECUTION_RESULT_ROOT_REF}/aggregation/"
+                f"{'negative' if negative else 'acceptance'}-"
+                f"{_slug(str(case.get('case_id'))).lower()}.receipt.json"
+            )
+            expected_aggregation_schema_relative = (
+                "validation/schemas/cases/"
+                f"{'negative' if negative else 'acceptance'}-"
+                f"{_slug(str(case.get('case_id'))).lower()}."
+                "aggregation-receipt.schema.json"
+            )
+            expected_aggregation_schema_ref = (
+                f"{LOGICAL_CANDIDATE_ROOT}/"
+                f"{expected_aggregation_schema_relative}"
+            )
+            aggregation_schema_path = root / expected_aggregation_schema_relative
+            aggregation_schema = (
+                _read_json(aggregation_schema_path, findings)
+                if aggregation_schema_path.is_file()
+                else None
+            )
+            aggregation_schema_sha256 = (
+                _file_hash(aggregation_schema_path)
+                if aggregation_schema_path.is_file()
+                else None
+            )
+            expected_partition_argvs = [
+                [
+                    f"{LOGICAL_EXECUTION_ROOT}/project_start_packages/"
+                    "external_lab/.venv/bin/python",
+                    "-m",
+                    "external_lab",
+                    "run-case-partition",
+                    "--fixture-ref",
+                    case.get("fixture_ref"),
+                    "--job-id",
+                    partition["job_id"],
+                    "--lease-receipt-ref",
+                    partition["lease_receipt_ref"],
+                    "--result-fragment-ref",
+                    partition["result_fragment_ref"],
+                    "--fragment-artifact-manifest-ref",
+                    partition["fragment_artifact_manifest_ref"],
+                ]
+                for partition in expected_partitions
+            ]
+            expected_aggregation_argv = [
+                f"{LOGICAL_EXECUTION_ROOT}/project_start_packages/"
+                "external_lab/.venv/bin/python",
+                "-m",
+                "external_lab",
+                "aggregate-case-partitions",
+                "--fixture-ref",
+                case.get("fixture_ref"),
+                "--fragment-manifest-ref",
+                expected_fragment_manifest_ref,
+                "--aggregation-receipt-ref",
+                expected_aggregation_receipt_ref,
+                "--aggregation-receipt-schema-ref",
+                expected_aggregation_schema_ref,
+                "--result-ref",
+                result_ref,
+            ]
+            partition_command = commands.get("LAB-RUN-CASE-PARTITION")
+            aggregation_command = commands.get(
+                "LAB-AGGREGATE-CASE-PARTITIONS"
+            )
+            partition_contract_invalid = bool(
+                case.get("job_read_partitions") != expected_partitions
+                or case.get("job_partition_manifest_sha256")
+                != _json_hash(expected_partitions)
+                or case.get("partition_executor_command_id")
+                != "LAB-RUN-CASE-PARTITION"
+                or not isinstance(partition_command, Mapping)
+                or case.get("partition_executor_argvs")
+                != expected_partition_argvs
+                or case.get("fragment_manifest_ref")
+                != expected_fragment_manifest_ref
+                or case.get("aggregation_executor_command_id")
+                != "LAB-AGGREGATE-CASE-PARTITIONS"
+                or not isinstance(aggregation_command, Mapping)
+                or case.get("aggregation_executor_argv")
+                != expected_aggregation_argv
+                or case.get("aggregation_receipt_ref")
+                != expected_aggregation_receipt_ref
+                or case.get("aggregation_receipt_schema_ref")
+                != expected_aggregation_schema_ref
+                or case.get("aggregation_receipt_schema_sha256")
+                != aggregation_schema_sha256
+                or not _strict_case_aggregation_receipt_schema(
+                    aggregation_schema,
+                    case_id=str(case.get("case_id")),
+                    case_kind="NEGATIVE" if negative else "ACCEPTANCE",
+                    fragment_manifest_ref=expected_fragment_manifest_ref,
+                    fragment_refs=[
+                        item["result_fragment_ref"]
+                        for item in expected_partitions
+                    ],
+                    result_ref=str(result_ref),
+                )
+            )
+            if partition_contract_invalid:
+                findings.append(
+                    _finding(
+                        "CASE_PARTITION_AGGREGATION_CONTRACT_INCOMPLETE",
+                        label,
+                    )
+                )
             executable_binding_invalid = bool(
                 fixture_path is None
                 or not fixture_path.is_file()
@@ -2219,8 +3071,47 @@ def _check_executable_acceptance_and_oracles(
                     "THEN_HASH_BOUND_CASE_AGGREGATION"
                 )
                 or case.get("job_read_partitions") != expected_partitions
+                or case.get("job_partition_manifest_sha256")
+                != _json_hash(expected_partitions)
+                or case.get("partition_executor_command_id")
+                != "LAB-RUN-CASE-PARTITION"
+                or not isinstance(partition_command, Mapping)
+                or case.get("partition_executor_argvs")
+                != expected_partition_argvs
+                or case.get("fragment_manifest_ref")
+                != expected_fragment_manifest_ref
+                or case.get("aggregation_executor_command_id")
+                != "LAB-AGGREGATE-CASE-PARTITIONS"
+                or not isinstance(aggregation_command, Mapping)
+                or case.get("aggregation_executor_argv")
+                != expected_aggregation_argv
+                or case.get("aggregation_receipt_ref")
+                != expected_aggregation_receipt_ref
+                or case.get("aggregation_receipt_schema_ref")
+                != expected_aggregation_schema_ref
+                or case.get("aggregation_receipt_schema_sha256")
+                != aggregation_schema_sha256
+                or case_schema.get("x-aggregation-receipt-schema")
+                != {
+                    "ref": expected_aggregation_schema_ref,
+                    "sha256": aggregation_schema_sha256,
+                }
+                or not _strict_case_aggregation_receipt_schema(
+                    aggregation_schema,
+                    case_id=str(case.get("case_id")),
+                    case_kind="NEGATIVE" if negative else "ACCEPTANCE",
+                    fragment_manifest_ref=expected_fragment_manifest_ref,
+                    fragment_refs=[
+                        item["result_fragment_ref"]
+                        for item in expected_partitions
+                    ],
+                    result_ref=str(result_ref),
+                )
                 or not _strict_case_specific_result_schema(
-                    case_schema, fixture_document, negative=negative
+                    case_schema,
+                    fixture_document,
+                    negative=negative,
+                    job_read_partitions=expected_partitions,
                 )
                 or oracle_command_id != "LAB-EVALUATE-CASE-ORACLE"
                 or not isinstance(oracle_command, Mapping)
@@ -8365,22 +9256,84 @@ def _check_external_authority_provenance(
     return normalized, []
 
 
+def _expected_validation_check_evidence_refs(check_id: Any) -> list[str]:
+    """Independent expected evidence projection for one validation check."""
+
+    check = str(check_id or "")
+    if check == "EXECUTABLE_ACCEPTANCE_AND_ORACLE_CONTRACTS":
+        return [
+            "validation/PUBLIC_SKILL_JOB_INTERFACE.json",
+            "validation/CASE_EXECUTION_MANIFEST.json",
+            "validation/ORACLE_EVALUATOR_REGISTRY.json",
+            "validation/ACCEPTANCE_CASES.json",
+            "validation/NEGATIVE_CASES.json",
+            "validation/schemas/CASE_RESULT.schema.json",
+            "project_start_packages/external_lab/commands/LAB-CERTIFICATION.commands.json",
+        ]
+    if check == "SEMANTIC_PRODUCTION_CONTRACTS":
+        return [
+            "canonical_sources/FROZEN_REQUIREMENT_IR.json",
+            "canonical_sources/NORMATIVE_ATOM_CATALOG.json",
+            "canonical_sources/ATOM_COVERAGE_MATRIX.json",
+        ]
+    if check == "WORKPACK_ARTIFACT_HASH_BINDINGS":
+        return [
+            "PACKAGE_MANIFEST.json",
+            "PHASE_DEPENDENCY_MANIFEST.json",
+            "ENGINEERING_PROJECT_DAG.json",
+        ]
+    if check in {
+        "SOURCE_ATOM_AND_COVERAGE",
+        "AUTHORITATIVE_SOURCE_REGISTRY",
+    }:
+        return [
+            "canonical_sources/SOURCE_MANIFEST.json",
+            "canonical_sources/NORMATIVE_ATOM_CATALOG.json",
+            "canonical_sources/ATOM_COVERAGE_MATRIX.json",
+        ]
+    if check in {
+        "IDENTITY_REFERENCES_AND_HASHES",
+        "PACKAGE_LIFECYCLE_IDENTITY",
+        "LOGICAL_TARGET_ROOT_BINDING",
+    }:
+        return [
+            "PACKAGE_MANIFEST.json",
+            "START_CONTEXT.json",
+            "FACTORY_PROVENANCE.json",
+        ]
+    if check in {
+        "CANDIDATE_IMMUTABILITY_AND_EXECUTION_ROOT",
+        "PHYSICAL_CANDIDATE_READ_ONLY",
+    }:
+        return ["START_CONTEXT.json", "CAPSULE.json"]
+    if check in {
+        "PHASE_P3_AND_RELEASE_ORDER",
+        "THREE_PROJECT_DAG_AND_PACKAGES",
+    }:
+        return [
+            "PHASE_DEPENDENCY_MANIFEST.json",
+            "ENGINEERING_PROJECT_DAG.json",
+            "RELEASE_PIPELINE_MANIFEST.json",
+        ]
+    if check == "VALIDATION_HANDOFF_AND_NONCLAIMS":
+        return ["AUTHORING_HANDOFF.md", "START.md", "README.md"]
+    return [
+        "PACKAGE_MANIFEST.json",
+        "canonical_sources/FROZEN_REQUIREMENT_IR.json",
+        "ENGINEERING_PROJECT_DAG.json",
+    ]
+
+
 def _validation_report_check_projection(
     check: Mapping[str, Any],
 ) -> dict[str, Any]:
-    evidence_refs = [
-        "PACKAGE_MANIFEST.json",
-        "START_CONTEXT.json",
-        "canonical_sources/ATOM_COVERAGE_MATRIX.json",
-        "PHASE_DEPENDENCY_MANIFEST.json",
-        "ENGINEERING_PROJECT_DAG.json",
-        "AUTHORING_HANDOFF.md",
-    ]
     return {
         "check_id": check.get("check_id"),
         "status": check.get("status"),
         "finding_count": len(check.get("findings", [])),
-        "evidence_refs": evidence_refs,
+        "evidence_refs": _expected_validation_check_evidence_refs(
+            check.get("check_id")
+        ),
         "authority_input": check.get("authority_input"),
         "authority_provenance": check.get("authority_provenance"),
     }
@@ -11507,6 +12460,307 @@ def _check_frozen_phase_evidence_projection(
     return findings
 
 
+def _independent_schema_declares_pointer(
+    schema: Mapping[str, Any], pointer: str
+) -> bool:
+    """Resolve an emitted self/dependency pointer without Producer helpers."""
+
+    if not pointer.startswith("/"):
+        return False
+    current: Any = schema
+    for token in pointer.removeprefix("/").split("/"):
+        if not isinstance(current, Mapping):
+            return False
+        if token in {"*", "-1"} or token.isdigit():
+            current = current.get("items")
+            continue
+        properties = current.get("properties")
+        if not isinstance(properties, Mapping) or token not in properties:
+            return False
+        current = properties[token]
+    return isinstance(current, Mapping)
+
+
+def _independent_invariant_contract_findings(
+    schema: Mapping[str, Any],
+    artifact_id: str,
+    *,
+    dependency_kinds: set[str] | None = None,
+    dependency_schemas: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
+) -> list[dict[str, Any]]:
+    """Validate emitted invariant contracts without calling Producer helpers."""
+
+    findings: list[dict[str, Any]] = []
+    invariants = {
+        str(value)
+        for value in schema.get("x-invariants", [])
+        if isinstance(value, str) and value
+    }
+    if not invariants:
+        return findings
+    contracts = schema.get("x-invariant-contracts")
+    required_fields = {
+        "algorithm_id",
+        "algorithm_version",
+        "algorithm",
+        "input_refs",
+        "target_ref",
+        "canonicalization",
+        "ordering",
+        "numeric_tolerance",
+        "branch_precondition",
+        "branch_selector",
+        "decision_rule",
+        "failure_code",
+        "quantifier",
+        "subject_selector",
+        "operand_refs",
+        "evaluator_entrypoint",
+        "predicate_ast",
+        "predicate_sha256",
+    }
+    structurally_invalid = not isinstance(contracts, Mapping) or set(
+        contracts or {}
+    ) != invariants
+    branch_selectors: set[tuple[str, str]] = set()
+    for keyword in ("oneOf", "anyOf"):
+        for branch in schema.get(keyword, []):
+            properties = (
+                branch.get("properties", {})
+                if isinstance(branch, Mapping)
+                else {}
+            )
+            if not isinstance(properties, Mapping):
+                continue
+            for field, field_schema in properties.items():
+                if isinstance(field_schema, Mapping) and isinstance(
+                    field_schema.get("const"), str
+                ):
+                    branch_selectors.add(
+                        (f"/{field}", str(field_schema["const"]))
+                    )
+    expected_branch_selectors: dict[str, dict[str, str]] = {
+        "AUTHORIZED_TARGET_SKILL_RUN_REQUIRES_CURRENT_EXACT_AUTHORIZATION_AND_RECEIPT": {
+            "mode": "REQUIRE_DISCRIMINATOR_CONST",
+            "discriminator_ref": "/provenance_state",
+            "const": "AUTHORIZED_TARGET_SKILL_RUN",
+        },
+        "ILLUSTRATION_IS_EXPLICITLY_LABELED_AND_NOT_ACTUAL_SKILL_OUTPUT": {
+            "mode": "REQUIRE_DISCRIMINATOR_CONST",
+            "discriminator_ref": "/provenance_state",
+            "const": "CLEARLY_LABELED_ILLUSTRATION",
+        },
+        "DENIED_TARGET_SKILL_GATE_HAS_NO_AUTHORIZATION_OR_SIDE_EFFECT_ATTEMPT": {
+            "mode": "REQUIRE_DISCRIMINATOR_CONST",
+            "discriminator_ref": "/status",
+            "const": "DENIED_NO_SIDE_EFFECT",
+        },
+    }
+    dependency_kinds = set(dependency_kinds or set())
+    dependency_schemas = dependency_schemas or {}
+    if isinstance(contracts, Mapping):
+        for invariant_id in invariants:
+            contract = contracts.get(invariant_id)
+            if not isinstance(contract, Mapping):
+                structurally_invalid = True
+                continue
+            input_refs = contract.get("input_refs")
+            target_ref = contract.get("target_ref")
+            predicate_ast = contract.get("predicate_ast")
+            expected_predicate_ast = {
+                "operator": contract.get("algorithm"),
+                "quantifier": contract.get("quantifier"),
+                "subject_selector": contract.get("subject_selector"),
+                "operand_refs": contract.get("operand_refs"),
+                "branch_precondition": contract.get("branch_precondition"),
+                "branch_selector": contract.get("branch_selector"),
+                "numeric_tolerance": contract.get("numeric_tolerance"),
+                "parameters": contract.get("parameters", {}),
+            }
+            structurally_invalid = structurally_invalid or bool(
+                not required_fields.issubset(contract)
+                or not isinstance(input_refs, list)
+                or not input_refs
+                or input_refs[0] != target_ref
+                or not isinstance(contract.get("operand_refs"), list)
+                or not contract.get("operand_refs")
+                or not all(
+                    isinstance(value, str) and value
+                    for value in contract.get("operand_refs", [])
+                )
+                or any(
+                    value
+                    in {
+                        "artifact://self",
+                        "manifest://declared-artifact-dependencies",
+                        "evidence://declared-reference-bytes",
+                    }
+                    for value in contract.get("operand_refs", [])
+                    if isinstance(value, str)
+                )
+                or contract.get("evaluator_entrypoint")
+                != "external_lab.invariants:evaluate_predicate_ast_v1"
+                or predicate_ast != expected_predicate_ast
+                or contract.get("predicate_sha256")
+                != _json_hash(expected_predicate_ast)
+                or not isinstance(contract.get("numeric_tolerance"), Mapping)
+                or any(
+                    not isinstance(contract.get(field), str)
+                    or not contract.get(field)
+                    for field in (
+                        "algorithm_id",
+                        "algorithm_version",
+                        "algorithm",
+                        "canonicalization",
+                        "ordering",
+                        "branch_precondition",
+                        "decision_rule",
+                        "failure_code",
+                        "subject_selector",
+                    )
+                )
+            )
+            operand_refs = contract.get("operand_refs")
+            if isinstance(operand_refs, list):
+                for operand_ref in operand_refs:
+                    unresolved = False
+                    if isinstance(operand_ref, str) and operand_ref.startswith(
+                        "/"
+                    ):
+                        unresolved = not _independent_schema_declares_pointer(
+                            schema, operand_ref
+                        )
+                    elif isinstance(
+                        operand_ref, str
+                    ) and operand_ref.startswith("dependency://"):
+                        dependency_location = operand_ref.removeprefix(
+                            "dependency://"
+                        )
+                        dependency_kind, separator, dependency_pointer = (
+                            dependency_location.partition("/")
+                        )
+                        dependency_pointer = f"/{dependency_pointer}"
+                        schemas = dependency_schemas.get(
+                            dependency_kind, ()
+                        )
+                        unresolved = bool(
+                            not separator
+                            or (
+                                schemas
+                                and not any(
+                                _independent_schema_declares_pointer(
+                                    dependency_schema,
+                                    dependency_pointer,
+                                )
+                                for dependency_schema in schemas
+                            )
+                            )
+                        )
+                    elif isinstance(
+                        operand_ref, str
+                    ) and operand_ref.startswith("candidate://"):
+                        unresolved = False
+                    else:
+                        unresolved = True
+                    if unresolved:
+                        findings.append(
+                            _finding(
+                                "INVARIANT_OPERAND_REF_UNRESOLVED",
+                                f"{artifact_id}:{invariant_id}:{operand_ref}",
+                            )
+                        )
+            algorithm = str(contract.get("algorithm") or "")
+            operand_count = (
+                len(operand_refs) if isinstance(operand_refs, list) else 0
+            )
+            if algorithm in {
+                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
+                "HASH_AND_BYTE_LINEAGE_V1",
+            } and operand_count < 2:
+                findings.append(
+                    _finding(
+                        "INVARIANT_OPERATOR_ARITY_INVALID",
+                        f"{artifact_id}:{invariant_id}",
+                    )
+                )
+            if "CARDINALITY" in invariant_id and (
+                algorithm != "EXACT_ARRAY_CARDINALITY_COMPARISON_V1"
+                or operand_count != 2
+            ):
+                findings.append(
+                    _finding(
+                        "INVARIANT_ALGORITHM_FAMILY_MISMATCH",
+                        f"{artifact_id}:{invariant_id}",
+                    )
+                )
+            if algorithm == "ORDERED_NUMERIC_PREDICATE_V1":
+                parameters = contract.get("parameters")
+                numeric_invalid = not isinstance(parameters, Mapping) or any(
+                    not isinstance(parameters.get(field), str)
+                    or not parameters.get(field)
+                    for field in ("relation", "unit")
+                )
+                if (
+                    not numeric_invalid
+                    and operand_count == 1
+                    and "threshold" not in parameters
+                ):
+                    numeric_invalid = True
+                if numeric_invalid:
+                    findings.append(
+                        _finding(
+                            "INVARIANT_NUMERIC_PARAMETERS_INCOMPLETE",
+                            f"{artifact_id}:{invariant_id}",
+                        )
+                    )
+            quantified = invariant_id.startswith(("EVERY_", "ALL_", "EACH_"))
+            if quantified and (
+                contract.get("quantifier") != "FOR_ALL"
+                or "*" not in str(contract.get("subject_selector") or "")
+            ):
+                findings.append(
+                    _finding(
+                        "INVARIANT_QUANTIFIER_CONTRACT_INCOMPLETE",
+                        f"{artifact_id}:{invariant_id}",
+                    )
+                )
+            elif not quantified and contract.get("quantifier") != "SINGLE":
+                findings.append(
+                    _finding(
+                        "INVARIANT_QUANTIFIER_CONTRACT_INCOMPLETE",
+                        f"{artifact_id}:{invariant_id}",
+                    )
+                )
+            branch_precondition = contract.get("branch_precondition")
+            branch_selector = contract.get("branch_selector")
+            expected_selector = expected_branch_selectors.get(
+                invariant_id,
+                {"mode": "ANY_JSON_SCHEMA_VALID_BRANCH"},
+            )
+            selector_invalid = branch_selector != expected_selector
+            if expected_selector.get("mode") == "REQUIRE_DISCRIMINATOR_CONST":
+                selector_invalid = selector_invalid or bool(
+                    branch_precondition != expected_selector.get("const")
+                    or (
+                        str(expected_selector.get("discriminator_ref")),
+                        str(expected_selector.get("const")),
+                    )
+                    not in branch_selectors
+                )
+            if selector_invalid:
+                findings.append(
+                    _finding(
+                        "INVARIANT_BRANCH_PRECONDITION_INCOMPATIBLE",
+                        f"{artifact_id}:{invariant_id}",
+                    )
+                )
+    if structurally_invalid:
+        findings.append(
+            _finding("ARTIFACT_INVARIANT_CONTRACT_INCOMPLETE", artifact_id)
+        )
+    return findings
+
+
 def _check_video_artifact_evidence_semantics(
     artifact_index: Mapping[str, Any],
     contract_artifact_index: Mapping[str, Any] | None = None,
@@ -11553,6 +12807,44 @@ def _check_video_artifact_evidence_semantics(
         for artifact_id, artifact in artifact_index.items()
         if isinstance(artifact, Mapping)
     }
+    artifact_schemas_by_kind: dict[str, list[Mapping[str, Any]]] = {}
+    for artifact in artifact_index.values():
+        if not isinstance(artifact, Mapping):
+            continue
+        artifact_schema = artifact.get("schema")
+        artifact_kind = str(artifact.get("artifact_kind") or "")
+        if artifact_kind and isinstance(artifact_schema, Mapping):
+            artifact_schemas_by_kind.setdefault(artifact_kind, []).append(
+                artifact_schema
+            )
+    dependency_source = (
+        contract_artifact_index
+        if isinstance(contract_artifact_index, Mapping)
+        else artifact_index
+    )
+
+    def dependency_kind_closure(artifact_id: str) -> set[str]:
+        seen_ids: set[str] = set()
+        pending = [artifact_id]
+        while pending:
+            current_id = pending.pop()
+            current = dependency_source.get(current_id)
+            if not isinstance(current, Mapping):
+                continue
+            for dependency_id in current.get(
+                "depends_on_artifact_ids", []
+            ):
+                dependency_id = str(dependency_id)
+                if dependency_id in seen_ids:
+                    continue
+                seen_ids.add(dependency_id)
+                pending.append(dependency_id)
+        return {
+            artifact_kind_by_id[dependency_id]
+            for dependency_id in seen_ids
+            if dependency_id in artifact_kind_by_id
+        }
+
     for artifact_id, artifact in artifact_index.items():
         if not isinstance(artifact, Mapping):
             continue
@@ -11592,17 +12884,24 @@ def _check_video_artifact_evidence_semantics(
                 )
             )
         invariants = set(schema.get("x-invariants", []))
-        if (
-            invariants
-            and not schema_invariant_contracts_are_complete(schema)
-        ) or (
-            semantic_invariants
-            and not schema_invariant_contracts_are_complete(semantic_schema)
-        ):
-            findings.append(
-                _finding(
-                    "ARTIFACT_INVARIANT_CONTRACT_INCOMPLETE",
+        reachable_dependency_kinds = dependency_kind_closure(
+            str(artifact_id)
+        )
+        findings.extend(
+            _independent_invariant_contract_findings(
+                schema,
+                str(artifact_id),
+                dependency_kinds=reachable_dependency_kinds,
+                dependency_schemas=artifact_schemas_by_kind,
+            )
+        )
+        if semantic_schema is not schema:
+            findings.extend(
+                _independent_invariant_contract_findings(
+                    semantic_schema,
                     str(artifact_id),
+                    dependency_kinds=reachable_dependency_kinds,
+                    dependency_schemas=artifact_schemas_by_kind,
                 )
             )
         if kind == "AUDIO_ALIGNMENT_RECEIPT":
@@ -23279,6 +24578,23 @@ def _check_handoff(
             findings.append(_finding("AUTHORING_VALIDATION_REPORT_INVALID", "START_PACKAGE_VALIDATION_REPORT.json"))
         if report.get("writes_performed") is not False or report.get("runtime_tests_executed") is not False:
             findings.append(_finding("VALIDATION_REPORT_OVERCLAIM", "START_PACKAGE_VALIDATION_REPORT.json"))
+        report_checks = report.get("checks")
+        if not isinstance(report_checks, list) or any(
+            not isinstance(check, Mapping)
+            or check.get("evidence_refs")
+            != _expected_validation_check_evidence_refs(check.get("check_id"))
+            or any(
+                not (root / str(evidence_ref)).is_file()
+                for evidence_ref in check.get("evidence_refs", [])
+            )
+            for check in (report_checks or [])
+        ):
+            findings.append(
+                _finding(
+                    "VALIDATION_REPORT_CHECK_EVIDENCE_INCOMPLETE",
+                    "validation/START_PACKAGE_VALIDATION_REPORT.json",
+                )
+            )
     return findings
 
 

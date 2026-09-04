@@ -1,0 +1,50 @@
+foundry_semantic_repair_preflight:
+  receipt_id: FOUNDRY-SEMANTIC-REPAIR-PREFLIGHT-V1
+  task_scope: start_package_compatibility_semantic_architecture_repair
+  baseline_git_head: 3e51f4d62dca19b4437bf7c3a292d6e7605f7802
+  resolution_method: preservation_shadow_plus_known_bad_reproduction_plus_intentional_delta
+  authority:
+    candidate_epoch_19_role: read_only_defect_evidence
+    candidate_direct_edit_forbidden: true
+    factory_sqlite_edit_forbidden: true
+  loaded_implementation:
+    - path: src/harness_foundry_factory/constants.py
+      sha256: cd4b7c42d6b11145777aba79ccde1c0b283f20151b4a265cd8d4d128726291ae
+    - path: src/harness_foundry_factory/semantic_contracts.py
+      sha256: e1d4219babb244213215fd6404f81e998287cc620b662eda1d308a101d8c473b
+    - path: src/harness_foundry_factory/compiler.py
+      sha256: 5dbfa25f453596149f10f5b1cc7fdc00705c7dcb0fecb94c29123374cfd30adf
+    - path: src/harness_foundry_factory/validator.py
+      sha256: 8e65dc5d8ab81bb6342f6ee1549b6c3e5ee1aa0d08b77020eef11edacc2abb1b
+    - path: tests/test_semantic_production_contracts.py
+      sha256: f10230caa03a0858842504422731d902b7aa75aca9e540e37b5a5b796c258932
+  fixture_index_ref: tests/fixtures/foundry_semantic_repair_shadow_baseline_v1.json
+  intentional_delta_ref: docs/FOUNDRY_SEMANTIC_REPAIR_DELTA_V1.json
+  preservation_requirements:
+    - AUTHORING_STOP_REMAINS_NON_EXECUTING
+    - CANDIDATE_PUBLICATION_REMAINS_ATOMIC_AND_IMMUTABLE
+    - NO_EXECUTION_ROOT_OR_AUTHORIZATION_IS_CREATED_BY_REPAIR_TESTS
+    - EXISTING_FAILURE_CODES_REMAIN_STABLE_UNLESS_LISTED_IN_INTENTIONAL_DELTA
+  unresolved_before_repair:
+    - DECLARED_PUBLIC_INTERFACE_NOT_IN_EXECUTABLE_CASE_CLOSURE
+    - MUTABLE_REVISION_USED_IN_FINAL_JOB_IDENTITY
+    - PUBLIC_METAMORPHIC_SOURCE_FACTS_ARE_SIMULATED_INSTEAD_OF_RUNTIME_RESOLVED
+    - CASE_PARTITIONS_HAVE_NO_SCHEMA_NATIVE_FRAGMENT_AGGREGATION_RECEIPT
+    - CASE_AND_AGGREGATION_SHA256_FIELDS_HAVE_NO_REF_TO_BYTES_EVALUATOR
+    - CONDITIONAL_INVARIANT_CAN_BE_REBOUND_TO_A_DIFFERENT_VALID_SCHEMA_BRANCH
+    - QUANTIFIED_INVARIANTS_USE_SINGLE_INDEX_MUTATION_TARGET_AS_SUBJECT
+    - VALIDATION_REPORT_CHECKS_SHARE_ONE_GENERIC_EVIDENCE_LIST
+    - SHADOW_FIXTURE_IS_NOT_BOUND_TO_TEST_METHODS_OR_FAILURE_CODES
+    - INVARIANT_OPERANDS_CAN_POINT_TO_NONEXISTENT_SCHEMA_FIELDS
+    - EQUALITY_NUMERIC_AND_CARDINALITY_OPERATORS_CAN_BE_SEMANTICALLY_INCOMPLETE
+    - PUBLIC_SOURCE_RESOLVER_HAS_NO_OWNED_LAB_COMMAND_BINDING
+  boundaries:
+    candidate_files_modified: false
+    factory_state_modified: false
+    reopen_authorized: false
+    generation_authorized: false
+    workpack_execution_authorized: false
+    harness_execution_authorized: false
+  ready_for_factory_source_repair: true
+  ready_for_candidate_reopen: false
+  runtime_verified: false

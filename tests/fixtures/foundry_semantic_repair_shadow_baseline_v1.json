@@ -1,0 +1,181 @@
+{
+  "fixture_id": "FOUNDRY-SEMANTIC-REPAIR-SHADOW-BASELINE-V1",
+  "schema_version": "1.1",
+  "status": "FROZEN_REPAIR_INPUT_BASELINE",
+  "baseline_binding": {
+    "git_head": "3e51f4d62dca19b4437bf7c3a292d6e7605f7802",
+    "preflight_receipt_ref": "docs/FOUNDRY_SEMANTIC_REPAIR_PREFLIGHT_RECEIPT_V1.yaml",
+    "intentional_delta_ref": "docs/FOUNDRY_SEMANTIC_REPAIR_DELTA_V1.json",
+    "loaded_implementation": [
+      {"path": "src/harness_foundry_factory/constants.py", "sha256": "cd4b7c42d6b11145777aba79ccde1c0b283f20151b4a265cd8d4d128726291ae"},
+      {"path": "src/harness_foundry_factory/semantic_contracts.py", "sha256": "e1d4219babb244213215fd6404f81e998287cc620b662eda1d308a101d8c473b"},
+      {"path": "src/harness_foundry_factory/compiler.py", "sha256": "5dbfa25f453596149f10f5b1cc7fdc00705c7dcb0fecb94c29123374cfd30adf"},
+      {"path": "src/harness_foundry_factory/validator.py", "sha256": "8e65dc5d8ab81bb6342f6ee1549b6c3e5ee1aa0d08b77020eef11edacc2abb1b"},
+      {"path": "tests/test_semantic_production_contracts.py", "sha256": "f10230caa03a0858842504422731d902b7aa75aca9e540e37b5a5b796c258932"}
+    ]
+  },
+  "preservation_cases": [
+    {
+      "case_id": "PRESERVE-AUTHORING-STOP",
+      "expected": {"authoring_only": true, "execution_started": false, "authorization_ref": null}
+    },
+    {
+      "case_id": "PRESERVE-CANDIDATE-NO-DIRECT-WRITE",
+      "expected": {"candidate_direct_edit": false, "factory_sqlite_direct_edit": false}
+    }
+  ],
+  "protected_contracts": [
+    "AUTHORING_STOP_REMAINS_NON_EXECUTING",
+    "CANDIDATE_PUBLICATION_REMAINS_ATOMIC_AND_IMMUTABLE",
+    "NO_EXECUTION_ROOT_OR_AUTHORIZATION_IS_CREATED_BY_REPAIR_TESTS",
+    "EXISTING_FAILURE_CODES_REMAIN_STABLE_UNLESS_LISTED_IN_INTENTIONAL_DELTA",
+    "PUBLIC_SOURCE_FACTS_REQUIRE_HASH_VERIFIED_RUNTIME_RESOLUTION",
+    "CONDITIONAL_INVARIANTS_BIND_EXACT_SCHEMA_DISCRIMINATOR_BRANCHES",
+    "CASE_AND_AGGREGATION_SHA256_VALUES_BIND_REFERENCED_BYTES",
+    "NEGATIVE_MUTATIONS_REMAIN_MACHINE_APPLICABLE_AND_EVIDENCED",
+    "EVERY_INVARIANT_OPERAND_RESOLVES_AND_OPERATOR_SEMANTICS_ARE_COMPLETE",
+    "PUBLIC_SOURCE_RESOLVER_IS_REACHABLE_FROM_ITS_OWNED_LAB_COMMAND"
+  ],
+  "known_bad_reproductions": [
+    {
+      "case_id": "REG-PUBLIC-CLOSURE-001",
+      "pre_repair_observation": "PUBLIC_VECTOR_DECLARED_BUT_NOT_MATERIALIZED_AS_ACCEPTANCE_CASE",
+      "regression_test_method": "test_validator_rejects_public_case_closure_drift",
+      "post_repair_failure_code": "PUBLIC_SKILL_JOB_CASE_CLOSURE_INCOMPLETE"
+    },
+    {
+      "case_id": "REG-JOB-IDENTITY-001",
+      "pre_repair_observation": "JOB_ID_DERIVED_FROM_URL_AND_MUTABLE_REQUESTED_REVISION",
+      "regression_test_method": "test_validator_rejects_mutable_public_job_identity",
+      "post_repair_failure_code": "PUBLIC_SKILL_JOB_IDENTITY_NOT_IMMUTABLY_RESOLVED"
+    },
+    {
+      "case_id": "REG-PUBLIC-RESOLUTION-001",
+      "pre_repair_observation": "PUBLIC_REPOSITORY_RESOLUTION_USES_FABRICATED_COMMIT_TREE_AND_CONTENT_HASHES",
+      "regression_test_method": "test_validator_rejects_simulated_public_source_resolution",
+      "post_repair_failure_code": "PUBLIC_SKILL_JOB_INTERFACE_INVALID"
+    },
+    {
+      "case_id": "REG-PARTITION-AGGREGATION-001",
+      "pre_repair_observation": "PARTITIONS_DECLARED_WITHOUT_FRAGMENT_AND_AGGREGATION_EVIDENCE_SCHEMA",
+      "regression_test_method": "test_validator_rejects_case_partition_aggregation_drift",
+      "post_repair_failure_code": "CASE_PARTITION_AGGREGATION_CONTRACT_INCOMPLETE"
+    },
+    {
+      "case_id": "REG-CASE-RESULT-LINEAGE-001",
+      "pre_repair_observation": "CASE_RESULT_SHA256_FIELDS_HAVE_NO_EXACT_REF_TO_BYTES_BINDING",
+      "regression_test_method": "test_validator_rejects_case_result_ref_sha256_binding_drift",
+      "post_repair_failure_code": "CASE_EXECUTION_MANIFEST_INVALID"
+    },
+    {
+      "case_id": "REG-AGGREGATION-LINEAGE-001",
+      "pre_repair_observation": "AGGREGATION_RECEIPT_ACCEPTS_PATTERN_ONLY_SHA256_VALUES",
+      "regression_test_method": "test_validator_rejects_aggregation_receipt_byte_lineage_drift",
+      "post_repair_failure_code": "CASE_PARTITION_AGGREGATION_CONTRACT_INCOMPLETE"
+    },
+    {
+      "case_id": "REG-BRANCH-AUTHORIZED-001",
+      "pre_repair_observation": "AUTHORIZED_ONLY_INVARIANT_APPLIES_TO_ALL_SCHEMA_BRANCHES",
+      "regression_test_method": "test_validator_rejects_authorized_branch_precondition_drift",
+      "post_repair_failure_code": "INVARIANT_BRANCH_PRECONDITION_INCOMPATIBLE"
+    },
+    {
+      "case_id": "REG-BRANCH-DENIED-001",
+      "pre_repair_observation": "DENIED_BRANCH_INVARIANT_CAN_BE_REBOUND_TO_AUTHORIZED_BRANCH_WITH_REHASHED_PREDICATE",
+      "regression_test_method": "test_validator_rejects_denied_branch_selector_rebinding",
+      "post_repair_failure_code": "INVARIANT_BRANCH_PRECONDITION_INCOMPATIBLE"
+    },
+    {
+      "case_id": "REG-BRANCH-ILLUSTRATION-001",
+      "pre_repair_observation": "ILLUSTRATION_INVARIANT_CAN_BE_REBOUND_TO_OBSERVED_OUTPUT_BRANCH_WITH_REHASHED_PREDICATE",
+      "regression_test_method": "test_validator_rejects_illustration_branch_selector_rebinding",
+      "post_repair_failure_code": "INVARIANT_BRANCH_PRECONDITION_INCOMPATIBLE"
+    },
+    {
+      "case_id": "REG-QUANTIFIER-001",
+      "pre_repair_observation": "EVERY_INVARIANT_USES_INDEX_ZERO_WITHOUT_FOR_ALL_SELECTOR",
+      "regression_test_method": "test_validator_rejects_quantifier_selector_drift",
+      "post_repair_failure_code": "INVARIANT_QUANTIFIER_CONTRACT_INCOMPLETE"
+    },
+    {
+      "case_id": "REG-COMPOSITE-GRAPH-001",
+      "pre_repair_observation": "ARTIFACT_AND_CONTROL_DEPENDENCIES_HAVE_NO_SINGLE_COMBINED_CYCLE_CHECK",
+      "regression_test_method": "test_composite_dependency_graph_rejects_cross_plane_cycle",
+      "post_repair_failure_code": "COMPOSITE_DEPENDENCY_GRAPH_INVALID"
+    },
+    {
+      "case_id": "REG-JOB-READ-LEASE-001",
+      "pre_repair_observation": "TRANSITIVE_ARTIFACT_READS_CAN_ESCAPE_THE_SELECTED_JOB_LEASE",
+      "regression_test_method": "test_dependency_reads_use_per_job_leases_and_reject_cross_job_root",
+      "post_repair_failure_code": "PROJECT_WORKPACK_COMMAND_BINDING_INVALID"
+    },
+    {
+      "case_id": "REG-ASSET-RENDER-LINEAGE-001",
+      "pre_repair_observation": "ASSET_OR_RENDER_SHA256_FIELDS_ARE_NOT_BOUND_TO_REFERENCED_BYTES",
+      "regression_test_method": "test_validator_rejects_asset_render_lineage_contract_weakening",
+      "post_repair_failure_code": "ARTIFACT_BYTE_LINEAGE_CONTRACT_INCOMPLETE"
+    },
+    {
+      "case_id": "REG-DEMO-EFFECT-DELTA-001",
+      "pre_repair_observation": "DEMO_EFFECT_DELTA_DOES_NOT_RESOLVE_AND_COMPARE_BEFORE_AFTER_STATE_VALUES",
+      "regression_test_method": "test_validator_rejects_underdetermined_demo_effect_delta",
+      "post_repair_failure_code": "DEMO_EFFECT_DELTA_CONTRACT_INCOMPLETE"
+    },
+    {
+      "case_id": "REG-NEGATIVE-MUTATION-EVIDENCE-001",
+      "pre_repair_observation": "NEGATIVE_MUTATION_TARGET_HAS_NO_RESOLVABLE_SCHEMA_OR_FIXTURE_BINDING",
+      "regression_test_method": "test_validator_rejects_unresolvable_negative_mutation_binding",
+      "post_repair_failure_code": "NONEXECUTABLE_NEGATIVE_FIXTURE_SCHEMA_INVALID"
+    },
+    {
+      "case_id": "REG-LAB-CLI-CARDINALITY-001",
+      "pre_repair_observation": "LAB_CLI_GUIDANCE_SAYS_THREE_SUBCOMMANDS_WHILE_CONTRACT_REQUIRES_SEVEN",
+      "regression_test_method": "test_validator_rejects_stale_lab_cli_subcommand_count",
+      "post_repair_failure_code": "TASK_BUNDLE_CONTENT_MISMATCH"
+    },
+    {
+      "case_id": "REG-REPORT-EVIDENCE-001",
+      "pre_repair_observation": "ALL_CHECKS_SHARE_GENERIC_EVIDENCE_REFS",
+      "regression_test_method": "test_validator_rejects_generic_validation_report_evidence",
+      "post_repair_failure_code": "VALIDATION_REPORT_CHECK_EVIDENCE_INCOMPLETE"
+    },
+    {
+      "case_id": "REG-INVARIANT-OPERAND-RESOLUTION-001",
+      "pre_repair_observation": "INVARIANT_OPERAND_POINTS_TO_A_FIELD_ABSENT_FROM_THE_ARTIFACT_SCHEMA",
+      "regression_test_method": "test_validator_rejects_unresolved_invariant_operand",
+      "post_repair_failure_code": "INVARIANT_OPERAND_REF_UNRESOLVED"
+    },
+    {
+      "case_id": "REG-INVARIANT-OPERATOR-ARITY-001",
+      "pre_repair_observation": "EQUALITY_OPERATOR_SELF_COMPARES_ONE_OPERAND",
+      "regression_test_method": "test_validator_rejects_invariant_operator_semantic_drift",
+      "post_repair_failure_code": "INVARIANT_OPERATOR_ARITY_INVALID"
+    },
+    {
+      "case_id": "REG-INVARIANT-NUMERIC-PARAMETERS-001",
+      "pre_repair_observation": "NUMERIC_OPERATOR_OMITS_RELATION_THRESHOLD_OR_UNIT",
+      "regression_test_method": "test_validator_rejects_invariant_operator_semantic_drift",
+      "post_repair_failure_code": "INVARIANT_NUMERIC_PARAMETERS_INCOMPLETE"
+    },
+    {
+      "case_id": "REG-INVARIANT-ALGORITHM-FAMILY-001",
+      "pre_repair_observation": "CARDINALITY_INVARIANT_IS_CLASSIFIED_AS_HASH_LINEAGE",
+      "regression_test_method": "test_validator_rejects_invariant_operator_semantic_drift",
+      "post_repair_failure_code": "INVARIANT_ALGORITHM_FAMILY_MISMATCH"
+    },
+    {
+      "case_id": "REG-PUBLIC-RESOLVER-REACHABILITY-001",
+      "pre_repair_observation": "PUBLIC_SOURCE_RESOLVER_IS_DECLARED_WITHOUT_AN_OWNED_COMMAND_BINDING",
+      "regression_test_method": "test_validator_rejects_public_resolver_reachability_drift",
+      "post_repair_failure_code": "PUBLIC_SKILL_SOURCE_RESOLVER_UNREACHABLE"
+    },
+    {
+      "case_id": "REG-PUBLIC-RESOLVER-BINDING-001",
+      "pre_repair_observation": "METAMORPHIC_COMMAND_BINDS_A_DIFFERENT_SOURCE_RESOLVER",
+      "regression_test_method": "test_validator_rejects_public_resolver_reachability_drift",
+      "post_repair_failure_code": "PUBLIC_SKILL_SOURCE_RESOLVER_BINDING_MISMATCH"
+    }
+  ],
+  "mutation_positions": ["FIRST", "MIDDLE", "LAST"],
+  "aggregate_fingerprint": "af1d4f9d3640feb983925ed64b1bc11dbaec42e1b3b9be049d1d2a09e869caf1"
+}

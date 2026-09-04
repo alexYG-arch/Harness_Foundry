@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import hashlib
+import inspect
 import json
 from pathlib import Path
 import subprocess
@@ -20,6 +21,9 @@ from harness_foundry_factory.semantic_contracts import (
     EXPLICIT_PRODUCTION_MODE,
     negative_case_specs_with_mandatory_controls,
     oracle_evaluator_registry,
+    PUBLIC_SKILL_METAMORPHIC_REPOSITORY_URL,
+    PUBLIC_SKILL_METAMORPHIC_RESOLUTION_RECEIPT_REF,
+    PUBLIC_SKILL_SOURCE_RESOLUTION_ENTRYPOINT,
     RESUMABLE_STAGE_ORDER,
     validate_composite_dependency_graph,
     validate_explicit_production_contracts,
@@ -131,6 +135,25 @@ def semantic_ir(output_root: Path, execution_root: Path) -> dict:
     return value
 
 
+def schema_declares_pointer(schema: dict, pointer: str) -> bool:
+    """Resolve a self JSON pointer without using Producer implementation."""
+
+    if not pointer.startswith("/"):
+        return True
+    current: object = schema
+    for token in pointer.removeprefix("/").split("/"):
+        if not isinstance(current, dict):
+            return False
+        if token in {"*", "-1"} or token.isdigit():
+            current = current.get("items")
+            continue
+        properties = current.get("properties")
+        if not isinstance(properties, dict) or token not in properties:
+            return False
+        current = properties[token]
+    return isinstance(current, dict)
+
+
 class SemanticProductionContractTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -201,6 +224,64 @@ class SemanticProductionContractTests(unittest.TestCase):
             for check in report["checks"]
             for finding in check["findings"]
         }
+
+    def test_semantic_repair_shadow_baseline_is_self_consistent(self) -> None:
+        path = (
+            REPOSITORY_ROOT
+            / "tests/fixtures/foundry_semantic_repair_shadow_baseline_v1.json"
+        )
+        fixture = json.loads(path.read_text(encoding="utf-8"))
+        fingerprint = fixture.pop("aggregate_fingerprint")
+
+        self.assertEqual(
+            fingerprint,
+            hashlib.sha256(
+                json.dumps(
+                    fixture,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest(),
+        )
+        baseline = fixture["baseline_binding"]
+        preflight_path = REPOSITORY_ROOT / baseline["preflight_receipt_ref"]
+        preflight_text = preflight_path.read_text(encoding="utf-8")
+        self.assertIn(baseline["git_head"], preflight_text)
+        for artifact in baseline["loaded_implementation"]:
+            self.assertIn(artifact["path"], preflight_text)
+            self.assertIn(artifact["sha256"], preflight_text)
+        self.assertEqual(
+            set(fixture["protected_contracts"]),
+            {
+                "AUTHORING_STOP_REMAINS_NON_EXECUTING",
+                "CANDIDATE_PUBLICATION_REMAINS_ATOMIC_AND_IMMUTABLE",
+                "NO_EXECUTION_ROOT_OR_AUTHORIZATION_IS_CREATED_BY_REPAIR_TESTS",
+                "EXISTING_FAILURE_CODES_REMAIN_STABLE_UNLESS_LISTED_IN_INTENTIONAL_DELTA",
+                "PUBLIC_SOURCE_FACTS_REQUIRE_HASH_VERIFIED_RUNTIME_RESOLUTION",
+                "CONDITIONAL_INVARIANTS_BIND_EXACT_SCHEMA_DISCRIMINATOR_BRANCHES",
+                "CASE_AND_AGGREGATION_SHA256_VALUES_BIND_REFERENCED_BYTES",
+                "NEGATIVE_MUTATIONS_REMAIN_MACHINE_APPLICABLE_AND_EVIDENCED",
+                "EVERY_INVARIANT_OPERAND_RESOLVES_AND_OPERATOR_SEMANTICS_ARE_COMPLETE",
+                "PUBLIC_SOURCE_RESOLVER_IS_REACHABLE_FROM_ITS_OWNED_LAB_COMMAND",
+            },
+        )
+        reproductions = fixture["known_bad_reproductions"]
+        self.assertEqual(len(reproductions), 23)
+        self.assertEqual(
+            len({item["case_id"] for item in reproductions}),
+            len(reproductions),
+        )
+        for reproduction in reproductions:
+            method_name = reproduction["regression_test_method"]
+            method = getattr(type(self), method_name)
+            self.assertIn(
+                reproduction["post_repair_failure_code"],
+                inspect.getsource(method),
+            )
+        self.assertEqual(
+            fixture["mutation_positions"], ["FIRST", "MIDDLE", "LAST"]
+        )
 
     def test_compiles_atom_into_task_bundle_and_artifact_obligation(self) -> None:
         self.compile()
@@ -1994,6 +2075,33 @@ class SemanticProductionContractTests(unittest.TestCase):
         ).unlink()
         self.assertIn("TASK_BUNDLE_CONTENT_MISMATCH", self.finding_codes())
 
+    def test_validator_rejects_stale_lab_cli_subcommand_count(self) -> None:
+        self.compile()
+        self.make_candidate_writable()
+        path = (
+            self.candidate
+            / "project_start_packages/external_lab/task_bundles/"
+            "LAB-CLI.task_bundle.json"
+        )
+        bundle = json.loads(path.read_text(encoding="utf-8"))
+        obligations = bundle["lab_case_execution_contract"][
+            "implementation_obligations"
+        ]
+        self.assertEqual(
+            obligations[0],
+            "Expose all seven required subcommands with their declared parameter contracts.",
+        )
+        obligations[0] = (
+            "Expose three required subcommands with their declared parameter contracts."
+        )
+        path.write_text(
+            json.dumps(bundle, ensure_ascii=False, indent=2, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
+
+        self.assertIn("TASK_BUNDLE_CONTENT_MISMATCH", self.finding_codes())
+
     def test_semantic_mode_rejects_label_only_atom(self) -> None:
         del self.ir["atoms"][0]["production_contract"]
         with self.assertRaisesRegex(ValueError, "PRODUCTION_CONTRACT_MISSING"):
@@ -2187,15 +2295,14 @@ class SemanticProductionContractTests(unittest.TestCase):
                 "RESUMABLE_STAGE_RECEIPT",
             )
         )
-        compiled = compile_declared_production_contracts(self.ir)
-        artifacts = [
-            artifact
-            for atom in compiled["atoms"]
-            for obligation in atom["production_contract"][
-                "workpack_obligations"
-            ]
-            for artifact in obligation["artifact_obligations"]
-        ]
+        self.compile()
+        artifact_manifest = json.loads(
+            (
+                self.candidate
+                / "canonical_sources/ARTIFACT_OBLIGATION_MANIFEST.json"
+            ).read_text(encoding="utf-8")
+        )
+        artifacts = list(artifact_manifest["artifact_index"].values())
         required_fields = {
             "algorithm_id",
             "algorithm_version",
@@ -2208,6 +2315,12 @@ class SemanticProductionContractTests(unittest.TestCase):
             "branch_precondition",
             "decision_rule",
             "failure_code",
+            "quantifier",
+            "subject_selector",
+            "operand_refs",
+            "evaluator_entrypoint",
+            "predicate_ast",
+            "predicate_sha256",
         }
         contracts_by_kind: dict[str, dict[str, dict]] = {}
         for artifact in artifacts:
@@ -2219,6 +2332,27 @@ class SemanticProductionContractTests(unittest.TestCase):
                 self.assertTrue(required_fields.issubset(contract))
                 self.assertTrue(contract["input_refs"])
                 self.assertEqual(contract["target_ref"], contract["input_refs"][0])
+                self.assertIn(contract["quantifier"], {"SINGLE", "FOR_ALL"})
+                self.assertTrue(contract["subject_selector"])
+                self.assertTrue(contract["operand_refs"])
+                self.assertFalse(
+                    {
+                        "artifact://self",
+                        "manifest://declared-artifact-dependencies",
+                        "evidence://declared-reference-bytes",
+                    }.intersection(contract["operand_refs"])
+                )
+                self.assertEqual(
+                    contract["evaluator_entrypoint"],
+                    "external_lab.invariants:evaluate_predicate_ast_v1",
+                )
+                self.assertEqual(
+                    contract["predicate_ast"]["subject_selector"],
+                    contract["subject_selector"],
+                )
+                if invariant_id.startswith(("EVERY_", "ALL_", "EACH_")):
+                    self.assertEqual(contract["quantifier"], "FOR_ALL")
+                    self.assertIn("*", contract["subject_selector"])
                 contracts_by_kind.setdefault(
                     artifact["artifact_kind"], {}
                 )[invariant_id] = contract
@@ -2261,6 +2395,213 @@ class SemanticProductionContractTests(unittest.TestCase):
                 case["invariant_contract"], contract
             )
 
+    def test_every_invariant_contract_is_semantically_satisfiable(self) -> None:
+        self.configure_derived_media_atoms(
+            (
+                "SOURCE_FREEZE_RECEIPT",
+                "FUNCTION_SCENARIO_EFFECT_MATRIX",
+                "ASSET_PLAN",
+                "NARRATION_SCRIPT",
+                "LOCAL_TTS_RECEIPT",
+                "AUDIO_ALIGNMENT_RECEIPT",
+                "OBJECT_MOTION_IR",
+                "ASSET_BINDING_RECEIPT",
+                "BEFORE_AFTER_DEMO_CONTRACT",
+                "TARGET_SKILL_EXECUTION_GATE_RECEIPT",
+                "LOCAL_RENDER_RECEIPT",
+                "MEDIA_ACCEPTANCE_RECEIPT",
+                "RESUMABLE_STAGE_RECEIPT",
+            )
+        )
+        compiled = compile_declared_production_contracts(self.ir)
+        artifacts = [
+            artifact
+            for atom in compiled["atoms"]
+            for obligation in atom["production_contract"][
+                "workpack_obligations"
+            ]
+            for artifact in obligation["artifact_obligations"]
+        ]
+
+        for artifact in artifacts:
+            schema = artifact["schema"]
+            contracts = schema.get("x-invariant-contracts", {})
+            for invariant_id, contract in contracts.items():
+                with self.subTest(
+                    artifact_kind=artifact["artifact_kind"],
+                    invariant_id=invariant_id,
+                ):
+                    for operand_ref in contract["operand_refs"]:
+                        self.assertTrue(
+                            schema_declares_pointer(schema, operand_ref),
+                            operand_ref,
+                        )
+                    if contract["algorithm"] == (
+                        "CANONICAL_VALUE_OR_SET_EQUALITY_V1"
+                    ):
+                        self.assertGreaterEqual(
+                            len(contract["operand_refs"]), 2
+                        )
+                    if contract["algorithm"] == "HASH_AND_BYTE_LINEAGE_V1":
+                        self.assertGreaterEqual(
+                            len(contract["operand_refs"]), 2
+                        )
+                    if "CARDINALITY" in invariant_id:
+                        self.assertEqual(
+                            contract["algorithm"],
+                            "EXACT_ARRAY_CARDINALITY_COMPARISON_V1",
+                        )
+                        self.assertEqual(len(contract["operand_refs"]), 2)
+                    if contract["algorithm"] == (
+                        "ORDERED_NUMERIC_PREDICATE_V1"
+                    ):
+                        self.assertIn("relation", contract["parameters"])
+                        self.assertIn("unit", contract["parameters"])
+
+    def test_validator_rejects_unresolved_invariant_operand(self) -> None:
+        self.configure_derived_media_atoms(("ASSET_PLAN",))
+        self.compile()
+        self.make_candidate_writable()
+        manifest_path = (
+            self.candidate
+            / "canonical_sources/ARTIFACT_OBLIGATION_MANIFEST.json"
+        )
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        artifact = next(
+            item
+            for item in manifest["artifact_index"].values()
+            if item["artifact_kind"] == "ASSET_PLAN"
+        )
+        contract = artifact["schema"]["x-invariant-contracts"][
+            "ASSET_PROVENANCE_REFS_AND_HASHES_HAVE_EQUAL_CARDINALITY"
+        ]
+        contract["operand_refs"][1] = "/missing_schema_field"
+        contract["predicate_ast"]["operand_refs"] = list(
+            contract["operand_refs"]
+        )
+        contract["predicate_sha256"] = hashlib.sha256(
+            json.dumps(
+                contract["predicate_ast"],
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
+
+        self.assertIn(
+            "INVARIANT_OPERAND_REF_UNRESOLVED", self.finding_codes()
+        )
+
+    def test_validator_rejects_invariant_operator_semantic_drift(self) -> None:
+        self.configure_derived_media_atoms(
+            (
+                "SOURCE_FREEZE_RECEIPT",
+                "FUNCTION_SCENARIO_EFFECT_MATRIX",
+                "ASSET_PLAN",
+                "NARRATION_SCRIPT",
+                "LOCAL_TTS_RECEIPT",
+                "AUDIO_ALIGNMENT_RECEIPT",
+                "OBJECT_MOTION_IR",
+                "ASSET_BINDING_RECEIPT",
+                "BEFORE_AFTER_DEMO_CONTRACT",
+                "TARGET_SKILL_EXECUTION_GATE_RECEIPT",
+                "LOCAL_RENDER_RECEIPT",
+                "MEDIA_ACCEPTANCE_RECEIPT",
+                "RESUMABLE_STAGE_RECEIPT",
+            )
+        )
+        self.compile()
+        self.make_candidate_writable()
+        manifest_path = (
+            self.candidate
+            / "canonical_sources/ARTIFACT_OBLIGATION_MANIFEST.json"
+        )
+        original = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+        mutations = (
+            (
+                "ASSET_BINDING_RECEIPT",
+                "MOTION_OBJECT_IDS_EQUAL_ASSET_OBJECT_IDS",
+                "INVARIANT_OPERATOR_ARITY_INVALID",
+                lambda contract: contract.update(
+                    {"operand_refs": [contract["target_ref"]]}
+                ),
+            ),
+            (
+                "MEDIA_ACCEPTANCE_RECEIPT",
+                "ABSOLUTE_FINAL_AV_DRIFT_DOES_NOT_EXCEED_ONE_FRAME",
+                "INVARIANT_NUMERIC_PARAMETERS_INCOMPLETE",
+                lambda contract: contract.update({"parameters": {}}),
+            ),
+        )
+        for artifact_kind, invariant_id, failure_code, mutate in mutations:
+            manifest = deepcopy(original)
+            artifact = next(
+                item
+                for item in manifest["artifact_index"].values()
+                if item["artifact_kind"] == artifact_kind
+            )
+            contract = artifact["schema"]["x-invariant-contracts"][
+                invariant_id
+            ]
+            mutate(contract)
+            contract["predicate_ast"]["operand_refs"] = list(
+                contract["operand_refs"]
+            )
+            contract["predicate_ast"]["parameters"] = deepcopy(
+                contract["parameters"]
+            )
+            contract["predicate_sha256"] = hashlib.sha256(
+                json.dumps(
+                    contract["predicate_ast"],
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            manifest_path.write_text(
+                json.dumps(
+                    manifest, ensure_ascii=False, indent=2, sort_keys=True
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            with self.subTest(invariant_id=invariant_id):
+                self.assertIn(failure_code, self.finding_codes())
+
+        manifest = deepcopy(original)
+        artifact = next(
+            item
+            for item in manifest["artifact_index"].values()
+            if item["artifact_kind"] == "ASSET_PLAN"
+        )
+        contract = artifact["schema"]["x-invariant-contracts"][
+            "ASSET_PROVENANCE_REFS_AND_HASHES_HAVE_EQUAL_CARDINALITY"
+        ]
+        contract["algorithm"] = "HASH_AND_BYTE_LINEAGE_V1"
+        contract["predicate_ast"]["operator"] = contract["algorithm"]
+        contract["predicate_sha256"] = hashlib.sha256(
+            json.dumps(
+                contract["predicate_ast"],
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
+        self.assertIn(
+            "INVARIANT_ALGORITHM_FAMILY_MISMATCH", self.finding_codes()
+        )
+
     def test_public_skill_url_interface_has_unlisted_metamorphic_vector(
         self,
     ) -> None:
@@ -2289,11 +2630,178 @@ class SemanticProductionContractTests(unittest.TestCase):
         self.assertEqual(vector["expected"]["output_video_count"], 1)
         self.assertEqual(
             vector["expected"]["job_id_derivation"],
-            "SHA256_CANONICAL_JOB_REQUEST_PREFIX_16",
+            "SHA256_CANONICAL_RESOLVED_JOB_IDENTITY_PREFIX_16",
+        )
+        self.assertEqual(
+            vector["input"]["skill_url"],
+            PUBLIC_SKILL_METAMORPHIC_REPOSITORY_URL,
+        )
+        self.assertNotIn("resolved_source", vector)
+        resolution = vector["resolution_contract"]
+        self.assertEqual(
+            resolution["status"], "RUNTIME_RESOLUTION_REQUIRED_NOT_RUN"
+        )
+        self.assertEqual(
+            resolution["resolution_receipt_ref"],
+            PUBLIC_SKILL_METAMORPHIC_RESOLUTION_RECEIPT_REF,
+        )
+        self.assertTrue(resolution["simulated_resolution_values_forbidden"])
+        resolution_schema = resolution["resolution_receipt_schema"]
+        self.assertEqual(
+            resolution_schema["properties"]["resolved_commit_sha"]["pattern"],
+            "^[0-9a-f]{40}$",
+        )
+        self.assertEqual(
+            resolution_schema["x-ref-sha256-bindings"],
+            [
+                {
+                    "ref_pointer": "/resolved_tree_ref",
+                    "sha256_pointer": "/resolved_tree_sha256",
+                },
+                {
+                    "ref_pointer": "/resolution_command_receipt_ref",
+                    "sha256_pointer": "/resolution_command_receipt_sha256",
+                },
+            ],
+        )
+        self.assertEqual(
+            vector["expected"]["expected_job_id_source"],
+            "HASH_VERIFIED_RUNTIME_RESOLUTION_RECEIPT_FIELDS",
+        )
+        specialization = contract["dynamic_specialization_contract"]
+        self.assertEqual(
+            specialization["job_identity_derivation_stage"],
+            "AFTER_EXACT_SOURCE_RESOLUTION",
+        )
+        self.assertNotIn(
+            "requested_revision", specialization["job_identity_fields"]
+        )
+        case_manifest = json.loads(
+            (
+                self.candidate / "validation/CASE_EXECUTION_MANIFEST.json"
+            ).read_text(encoding="utf-8")
+        )
+        invocation = next(
+            item
+            for item in case_manifest["metamorphic_case_invocations"]
+            if item["case_id"] == vector["case_id"]
+        )
+        self.assertEqual(invocation["case_kind"], "METAMORPHIC")
+        self.assertIn(
+            invocation["result_ref"],
+            case_manifest["expected_case_result_refs"],
+        )
+        self.assertEqual(
+            invocation["executor_command_id"], "LAB-RUN-METAMORPHIC-CASE"
+        )
+        self.assertEqual(
+            invocation["source_resolution_entrypoint"],
+            PUBLIC_SKILL_SOURCE_RESOLUTION_ENTRYPOINT,
+        )
+        command = next(
+            item
+            for item in case_manifest["commands"]
+            if item["command_id"] == "LAB-RUN-METAMORPHIC-CASE"
+        )
+        self.assertEqual(
+            command["implementation_entrypoint"],
+            PUBLIC_SKILL_SOURCE_RESOLUTION_ENTRYPOINT,
+        )
+        self.assertEqual(
+            command["parameter_contract"]["source_resolution_entrypoint"],
+            PUBLIC_SKILL_SOURCE_RESOLUTION_ENTRYPOINT,
+        )
+        lab_bundle = json.loads(
+            (
+                self.candidate
+                / "project_start_packages/external_lab/task_bundles/"
+                "LAB-CLI.task_bundle.json"
+            ).read_text(encoding="utf-8")
+        )
+        lab_contract = lab_bundle["lab_case_execution_contract"]
+        self.assertEqual(
+            lab_contract["required_source_resolution_entrypoint"],
+            PUBLIC_SKILL_SOURCE_RESOLUTION_ENTRYPOINT,
+        )
+        self.assertIn(
+            "Implement and invoke "
+            f"{PUBLIC_SKILL_SOURCE_RESOLUTION_ENTRYPOINT} from "
+            "run-metamorphic-case before content analysis.",
+            lab_contract["implementation_obligations"],
         )
         self.assertEqual(
             contract["status"], "DECLARE_ONLY_NOT_RUN"
         )
+
+    def test_validator_rejects_public_resolver_reachability_drift(self) -> None:
+        self.compile()
+        self.make_candidate_writable()
+        path = self.candidate / "validation/CASE_EXECUTION_MANIFEST.json"
+        original = json.loads(path.read_text(encoding="utf-8"))
+
+        for replacement, failure_code in (
+            (None, "PUBLIC_SKILL_SOURCE_RESOLVER_UNREACHABLE"),
+            (
+                "external_lab.sources:wrong_resolver",
+                "PUBLIC_SKILL_SOURCE_RESOLVER_BINDING_MISMATCH",
+            ),
+        ):
+            manifest = deepcopy(original)
+            command = next(
+                item
+                for item in manifest["commands"]
+                if item["command_id"] == "LAB-RUN-METAMORPHIC-CASE"
+            )
+            if replacement is None:
+                command.pop("implementation_entrypoint")
+            else:
+                command["implementation_entrypoint"] = replacement
+            command["command_sha256"] = hashlib.sha256(
+                json.dumps(
+                    {
+                        key: value
+                        for key, value in command.items()
+                        if key != "command_sha256"
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            manifest["manifest_sha256"] = hashlib.sha256(
+                json.dumps(
+                    {
+                        key: value
+                        for key, value in manifest.items()
+                        if key != "manifest_sha256"
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            path.write_text(
+                json.dumps(
+                    manifest, ensure_ascii=False, indent=2, sort_keys=True
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            with self.subTest(replacement=replacement):
+                self.assertIn(failure_code, self.finding_codes())
+
+    def test_explicit_semantics_requires_lab_cli_resolver_bundle(self) -> None:
+        self.compile()
+        self.make_candidate_writable()
+        (
+            self.candidate
+            / "project_start_packages/external_lab/task_bundles/"
+            "LAB-CLI.task_bundle.json"
+        ).unlink()
+
+        codes = self.finding_codes()
+        self.assertIn("JSON_READ_FAILED", codes)
+        self.assertIn("PUBLIC_SKILL_SOURCE_RESOLVER_UNREACHABLE", codes)
 
     def test_validator_rejects_incomplete_invariant_contract_set(self) -> None:
         self.configure_derived_media_atoms(("NARRATION_SCRIPT",))
@@ -2323,6 +2831,194 @@ class SemanticProductionContractTests(unittest.TestCase):
             self.finding_codes(),
         )
 
+    def test_validator_rejects_quantifier_selector_drift(self) -> None:
+        self.configure_derived_media_atoms(
+            (
+                "SOURCE_FREEZE_RECEIPT",
+                "FUNCTION_SCENARIO_EFFECT_MATRIX",
+                "NARRATION_SCRIPT",
+            )
+        )
+        self.compile()
+        self.make_candidate_writable()
+        manifest_path = (
+            self.candidate
+            / "canonical_sources/ARTIFACT_OBLIGATION_MANIFEST.json"
+        )
+        original = json.loads(manifest_path.read_text(encoding="utf-8"))
+        quantified = sorted(
+            (
+                artifact_id,
+                invariant_id,
+            )
+            for artifact_id, artifact in original["artifact_index"].items()
+            for invariant_id in artifact["schema"].get(
+                "x-invariant-contracts", {}
+            )
+            if invariant_id.startswith(("EVERY_", "ALL_", "EACH_"))
+        )
+        self.assertGreaterEqual(len(quantified), 3)
+        for position in (0, len(quantified) // 2, len(quantified) - 1):
+            manifest = deepcopy(original)
+            artifact_id, invariant_id = quantified[position]
+            contract = manifest["artifact_index"][artifact_id]["schema"][
+                "x-invariant-contracts"
+            ][invariant_id]
+            contract["subject_selector"] = contract["target_ref"]
+            manifest_path.write_text(
+                json.dumps(
+                    manifest, ensure_ascii=False, indent=2, sort_keys=True
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            self.assertIn(
+                "INVARIANT_QUANTIFIER_CONTRACT_INCOMPLETE",
+                self.finding_codes(),
+            )
+
+    def test_validator_rejects_authorized_branch_precondition_drift(self) -> None:
+        self.configure_derived_media_atoms(
+            (
+                "SOURCE_FREEZE_RECEIPT",
+                "FUNCTION_SCENARIO_EFFECT_MATRIX",
+                "BEFORE_AFTER_DEMO_CONTRACT",
+                "TARGET_SKILL_EXECUTION_GATE_RECEIPT",
+            )
+        )
+        self.compile()
+        self.make_candidate_writable()
+        manifest_path = (
+            self.candidate
+            / "canonical_sources/ARTIFACT_OBLIGATION_MANIFEST.json"
+        )
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        gate = next(
+            artifact
+            for artifact in manifest["artifact_index"].values()
+            if artifact["artifact_kind"] == "BEFORE_AFTER_DEMO_CONTRACT"
+        )
+        contract = gate["schema"]["x-invariant-contracts"][
+            "AUTHORIZED_TARGET_SKILL_RUN_REQUIRES_CURRENT_EXACT_AUTHORIZATION_AND_RECEIPT"
+        ]
+        contract["branch_precondition"] = "ANY_JSON_SCHEMA_VALID_BRANCH"
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
+
+        self.assertIn(
+            "INVARIANT_BRANCH_PRECONDITION_INCOMPATIBLE",
+            self.finding_codes(),
+        )
+
+    def test_validator_rejects_denied_branch_selector_rebinding(self) -> None:
+        self.configure_derived_media_atoms(
+            ("TARGET_SKILL_EXECUTION_GATE_RECEIPT",)
+        )
+        self.compile()
+        self.make_candidate_writable()
+        manifest_path = (
+            self.candidate
+            / "canonical_sources/ARTIFACT_OBLIGATION_MANIFEST.json"
+        )
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        gate = next(
+            artifact
+            for artifact in manifest["artifact_index"].values()
+            if artifact["artifact_kind"]
+            == "TARGET_SKILL_EXECUTION_GATE_RECEIPT"
+        )
+        contract = gate["schema"]["x-invariant-contracts"][
+            "DENIED_TARGET_SKILL_GATE_HAS_NO_AUTHORIZATION_OR_SIDE_EFFECT_ATTEMPT"
+        ]
+        wrong_selector = {
+            "mode": "REQUIRE_DISCRIMINATOR_CONST",
+            "discriminator_ref": "/status",
+            "const": "AUTHORIZED_EXECUTION_RECEIPT_VALID",
+        }
+        contract["branch_precondition"] = wrong_selector["const"]
+        contract["branch_selector"] = wrong_selector
+        contract["predicate_ast"]["branch_precondition"] = wrong_selector[
+            "const"
+        ]
+        contract["predicate_ast"]["branch_selector"] = wrong_selector
+        contract["predicate_sha256"] = hashlib.sha256(
+            json.dumps(
+                contract["predicate_ast"],
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
+
+        self.assertIn(
+            "INVARIANT_BRANCH_PRECONDITION_INCOMPATIBLE",
+            self.finding_codes(),
+        )
+
+    def test_validator_rejects_illustration_branch_selector_rebinding(
+        self,
+    ) -> None:
+        self.configure_derived_media_atoms(
+            (
+                "SOURCE_FREEZE_RECEIPT",
+                "FUNCTION_SCENARIO_EFFECT_MATRIX",
+                "TARGET_SKILL_EXECUTION_GATE_RECEIPT",
+                "BEFORE_AFTER_DEMO_CONTRACT",
+            )
+        )
+        self.compile()
+        self.make_candidate_writable()
+        manifest_path = (
+            self.candidate
+            / "canonical_sources/ARTIFACT_OBLIGATION_MANIFEST.json"
+        )
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        demo = next(
+            artifact
+            for artifact in manifest["artifact_index"].values()
+            if artifact["artifact_kind"] == "BEFORE_AFTER_DEMO_CONTRACT"
+        )
+        contract = demo["schema"]["x-invariant-contracts"][
+            "ILLUSTRATION_IS_EXPLICITLY_LABELED_AND_NOT_ACTUAL_SKILL_OUTPUT"
+        ]
+        wrong_selector = {
+            "mode": "REQUIRE_DISCRIMINATOR_CONST",
+            "discriminator_ref": "/provenance_state",
+            "const": "OBSERVED_REPO_FIXTURE",
+        }
+        contract["branch_precondition"] = wrong_selector["const"]
+        contract["branch_selector"] = wrong_selector
+        contract["predicate_ast"]["branch_precondition"] = wrong_selector[
+            "const"
+        ]
+        contract["predicate_ast"]["branch_selector"] = wrong_selector
+        contract["predicate_sha256"] = hashlib.sha256(
+            json.dumps(
+                contract["predicate_ast"],
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
+
+        self.assertIn(
+            "INVARIANT_BRANCH_PRECONDITION_INCOMPATIBLE",
+            self.finding_codes(),
+        )
+
     def test_validator_rejects_public_skill_url_fixture_lock_in(self) -> None:
         self.compile()
         self.make_candidate_writable()
@@ -2339,6 +3035,225 @@ class SemanticProductionContractTests(unittest.TestCase):
 
         self.assertIn(
             "PUBLIC_SKILL_JOB_INTERFACE_INVALID",
+            self.finding_codes(),
+        )
+
+    def test_validator_rejects_simulated_public_source_resolution(self) -> None:
+        self.compile()
+        self.make_candidate_writable()
+        path = self.candidate / "validation/PUBLIC_SKILL_JOB_INTERFACE.json"
+        contract = json.loads(path.read_text(encoding="utf-8"))
+        contract["metamorphic_acceptance_vector"]["resolved_source"] = {
+            "normalized_skill_url": PUBLIC_SKILL_METAMORPHIC_REPOSITORY_URL,
+            "resolved_commit_sha": "1" * 40,
+            "resolved_git_tree_oid": "2" * 40,
+            "resolved_tree_sha256": "3" * 64,
+            "resolution_method": "SIMULATED_METAMORPHIC_FIXTURE",
+        }
+        contract["interface_sha256"] = hashlib.sha256(
+            json.dumps(
+                {
+                    key: value
+                    for key, value in contract.items()
+                    if key != "interface_sha256"
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        path.write_text(
+            json.dumps(contract, ensure_ascii=False, indent=2, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
+
+        self.assertIn(
+            "PUBLIC_SKILL_JOB_INTERFACE_INVALID",
+            self.finding_codes(),
+        )
+
+    def test_validator_rejects_mutable_public_job_identity(self) -> None:
+        self.compile()
+        self.make_candidate_writable()
+        path = self.candidate / "validation/PUBLIC_SKILL_JOB_INTERFACE.json"
+        contract = json.loads(path.read_text(encoding="utf-8"))
+        specialization = contract["dynamic_specialization_contract"]
+        specialization["job_id_derivation"] = (
+            "SHA256_CANONICAL_JOB_REQUEST_PREFIX_16"
+        )
+        specialization["job_identity_derivation_stage"] = "BEFORE_SOURCE_RESOLUTION"
+        specialization["job_identity_fields"] = [
+            "skill_url",
+            "requested_revision",
+        ]
+        contract["metamorphic_acceptance_vector"]["expected"][
+            "job_id_derivation"
+        ] = specialization["job_id_derivation"]
+        contract["interface_sha256"] = hashlib.sha256(
+            json.dumps(
+                {
+                    key: value
+                    for key, value in contract.items()
+                    if key != "interface_sha256"
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        path.write_text(
+            json.dumps(contract, ensure_ascii=False, indent=2, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
+
+        self.assertIn(
+            "PUBLIC_SKILL_JOB_IDENTITY_NOT_IMMUTABLY_RESOLVED",
+            self.finding_codes(),
+        )
+
+    def test_validator_rejects_public_case_closure_drift(self) -> None:
+        self.compile()
+        self.make_candidate_writable()
+        path = self.candidate / "validation/CASE_EXECUTION_MANIFEST.json"
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        manifest["metamorphic_case_invocations"] = []
+        manifest["manifest_sha256"] = hashlib.sha256(
+            json.dumps(
+                {
+                    key: value
+                    for key, value in manifest.items()
+                    if key != "manifest_sha256"
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
+
+        self.assertIn(
+            "PUBLIC_SKILL_JOB_CASE_CLOSURE_INCOMPLETE",
+            self.finding_codes(),
+        )
+
+    def test_validator_rejects_case_partition_aggregation_drift(self) -> None:
+        self.compile()
+        self.make_candidate_writable()
+        path = self.candidate / "validation/ACCEPTANCE_CASES.json"
+        document = json.loads(path.read_text(encoding="utf-8"))
+        document["cases"][0].pop("aggregation_executor_command_id")
+        path.write_text(
+            json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
+
+        self.assertIn(
+            "CASE_PARTITION_AGGREGATION_CONTRACT_INCOMPLETE",
+            self.finding_codes(),
+        )
+
+    def test_validator_rejects_case_result_ref_sha256_binding_drift(
+        self,
+    ) -> None:
+        self.compile()
+        self.make_candidate_writable()
+        path = self.candidate / "validation/schemas/CASE_RESULT.schema.json"
+        schema = json.loads(path.read_text(encoding="utf-8"))
+        schema["x-ref-sha256-bindings"][0]["sha256_pointer"] = (
+            "/fixture_sha256"
+        )
+        path.write_text(
+            json.dumps(schema, ensure_ascii=False, indent=2, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
+
+        self.assertIn("CASE_EXECUTION_MANIFEST_INVALID", self.finding_codes())
+
+    def test_validator_rejects_aggregation_receipt_byte_lineage_drift(
+        self,
+    ) -> None:
+        self.compile()
+        self.make_candidate_writable()
+        acceptance_path = self.candidate / "validation/ACCEPTANCE_CASES.json"
+        acceptance = json.loads(acceptance_path.read_text(encoding="utf-8"))
+        case = acceptance["cases"][0]
+        schema_path = self.candidate / case[
+            "aggregation_receipt_schema_ref"
+        ].removeprefix("harness-resource://candidate/")
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        schema["x-ref-sha256-bindings"].pop()
+        schema_path.write_text(
+            json.dumps(schema, ensure_ascii=False, indent=2, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
+
+        self.assertIn(
+            "CASE_PARTITION_AGGREGATION_CONTRACT_INCOMPLETE",
+            self.finding_codes(),
+        )
+
+    def test_validation_report_has_check_specific_evidence(self) -> None:
+        self.compile()
+        report = json.loads(
+            (
+                self.candidate
+                / "validation/START_PACKAGE_VALIDATION_REPORT.json"
+            ).read_text(encoding="utf-8")
+        )
+        checks = {
+            item["check_id"]: item for item in report["checks"]
+        }
+        executable = set(
+            checks["EXECUTABLE_ACCEPTANCE_AND_ORACLE_CONTRACTS"][
+                "evidence_refs"
+            ]
+        )
+        identity = set(
+            checks["IDENTITY_REFERENCES_AND_HASHES"]["evidence_refs"]
+        )
+
+        self.assertTrue(
+            {
+                "validation/PUBLIC_SKILL_JOB_INTERFACE.json",
+                "validation/CASE_EXECUTION_MANIFEST.json",
+                "validation/ORACLE_EVALUATOR_REGISTRY.json",
+                "validation/schemas/CASE_RESULT.schema.json",
+            }.issubset(executable)
+        )
+        self.assertNotEqual(executable, identity)
+
+    def test_validator_rejects_generic_validation_report_evidence(self) -> None:
+        self.compile()
+        self.make_candidate_writable()
+        path = (
+            self.candidate
+            / "validation/START_PACKAGE_VALIDATION_REPORT.json"
+        )
+        report = json.loads(path.read_text(encoding="utf-8"))
+        generic = [
+            "PACKAGE_MANIFEST.json",
+            "START_CONTEXT.json",
+            "ENGINEERING_PROJECT_DAG.json",
+        ]
+        for check in report["checks"]:
+            check["evidence_refs"] = list(generic)
+        path.write_text(
+            json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
+
+        self.assertIn(
+            "VALIDATION_REPORT_CHECK_EVIDENCE_INCOMPLETE",
             self.finding_codes(),
         )
 
@@ -2444,8 +3359,54 @@ class SemanticProductionContractTests(unittest.TestCase):
                 "LAB-RUN-ACCEPTANCE-CASE",
                 "LAB-RUN-NEGATIVE-CASE",
                 "LAB-RUN-REGISTRY-CASE",
+                "LAB-RUN-CASE-PARTITION",
+                "LAB-AGGREGATE-CASE-PARTITIONS",
+                "LAB-RUN-METAMORPHIC-CASE",
                 "LAB-EVALUATE-CASE-ORACLE",
             },
+        )
+
+        acceptance = json.loads(
+            (
+                self.candidate / "validation/ACCEPTANCE_CASES.json"
+            ).read_text(encoding="utf-8")
+        )
+        acceptance_case = acceptance["cases"][0]
+        self.assertTrue(acceptance_case["job_read_partitions"])
+        self.assertEqual(
+            len(acceptance_case["partition_executor_argvs"]),
+            len(acceptance_case["job_read_partitions"]),
+        )
+        self.assertEqual(
+            acceptance_case["aggregation_executor_command_id"],
+            "LAB-AGGREGATE-CASE-PARTITIONS",
+        )
+        result_schema = json.loads(
+            (
+                self.candidate
+                / acceptance_case["result_schema_ref"].removeprefix(
+                    "harness-resource://candidate/"
+                )
+            ).read_text(encoding="utf-8")
+        )
+        self.assertTrue(
+            {
+                "job_partition_results",
+                "job_partition_manifest_sha256",
+                "aggregation_receipt_ref",
+                "aggregation_receipt_sha256",
+            }.issubset(result_schema["required"])
+        )
+        partition_results = result_schema["properties"][
+            "job_partition_results"
+        ]
+        self.assertEqual(
+            partition_results["minItems"],
+            len(acceptance_case["job_read_partitions"]),
+        )
+        self.assertEqual(
+            partition_results["maxItems"],
+            len(acceptance_case["job_read_partitions"]),
         )
 
         certification = json.loads(
@@ -2463,11 +3424,27 @@ class SemanticProductionContractTests(unittest.TestCase):
             for item in certification["commands"]
             if item["command_id"] == "LAB-RUN-ACCEPTANCE-CASE"
         )
-        self.assertTrue(runner["job_artifact_read_scopes"])
+        self.assertFalse(runner["job_artifact_read_scopes"])
+        self.assertIsNone(runner["job_artifact_lease_contract"])
+
+        partition_runner = next(
+            item
+            for item in certification["commands"]
+            if item["command_id"] == "LAB-RUN-CASE-PARTITION"
+        )
+        self.assertTrue(partition_runner["job_artifact_read_scopes"])
         self.assertEqual(
-            runner["job_artifact_lease_contract"]["selection_cardinality"],
+            partition_runner["job_artifact_lease_contract"][
+                "selection_cardinality"
+            ],
             "EXACTLY_ONE_ACTIVE_JOB_LEASE_PER_CASE_PARTITION",
         )
+        aggregator = next(
+            item
+            for item in certification["commands"]
+            if item["command_id"] == "LAB-AGGREGATE-CASE-PARTITIONS"
+        )
+        self.assertFalse(aggregator["job_artifact_read_scopes"])
 
         manifest_path = (
             self.candidate
@@ -2510,7 +3487,7 @@ class SemanticProductionContractTests(unittest.TestCase):
                 expected_shared_roots.add(artifact_root)
         actual_job_roots = {
             scope["job_id"]: set(scope["allowed_read_roots"])
-            for scope in runner["job_artifact_read_scopes"]
+            for scope in partition_runner["job_artifact_read_scopes"]
         }
         self.assertEqual(actual_job_roots, expected_job_roots)
         self.assertTrue(

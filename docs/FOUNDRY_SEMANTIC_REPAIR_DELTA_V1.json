@@ -1,0 +1,176 @@
+{
+  "delta_id": "FOUNDRY-SEMANTIC-REPAIR-DELTA-V1",
+  "schema_version": "1.0",
+  "status": "SOURCE_REPAIR_VALIDATED_AWAITING_EXPLICIT_REOPEN",
+  "allowed_files": [
+    "src/harness_foundry_factory/semantic_contracts.py",
+    "src/harness_foundry_factory/constants.py",
+    "src/harness_foundry_factory/compiler.py",
+    "src/harness_foundry_factory/validator.py",
+    "tests/test_semantic_production_contracts.py",
+    "tests/fixtures/foundry_semantic_repair_shadow_baseline_v1.json",
+    "docs/FOUNDRY_SEMANTIC_REPAIR_PREFLIGHT_RECEIPT_V1.yaml",
+    "docs/FOUNDRY_SEMANTIC_REPAIR_DELTA_V1.json"
+  ],
+  "intentional_changes": [
+    "BIND_PUBLIC_INTERFACE_TO_EXECUTABLE_ACCEPTANCE_CASE_CLOSURE",
+    "DERIVE_FINAL_JOB_ID_AFTER_IMMUTABLE_SOURCE_RESOLUTION",
+    "REQUIRE_HASH_VERIFIED_RUNTIME_RESOLUTION_FOR_PUBLIC_SOURCE_FACTS",
+    "FORBID_SIMULATED_PUBLIC_COMMIT_TREE_AND_CONTENT_HASHES",
+    "ADD_SCHEMA_NATIVE_JOB_PARTITION_FRAGMENT_AND_AGGREGATION_EVIDENCE",
+    "BIND_CASE_AND_AGGREGATION_SHA256_FIELDS_TO_EXACT_REFERENCED_BYTES",
+    "VALIDATE_CONDITIONAL_INVARIANTS_AGAINST_EXACT_SCHEMA_DISCRIMINATOR_BRANCHES",
+    "ADD_FOR_ALL_SUBJECT_SELECTORS_AND_COUNTERPART_OPERANDS",
+    "BIND_EACH_INVARIANT_TO_A_HASHED_MACHINE_PREDICATE_AST",
+    "EMIT_PER_CHECK_VALIDATION_EVIDENCE_REFS",
+    "BIND_SHADOW_REPRODUCTIONS_TO_CONCRETE_TEST_METHODS_AND_FAILURE_CODES",
+    "CORRECT_LAB_CLI_GUIDANCE_TO_SEVEN_REQUIRED_SUBCOMMANDS",
+    "REPLACE_UNRESOLVED_SUFFIX_DERIVATION_WITH_SCHEMA_RESOLVED_TYPED_INVARIANT_OPERANDS",
+    "VALIDATE_INVARIANT_OPERATOR_ARITY_NUMERIC_PARAMETERS_AND_ALGORITHM_FAMILY_INDEPENDENTLY",
+    "BIND_PUBLIC_SOURCE_RESOLVER_TO_LAB_TASK_COMMAND_AND_METAMORPHIC_CASE"
+  ],
+  "repair_workpacks": [
+    {
+      "workpack_id": "HF-E20-WP1-TYPED-INVARIANT-PRODUCER",
+      "depends_on": [],
+      "write_scope": [
+        "src/harness_foundry_factory/semantic_contracts.py",
+        "tests/test_semantic_production_contracts.py"
+      ],
+      "objective": "Replace unresolved or self-comparing generated predicates with schema-resolved typed invariant contracts.",
+      "pass_criteria": [
+        "EVERY_SELF_JSON_POINTER_RESOLVES_IN_ITS_ARTIFACT_SCHEMA",
+        "EQUALITY_AND_CARDINALITY_OPERATORS_HAVE_COMPLETE_OPERANDS",
+        "NUMERIC_OPERATORS_DECLARE_RELATION_THRESHOLD_AND_UNIT_WHEN_APPLICABLE",
+        "CANONICAL_HASHES_NAME_THE_EXACT_CANONICAL_VALUE_INSTEAD_OF_A_SYNTHETIC_REF"
+      ],
+      "failure_codes": [
+        "INVARIANT_OPERAND_REF_UNRESOLVED",
+        "INVARIANT_OPERATOR_ARITY_INVALID",
+        "INVARIANT_NUMERIC_PARAMETERS_INCOMPLETE",
+        "INVARIANT_ALGORITHM_FAMILY_MISMATCH"
+      ]
+    },
+    {
+      "workpack_id": "HF-E20-WP2-INDEPENDENT-INVARIANT-VALIDATOR",
+      "depends_on": [
+        "HF-E20-WP1-TYPED-INVARIANT-PRODUCER"
+      ],
+      "write_scope": [
+        "src/harness_foundry_factory/validator.py",
+        "tests/test_semantic_production_contracts.py"
+      ],
+      "objective": "Independently reject schema-unresolvable operands, invalid operator arity, missing numeric semantics, and algorithm-family drift without calling Producer helpers.",
+      "pass_criteria": [
+        "FIRST_MIDDLE_LAST_MUTATIONS_FAIL_WITH_EXACT_CODES",
+        "VALIDATOR_EXPECTATIONS_ARE_NOT_DERIVED_FROM_PRODUCER_CONTRACT_BUILDERS",
+        "ALL_EMITTED_INVARIANTS_PASS_THE_INDEPENDENT_SEMANTIC_AUDIT"
+      ],
+      "failure_codes": [
+        "COMMON_MODE_VALIDATION_DEPENDENCY",
+        "INVARIANT_SEMANTIC_CONTRACT_FALSE_PASS"
+      ]
+    },
+    {
+      "workpack_id": "HF-E20-WP3-PUBLIC-RESOLVER-REACHABILITY",
+      "depends_on": [
+        "HF-E20-WP1-TYPED-INVARIANT-PRODUCER",
+        "HF-E20-WP2-INDEPENDENT-INVARIANT-VALIDATOR"
+      ],
+      "write_scope": [
+        "src/harness_foundry_factory/compiler.py",
+        "src/harness_foundry_factory/semantic_contracts.py",
+        "src/harness_foundry_factory/validator.py",
+        "tests/test_semantic_production_contracts.py"
+      ],
+      "objective": "Bind the declared public Skill source resolver to the Lab task bundle, metamorphic command contract, and Case invocation.",
+      "pass_criteria": [
+        "PUBLIC_RESOLVER_HAS_ONE_EXACT_DECLARATION_AND_EXECUTION_OWNER",
+        "LAB_RUN_METAMORPHIC_CASE_BINDS_THE_EXACT_RESOLVER_ENTRYPOINT",
+        "REMOVING_OR_REBINDING_THE_ENTRYPOINT_FAILS_CLOSED"
+      ],
+      "failure_codes": [
+        "PUBLIC_SKILL_SOURCE_RESOLVER_UNREACHABLE",
+        "PUBLIC_SKILL_SOURCE_RESOLVER_BINDING_MISMATCH"
+      ]
+    },
+    {
+      "workpack_id": "HF-E20-WP4-EXHAUSTIVE-REGRESSION-AND-GATES",
+      "depends_on": [
+        "HF-E20-WP1-TYPED-INVARIANT-PRODUCER",
+        "HF-E20-WP2-INDEPENDENT-INVARIANT-VALIDATOR",
+        "HF-E20-WP3-PUBLIC-RESOLVER-REACHABILITY"
+      ],
+      "write_scope": [
+        "tests/test_semantic_production_contracts.py",
+        "tests/fixtures/foundry_semantic_repair_shadow_baseline_v1.json",
+        "docs/FOUNDRY_SEMANTIC_REPAIR_PREFLIGHT_RECEIPT_V1.yaml",
+        "docs/FOUNDRY_SEMANTIC_REPAIR_DELTA_V1.json"
+      ],
+      "objective": "Run exhaustive semantic mutation regression and the official Foundry verification gates without generating a successor Candidate.",
+      "pass_criteria": [
+        "FOCUSED_SEMANTIC_REGRESSION_PASS",
+        "FULL_UNIT_SUITE_PASS",
+        "VERIFY_SPEC_PASS",
+        "VALIDATE_SKILL_PASS",
+        "GIT_DIFF_CHECK_PASS",
+        "NO_CANDIDATE_OR_FACTORY_STATE_MUTATION"
+      ],
+      "failure_codes": [
+        "REPAIR_REGRESSION_FAILED",
+        "OFFICIAL_FOUNDRY_GATE_FAILED",
+        "REPAIR_SCOPE_DRIFT"
+      ]
+    }
+  ],
+  "repair_result": {
+    "status": "PASS",
+    "completed_workpack_ids": [
+      "HF-E20-WP1-TYPED-INVARIANT-PRODUCER",
+      "HF-E20-WP2-INDEPENDENT-INVARIANT-VALIDATOR",
+      "HF-E20-WP3-PUBLIC-RESOLVER-REACHABILITY",
+      "HF-E20-WP4-EXHAUSTIVE-REGRESSION-AND-GATES"
+    ],
+    "root_causes_closed": [
+      "PRODUCER_EMITTED_SCHEMA_UNRESOLVABLE_OR_UNDERSPECIFIED_INVARIANT_PREDICATES",
+      "VALIDATOR_CHECKED_INVARIANT_SHAPE_WITHOUT_INDEPENDENT_OPERATOR_SEMANTICS",
+      "PUBLIC_SOURCE_RESOLVER_DECLARATION_WAS_NOT_REACHABLE_FROM_THE_OWNED_LAB_COMMAND",
+      "LAB_TASK_BUNDLE_REACHABILITY_CHECK_LACKED_PRODUCTION_SEMANTICS_APPLICABILITY_GATING"
+    ],
+    "verification": {
+      "focused_semantic_regression": {
+        "status": "PASS",
+        "tests_run": 62
+      },
+      "full_unit_suite": {
+        "status": "PASS",
+        "tests_run": 346
+      },
+      "verify_spec": {
+        "status": "PASS",
+        "content_sha256": "be81e6b46573abcbff0a9851812b3b2bb78814928e57a59d65a2b5bb733b8503"
+      },
+      "validate_skill": {
+        "status": "PASS"
+      },
+      "validate_core": {
+        "status": "PASS",
+        "validation_sha256": "641bc6c2b6333585588793e7f9b3d4f0e4ab18445c2821fd0443d0b71202394f"
+      }
+    },
+    "lifecycle_effects": {
+      "candidate_modified": false,
+      "factory_state_modified": false,
+      "execution_root_created": false,
+      "workpack_driver_or_harness_executed": false,
+      "reopen_performed": false
+    }
+  },
+  "forbidden_changes": [
+    "EDIT_PUBLISHED_CANDIDATE",
+    "EDIT_FACTORY_SQLITE",
+    "GRANT_EXECUTION_AUTHORITY",
+    "CREATE_EXECUTION_ROOT",
+    "EXECUTE_WORKPACK_DRIVER_OR_HARNESS"
+  ]
+}

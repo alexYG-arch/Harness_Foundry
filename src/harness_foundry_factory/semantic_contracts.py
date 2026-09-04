@@ -30,8 +30,19 @@ ORACLE_EVALUATOR_REGISTRY_REF = (
 PUBLIC_SKILL_JOB_INTERFACE_REF = (
     "harness-resource://candidate/validation/PUBLIC_SKILL_JOB_INTERFACE.json"
 )
+PUBLIC_SKILL_METAMORPHIC_CASE_ID = (
+    "AC-PUBLIC-SKILL-URL-NOT-IN-FROZEN-FIXTURES"
+)
+PUBLIC_SKILL_METAMORPHIC_REPOSITORY_URL = "https://github.com/openai/skills"
+PUBLIC_SKILL_SOURCE_RESOLUTION_ENTRYPOINT = (
+    "external_lab.sources:resolve_public_skill_source_v1"
+)
 CASE_EXECUTION_RESULT_ROOT_REF = (
     "harness-resource://execution/evidence/cases"
+)
+PUBLIC_SKILL_METAMORPHIC_RESOLUTION_RECEIPT_REF = (
+    f"{CASE_EXECUTION_RESULT_ROOT_REF}/metamorphic/"
+    "public-skill-url.source-resolution.receipt.json"
 )
 CASE_EVIDENCE_WRITER_WORKPACK_ID = "LAB-CERTIFICATION"
 TERMINAL_TIMING_EVIDENCE_TYPES = frozenset(
@@ -464,6 +475,10 @@ _INVARIANT_MUTATION_RECIPES: dict[str, dict[str, Any]] = {
             "/narration_budget_method",
         ],
     },
+    "AUTHORIZED_TARGET_SKILL_RUN_REQUIRES_CURRENT_EXACT_AUTHORIZATION_AND_RECEIPT": {
+        "strategy": "REMOVE_OR_REPLACE_CURRENT_EXACT_AUTHORIZATION_OR_RECEIPT",
+        "required_base_branch": "AUTHORIZED_TARGET_SKILL_RUN",
+    },
 }
 
 
@@ -530,19 +545,154 @@ INVARIANT_CONTRACT_REQUIRED_FIELDS = frozenset(
         "ordering",
         "numeric_tolerance",
         "branch_precondition",
+        "branch_selector",
         "decision_rule",
         "failure_code",
+        "quantifier",
+        "subject_selector",
+        "operand_refs",
+        "evaluator_entrypoint",
+        "predicate_ast",
+        "predicate_sha256",
     }
 )
 
 
+_INVARIANT_BRANCH_SELECTORS: dict[str, dict[str, str]] = {
+    "AUTHORIZED_TARGET_SKILL_RUN_REQUIRES_CURRENT_EXACT_AUTHORIZATION_AND_RECEIPT": {
+        "discriminator_ref": "/provenance_state",
+        "const": "AUTHORIZED_TARGET_SKILL_RUN",
+    },
+    "ILLUSTRATION_IS_EXPLICITLY_LABELED_AND_NOT_ACTUAL_SKILL_OUTPUT": {
+        "discriminator_ref": "/provenance_state",
+        "const": "CLEARLY_LABELED_ILLUSTRATION",
+    },
+    "DENIED_TARGET_SKILL_GATE_HAS_NO_AUTHORIZATION_OR_SIDE_EFFECT_ATTEMPT": {
+        "discriminator_ref": "/status",
+        "const": "DENIED_NO_SIDE_EFFECT",
+    },
+}
+
+
+def _invariant_branch_selector(invariant_id: str) -> dict[str, str]:
+    selector = _INVARIANT_BRANCH_SELECTORS.get(invariant_id)
+    if selector is None:
+        return {"mode": "ANY_JSON_SCHEMA_VALID_BRANCH"}
+    return {
+        "mode": "REQUIRE_DISCRIMINATOR_CONST",
+        **selector,
+    }
+
+
+def _invariant_quantifier(invariant_id: str) -> str:
+    return (
+        "FOR_ALL"
+        if invariant_id.startswith(("EVERY_", "ALL_", "EACH_"))
+        else "SINGLE"
+    )
+
+
+def _invariant_subject_selector(
+    invariant_id: str, target_ref: str
+) -> str:
+    """Separate a mutation seed from the complete evaluated subject set."""
+
+    if _invariant_quantifier(invariant_id) == "SINGLE":
+        return target_ref
+    segments = target_ref.split("/")
+    wildcarded = ["*" if segment.isdigit() else segment for segment in segments]
+    selector = "/".join(wildcarded)
+    return selector if "*" in wildcarded else f"{selector.rstrip('/')}/*"
+
+
+def _concrete_invariant_operand_refs(
+    target_ref: str,
+    input_refs: list[str],
+    schema: Mapping[str, Any],
+) -> list[str]:
+    """Return explicit operands and only schema-declared ref/hash peers."""
+
+    excluded = {
+        "artifact://self",
+        "manifest://declared-artifact-dependencies",
+        "evidence://declared-reference-bytes",
+    }
+    operands = [value for value in input_refs if value not in excluded]
+    counterpart = target_ref
+    if "_sha256s/" in counterpart:
+        counterpart = counterpart.replace("_sha256s/", "_refs/")
+    elif counterpart.endswith("_sha256s"):
+        counterpart = counterpart[: -len("_sha256s")] + "_refs"
+    elif counterpart.endswith("_sha256"):
+        counterpart = counterpart[: -len("_sha256")] + "_ref"
+    elif counterpart.endswith("/sha256"):
+        counterpart = counterpart[: -len("/sha256")] + "/ref"
+    if (
+        counterpart != target_ref
+        and counterpart not in operands
+        and operands == [target_ref]
+        and _schema_at_json_pointer(schema, counterpart) is not None
+    ):
+        operands.append(counterpart)
+    return operands or [target_ref]
+
+
+def _assert_invariant_contract_semantics(
+    schema: Mapping[str, Any],
+    invariant_id: str,
+    contract: Mapping[str, Any],
+) -> None:
+    """Fail production before publishing a structurally valid false predicate."""
+
+    operands = contract.get("operand_refs")
+    if not isinstance(operands, list):
+        raise ValueError(
+            f"INVARIANT_OPERATOR_ARITY_INVALID:{invariant_id}"
+        )
+    for operand_ref in operands:
+        if (
+            isinstance(operand_ref, str)
+            and operand_ref.startswith("/")
+            and _schema_at_json_pointer(schema, operand_ref) is None
+        ):
+            raise ValueError(
+                "INVARIANT_OPERAND_REF_UNRESOLVED:"
+                f"{invariant_id}:{operand_ref}"
+            )
+    algorithm = str(contract.get("algorithm") or "")
+    if algorithm in {
+        "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
+        "HASH_AND_BYTE_LINEAGE_V1",
+    } and len(operands) < 2:
+        raise ValueError(
+            f"INVARIANT_OPERATOR_ARITY_INVALID:{invariant_id}"
+        )
+    if "CARDINALITY" in invariant_id and (
+        algorithm != "EXACT_ARRAY_CARDINALITY_COMPARISON_V1"
+        or len(operands) != 2
+    ):
+        raise ValueError(
+            f"INVARIANT_ALGORITHM_FAMILY_MISMATCH:{invariant_id}"
+        )
+    if algorithm == "ORDERED_NUMERIC_PREDICATE_V1":
+        parameters = contract.get("parameters")
+        if not isinstance(parameters, Mapping) or not all(
+            isinstance(parameters.get(field), str)
+            and parameters.get(field)
+            for field in ("relation", "unit")
+        ):
+            raise ValueError(
+                f"INVARIANT_NUMERIC_PARAMETERS_INCOMPLETE:{invariant_id}"
+            )
+
+
 def _invariant_algorithm_family(invariant_id: str) -> str:
+    if "CARDINALITY" in invariant_id:
+        return "EXACT_ARRAY_CARDINALITY_COMPARISON_V1"
     if "SHA256" in invariant_id or "HASH" in invariant_id:
         return "HASH_AND_BYTE_LINEAGE_V1"
     if "ARE_UNIQUE" in invariant_id:
         return "CANONICAL_MEMBER_UNIQUENESS_V1"
-    if "CARDINALITY" in invariant_id:
-        return "EXACT_ARRAY_CARDINALITY_COMPARISON_V1"
     if any(
         token in invariant_id
         for token in ("RESOLVE", "EXISTS_IN", "BINDS", "REQUIRES")
@@ -569,7 +719,9 @@ def _invariant_algorithm_family(invariant_id: str) -> str:
     return "EXACT_NAMED_PREDICATE_V1"
 
 
-def _invariant_evaluation_contract(invariant_id: str) -> dict[str, Any]:
+def _invariant_evaluation_contract(
+    invariant_id: str, schema: Mapping[str, Any]
+) -> dict[str, Any]:
     """Return the deterministic Lab evaluator contract for one invariant."""
 
     target_ref = _INVARIANT_MUTATION_TARGETS.get(invariant_id)
@@ -654,10 +806,34 @@ def _invariant_evaluation_contract(invariant_id: str) -> dict[str, Any]:
         "branch_precondition": recipe.get(
             "required_base_branch", "ANY_JSON_SCHEMA_VALID_BRANCH"
         ),
+        "branch_selector": _invariant_branch_selector(invariant_id),
         "decision_rule": decision_rules[family],
         "failure_code": f"INVARIANT_{_safe_id(invariant_id).replace('-', '_')}_FAILED",
         "parameters": {},
+        "quantifier": _invariant_quantifier(invariant_id),
+        "subject_selector": _invariant_subject_selector(
+            invariant_id, target_ref
+        ),
+        "operand_refs": _concrete_invariant_operand_refs(
+            target_ref, input_refs, schema
+        ),
     }
+    def typed_spec(
+        algorithm: str,
+        operand_refs: list[str],
+        decision_rule: str,
+        *,
+        parameters: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        value: dict[str, Any] = {
+            "algorithm": algorithm,
+            "input_refs": [target_ref, *operand_refs],
+            "decision_rule": decision_rule,
+        }
+        if parameters is not None:
+            value["parameters"] = deepcopy(dict(parameters))
+        return value
+
     explicit_specs: dict[str, dict[str, Any]] = {
         "AUTHORING_FIELDS_DESCRIBE_THE_IMMUTABLE_CANDIDATE_HANDOFF_NOT_CURRENT_RUNTIME_STATE": {
             "algorithm": "AUTHORING_HANDOFF_STATE_V1",
@@ -691,6 +867,87 @@ def _invariant_evaluation_contract(invariant_id: str) -> dict[str, Any]:
             "decision_rule": (
                 "Require at least one effect_delta member with observed_change "
                 "true and canonically unequal before_value and after_value."
+            ),
+        },
+        "BEFORE_AND_AFTER_HASHES_MATCH_REFERENCED_BYTES": {
+            "algorithm": "PAIRED_BYTE_HASH_LINEAGE_V1",
+            "input_refs": [
+                target_ref,
+                "/input_before_ref",
+                "/input_before_sha256",
+                "/output_after_ref",
+                "/output_after_sha256",
+            ],
+            "decision_rule": (
+                "Hash the exact bytes at input_before_ref and output_after_ref "
+                "independently and require equality with input_before_sha256 and "
+                "output_after_sha256 respectively."
+            ),
+        },
+        "EVERY_WORD_ANCHOR_AUDIO_SHA256_EQUALS_TOP_LEVEL_AUDIO_SHA256": {
+            "algorithm": "QUANTIFIED_AUDIO_HASH_EQUALITY_V1",
+            "input_refs": [
+                target_ref,
+                "/word_anchors/*/audio_sha256",
+                "/audio_sha256",
+            ],
+            "decision_rule": (
+                "For every word anchor require its audio_sha256 to equal the "
+                "top-level hash of the same synthesized audio bytes."
+            ),
+        },
+        "EVERY_WORD_ANCHOR_START_SECONDS_IS_LESS_THAN_END_SECONDS": {
+            "algorithm": "QUANTIFIED_INTERVAL_ORDER_V1",
+            "input_refs": [
+                target_ref,
+                "/word_anchors/*/start_seconds",
+                "/word_anchors/*/end_seconds",
+            ],
+            "decision_rule": (
+                "For every word anchor require start_seconds to be strictly "
+                "less than end_seconds using exact decimal values."
+            ),
+        },
+        "LICENSE_SPDX_MATCHES_TTS_MODEL_LICENSE_EVIDENCE": {
+            "algorithm": "SPDX_LICENSE_EVIDENCE_BINDING_V1",
+            "input_refs": [
+                target_ref,
+                "/license_spdx",
+                "/license_evidence_ref",
+                "/license_evidence_sha256",
+            ],
+            "decision_rule": (
+                "Hash the exact license evidence bytes, parse their declared "
+                "SPDX identifier, and require exact equality with license_spdx."
+            ),
+        },
+        "AUTHORIZED_TARGET_SKILL_RUN_REQUIRES_CURRENT_EXACT_AUTHORIZATION_AND_RECEIPT": {
+            "algorithm": "AUTHORIZED_DEMO_PROVENANCE_BINDING_V1",
+            "input_refs": [
+                target_ref,
+                "/provenance_state",
+                "/target_skill_authorization_ref",
+                "/target_skill_execution_receipt_ref",
+                "/target_skill_execution_receipt_sha256",
+                "/actual_skill_output",
+            ],
+            "branch_precondition": "AUTHORIZED_TARGET_SKILL_RUN",
+            "decision_rule": (
+                "Only on the AUTHORIZED_TARGET_SKILL_RUN branch require a "
+                "current exact authorization plus a hash-verified execution "
+                "receipt and actual_skill_output true."
+            ),
+        },
+        "OBSERVED_MOTION_OBJECT_IDS_EQUAL_MOTION_IR_OBJECT_IDS": {
+            "algorithm": "QUANTIFIED_MOTION_OBJECT_SET_EQUALITY_V1",
+            "input_refs": [
+                target_ref,
+                "/observed_motion_objects/*/object_id",
+                "dependency://OBJECT_MOTION_IR/shots/*/objects/*/object_id",
+            ],
+            "decision_rule": (
+                "Compare the sorted unique observed object IDs with the exact "
+                "sorted unique object IDs declared by the same-Job Motion IR."
             ),
         },
         "DENIED_TARGET_SKILL_GATE_HAS_NO_AUTHORIZATION_OR_SIDE_EFFECT_ATTEMPT": {
@@ -877,6 +1134,449 @@ def _invariant_evaluation_contract(invariant_id: str) -> dict[str, Any]:
             },
         },
     }
+    explicit_specs.update(
+        {
+            "FROZEN_FILE_REFS_AND_HASHES_HAVE_EQUAL_CARDINALITY": typed_spec(
+                "EXACT_ARRAY_CARDINALITY_COMPARISON_V1",
+                ["/frozen_file_refs"],
+                "Require frozen_file_sha256s and frozen_file_refs to have exactly equal cardinality.",
+            ),
+            "ASSET_PROVENANCE_REFS_AND_HASHES_HAVE_EQUAL_CARDINALITY": typed_spec(
+                "EXACT_ARRAY_CARDINALITY_COMPARISON_V1",
+                ["/assets/*/provenance_refs"],
+                "For every asset require provenance_sha256s and provenance_refs to have exactly equal cardinality.",
+            ),
+            "SOURCE_EVIDENCE_REFS_AND_HASHES_HAVE_EQUAL_CARDINALITY": typed_spec(
+                "EXACT_ARRAY_CARDINALITY_COMPARISON_V1",
+                ["/source_evidence_refs"],
+                "Require source_evidence_sha256s and source_evidence_refs to have exactly equal cardinality.",
+            ),
+            "ASSET_MANIFEST_SHA256_MATCHES_CANONICAL_ASSET_ARRAY": typed_spec(
+                "CANONICAL_JSON_VALUE_HASH_V1",
+                ["/assets"],
+                "Hash the canonical UTF-8 JSON bytes of assets and require equality with asset_manifest_sha256.",
+                parameters={"canonical_value_ref": "/assets"},
+            ),
+            "CLAIM_MANIFEST_SHA256_MATCHES_CANONICAL_CLAIM_ARRAY": typed_spec(
+                "CANONICAL_JSON_VALUE_HASH_V1",
+                ["/claims"],
+                "Hash the canonical UTF-8 JSON bytes of claims and require equality with claim_manifest_sha256.",
+                parameters={"canonical_value_ref": "/claims"},
+            ),
+            "SCRIPT_SHA256_MATCHES_CANONICAL_SENTENCE_ARRAY": typed_spec(
+                "CANONICAL_JSON_VALUE_HASH_V1",
+                ["/sentences"],
+                "Hash the canonical UTF-8 JSON bytes of sentences and require equality with script_sha256.",
+                parameters={"canonical_value_ref": "/sentences"},
+            ),
+            "INPUT_MANIFEST_SHA256_MATCHES_CANONICAL_INPUT_HASHES": typed_spec(
+                "CANONICAL_JSON_VALUE_HASH_V1",
+                ["/input_hashes"],
+                "Hash the canonical UTF-8 JSON bytes of input_hashes and require equality with input_manifest_sha256.",
+                parameters={"canonical_value_ref": "/input_hashes"},
+            ),
+            "OUTPUT_MANIFEST_SHA256_MATCHES_CANONICAL_OUTPUT_HASHES": typed_spec(
+                "CANONICAL_JSON_VALUE_HASH_V1",
+                ["/output_hashes"],
+                "Hash the canonical UTF-8 JSON bytes of output_hashes and require equality with output_manifest_sha256.",
+                parameters={"canonical_value_ref": "/output_hashes"},
+            ),
+            "EVENT_PAYLOAD_SHA256_MATCHES_CANONICAL_STAGE_EVENT": typed_spec(
+                "CANONICAL_FIELD_SET_HASH_V1",
+                [
+                    "/stage_id",
+                    "/stage_index",
+                    "/previous_stage_id",
+                    "/input_manifest_sha256",
+                    "/output_manifest_sha256",
+                    "/evidence_state",
+                    "/generation_state",
+                    "/execution_state",
+                    "/resume_decision",
+                    "/status",
+                ],
+                "Hash the declared canonical stage-event field set and require equality with event_payload_sha256.",
+                parameters={
+                    "canonical_field_refs": [
+                        "/stage_id",
+                        "/stage_index",
+                        "/previous_stage_id",
+                        "/input_manifest_sha256",
+                        "/output_manifest_sha256",
+                        "/evidence_state",
+                        "/generation_state",
+                        "/execution_state",
+                        "/resume_decision",
+                        "/status",
+                    ]
+                },
+            ),
+            "CLAIM_COVERAGE_SHA256_MATCHES_NARRATION_SCRIPT": typed_spec(
+                "CANONICAL_DEPENDENCY_PROJECTION_HASH_V1",
+                ["dependency://NARRATION_SCRIPT/sentences/*/claim_ids"],
+                "Hash the canonical ordered narration claim-id projection and require equality with claim_coverage_sha256.",
+                parameters={
+                    "dependency_artifact_kind": "NARRATION_SCRIPT",
+                    "canonical_value_ref": "/sentences/*/claim_ids",
+                },
+            ),
+            "TTS_MODEL_SHA256_MATCHES_REFERENCED_LOCAL_MODEL_ARTIFACT": typed_spec(
+                "HASH_AND_BYTE_LINEAGE_V1",
+                ["/model_artifact_ref"],
+                "Hash the exact local model artifact bytes and require equality with model_sha256.",
+            ),
+            "EVERY_CLAIM_BINDING_RESOLVES_TO_FROZEN_FILE_AND_MATCHES_HASH": typed_spec(
+                "QUANTIFIED_SOURCE_BINDING_HASH_V1",
+                [
+                    "/claim_bindings/*/source_sha256",
+                    "/frozen_file_refs",
+                    "/frozen_file_sha256s",
+                ],
+                "For every claim binding resolve source_ref in frozen_file_refs and require its paired frozen hash to equal source_sha256.",
+            ),
+            "LICENSE_SPDX_MATCHES_HASHED_LICENSE_EVIDENCE": typed_spec(
+                "SPDX_LICENSE_EVIDENCE_BINDING_V1",
+                ["/license_evidence_ref", "/license_evidence_sha256"],
+                "Hash the exact license evidence bytes, parse the SPDX identifier, and require equality with license_spdx.",
+            ),
+            "TARGET_EXECUTION_ENVIRONMENT_RECEIPT_HASH_MATCHES_REFERENCED_BYTES": typed_spec(
+                "HASH_AND_BYTE_LINEAGE_V1",
+                ["/authorized_environment_manifest_sha256"],
+                "Hash the exact bytes referenced by authorized_environment_manifest_ref and require equality with authorized_environment_manifest_sha256.",
+            ),
+            "MOTION_PROBE_BINDS_FINAL_VIDEO_SHA256_AND_MOTION_IR_SHA256": typed_spec(
+                "MOTION_PROBE_INPUT_BINDING_V1",
+                [
+                    "/motion_probe_sha256",
+                    "/video_sha256",
+                    "dependency://LOCAL_RENDER_RECEIPT/motion_ir_sha256",
+                ],
+                "Hash the motion probe bytes and require the probe to bind the final video hash and same-Job Motion IR hash.",
+            ),
+            "RENDER_RECEIPT_VIDEO_SHA256_EQUALS_VIDEO_SHA256": typed_spec(
+                "RENDER_RECEIPT_VIDEO_HASH_EQUALITY_V1",
+                [
+                    "/render_receipt_sha256",
+                    "/video_sha256",
+                    "dependency://LOCAL_RENDER_RECEIPT/video_sha256",
+                ],
+                "Hash the render receipt bytes and require its bound video hash, the media video hash, and the same-Job render video hash to agree.",
+            ),
+            "EVENT_HASH_RECOMPUTES_FROM_PREVIOUS_HASH_AND_CANONICAL_EVENT_PAYLOAD": typed_spec(
+                "CHAINED_EVENT_HASH_V1",
+                ["/previous_event_hash", "/event_payload_sha256"],
+                "Recompute event_hash from previous_event_hash and event_payload_sha256 using the declared canonical chain encoding.",
+                parameters={
+                    "encoding": "UTF8_PREVIOUS_HASH_OR_GENESIS_COLON_EVENT_PAYLOAD_SHA256"
+                },
+            ),
+            "TTS_RECEIPT_AUDIO_SHA256_EQUALS_AUDIO_SHA256": typed_spec(
+                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
+                ["dependency://LOCAL_TTS_RECEIPT/audio_sha256"],
+                "Require alignment audio_sha256 to equal the same-Job Local TTS audio_sha256.",
+            ),
+            "ALIGNMENT_RECEIPT_AUDIO_SHA256_EQUALS_AUDIO_SHA256": typed_spec(
+                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
+                ["dependency://AUDIO_ALIGNMENT_RECEIPT/audio_sha256"],
+                "Require Motion IR audio_sha256 to equal the same-Job alignment audio_sha256.",
+            ),
+            "TTS_ALIGNMENT_MOTION_AND_RENDER_AUDIO_SHA256_ARE_EQUAL": typed_spec(
+                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
+                [
+                    "dependency://LOCAL_TTS_RECEIPT/audio_sha256",
+                    "dependency://AUDIO_ALIGNMENT_RECEIPT/audio_sha256",
+                    "dependency://OBJECT_MOTION_IR/audio_sha256",
+                ],
+                "Require the Local TTS, alignment, Motion IR, and render audio hashes to be exactly equal for the same Job.",
+            ),
+            "RENDER_TTS_ALIGNMENT_AND_MEDIA_AUDIO_SHA256_ARE_EQUAL": typed_spec(
+                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
+                [
+                    "dependency://LOCAL_RENDER_RECEIPT/audio_sha256",
+                    "dependency://LOCAL_TTS_RECEIPT/audio_sha256",
+                    "dependency://AUDIO_ALIGNMENT_RECEIPT/audio_sha256",
+                ],
+                "Require the render, Local TTS, alignment, and media audio hashes to be exactly equal for the same Job.",
+            ),
+            "AUTHORIZED_ENVIRONMENT_MANIFEST_SHA256_EQUALS_CURRENT_ENVIRONMENT_MANIFEST_SHA256": typed_spec(
+                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
+                ["/authorized_environment_manifest_sha256"],
+                "Require the current environment manifest hash to equal the authorized environment manifest hash.",
+            ),
+            "AUTHORIZED_OUTPUT_MANIFEST_SHA256_EQUALS_CURRENT_OUTPUT_MANIFEST_SHA256": typed_spec(
+                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
+                ["/authorized_output_manifest_sha256"],
+                "Require the current output manifest hash to equal the authorized output manifest hash.",
+            ),
+            "REUSE_VALID_RECEIPT_REQUIRES_EXACT_CURRENT_INPUT_HASHES": typed_spec(
+                "RESUME_INPUT_HASH_EQUALITY_V1",
+                ["/receipt_input_hashes_sha256", "/receipt_invalidated"],
+                "On REUSED_VALID_RECEIPT require current and receipt input hashes to be equal and receipt_invalidated false.",
+                parameters={"required_status": "REUSED_VALID_RECEIPT"},
+            ),
+            "RERUN_INVALIDATED_STAGE_REQUIRES_CHANGED_OR_INVALIDATED_INPUT": typed_spec(
+                "RERUN_INVALIDATION_DECISION_V1",
+                ["/receipt_input_hashes_sha256", "/receipt_invalidated"],
+                "On RERUN_REQUIRED_INPUT_CHANGED_OR_INVALID require unequal input hashes or receipt_invalidated true.",
+                parameters={
+                    "required_status": "RERUN_REQUIRED_INPUT_CHANGED_OR_INVALID"
+                },
+            ),
+            "MOTION_OBJECT_IDS_EQUAL_ASSET_OBJECT_IDS": typed_spec(
+                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
+                ["/asset_object_ids"],
+                "Require Motion object IDs and Asset object IDs to be equal as sorted unique sets.",
+            ),
+            "SENTENCE_IDS_EQUAL_NARRATION_SCRIPT_SENTENCE_IDS": typed_spec(
+                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
+                ["dependency://NARRATION_SCRIPT/sentences/*/sentence_id"],
+                "Require sentence_ids to equal the same-Job Narration Script sentence-id set.",
+            ),
+            "DEMO_PROCESSING_ACTION_MATCHES_EFFECT_CLAIM": typed_spec(
+                "CLAIM_JOINED_VALUE_EQUALITY_V1",
+                ["/effect_claim_id", "dependency://FUNCTION_SCENARIO_EFFECT_MATRIX/claims/*/effect"],
+                "Join effect_claim_id to the same-Job claim matrix and require processing_action to equal that claim's effect.",
+                parameters={
+                    "subject_join_ref": "/effect_claim_id",
+                    "dependency_join_ref": "/claims/*/claim_id",
+                },
+            ),
+            "AUDIO_ANCHOR_IDS_EQUAL_REFERENCED_ALIGNMENT_ANCHOR_IDS": typed_spec(
+                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
+                ["dependency://AUDIO_ALIGNMENT_RECEIPT/word_anchors/*/anchor_id"],
+                "Require Motion IR audio_anchor_ids to equal the same-Job alignment anchor-id set.",
+            ),
+            "MOTION_CURVE_IDS_EQUAL_OBJECT_MOTION_SEGMENT_CURVE_IDS": typed_spec(
+                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
+                ["/shots/*/objects/*/motion_segments/*/curve_id"],
+                "Require top-level motion_curve_ids to equal the union of all object motion-segment curve IDs.",
+            ),
+            "SHOT_SENTENCE_ID_UNION_EQUALS_TOP_LEVEL_SENTENCE_IDS": typed_spec(
+                "ARRAY_UNION_SET_EQUALITY_V1",
+                ["/shots/*/sentence_ids", "/sentence_ids"],
+                "Require the union of every shot sentence_ids array to equal top-level sentence_ids.",
+            ),
+            "SHOT_AUDIO_ANCHOR_ID_UNION_EQUALS_TOP_LEVEL_AUDIO_ANCHOR_IDS": typed_spec(
+                "ARRAY_UNION_SET_EQUALITY_V1",
+                ["/shots/*/audio_anchor_ids", "/audio_anchor_ids"],
+                "Require the union of every shot audio_anchor_ids array to equal top-level audio_anchor_ids.",
+            ),
+            "SCENE_TRANSITION_COUNT_EQUALS_NON_INITIAL_TRANSITIONS": typed_spec(
+                "DERIVED_COUNT_EQUALITY_V1",
+                ["/shots"],
+                "Require scene_transition_count to equal max(0, number of shots minus one).",
+                parameters={"formula": "MAX_0_LEN_SHOTS_MINUS_1"},
+            ),
+            "RENDERED_SHOT_IDS_EQUAL_MOTION_IR_SHOT_IDS": typed_spec(
+                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
+                ["dependency://OBJECT_MOTION_IR/shots/*/shot_id"],
+                "Require rendered_shot_ids to equal the same-Job Motion IR shot-id set.",
+            ),
+            "RENDERED_OBJECT_IDS_EQUAL_MOTION_IR_OBJECT_IDS": typed_spec(
+                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
+                ["dependency://OBJECT_MOTION_IR/shots/*/objects/*/object_id"],
+                "Require rendered_object_ids to equal the same-Job Motion IR object-id set.",
+            ),
+            "RENDERED_MOTION_CURVE_IDS_EQUAL_MOTION_IR_CURVE_IDS": typed_spec(
+                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
+                ["dependency://OBJECT_MOTION_IR/motion_curve_ids"],
+                "Require rendered_motion_curve_ids to equal the same-Job Motion IR curve-id set.",
+            ),
+            "RENDERED_SEMANTIC_BINDINGS_EQUAL_MOTION_IR_OBJECT_BINDINGS": typed_spec(
+                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
+                ["dependency://OBJECT_MOTION_IR/shots/*/objects/*/visual_intent_id"],
+                "Require rendered semantic bindings to equal the same-Job Motion IR object bindings.",
+            ),
+            "OBSERVED_SCENE_TRANSITION_COUNT_EQUALS_EXPECTED_SCENE_TRANSITION_COUNT": typed_spec(
+                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
+                ["/expected_scene_transition_count"],
+                "Require the probed scene-transition count to equal the expected count.",
+            ),
+            "OBSERVED_MOTION_CURVE_IDS_EQUAL_MOTION_IR_CURVE_IDS": typed_spec(
+                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
+                ["dependency://OBJECT_MOTION_IR/motion_curve_ids"],
+                "Require all observed probe curve IDs to equal the same-Job Motion IR curve-id set.",
+            ),
+            "OBSERVED_MOTION_SEMANTIC_BINDINGS_EQUAL_RENDERED_AND_MOTION_BINDINGS": typed_spec(
+                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
+                [
+                    "dependency://LOCAL_RENDER_RECEIPT/rendered_semantic_bindings/*/visual_intent_id",
+                    "dependency://OBJECT_MOTION_IR/shots/*/objects/*/visual_intent_id",
+                ],
+                "Require observed visual-intent bindings to equal both rendered and Motion IR bindings.",
+            ),
+            "ACCEPTANCE_CASE_RESULT_IDS_EQUAL_FROZEN_ACCEPTANCE_CASE_IDS": typed_spec(
+                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
+                ["candidate://validation/ACCEPTANCE_CASES.json#/cases/*/case_id"],
+                "Require acceptance result case IDs to equal the frozen acceptance Case IDs.",
+            ),
+            "ACCEPTANCE_CASE_RESULT_REFS_EQUAL_FROZEN_CASE_RESULT_REFS": typed_spec(
+                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
+                ["candidate://validation/CASE_EXECUTION_MANIFEST.json#/acceptance_case_invocations/*/result_ref"],
+                "Require acceptance result refs to equal the frozen acceptance invocation result refs.",
+            ),
+            "FIXTURE_RESULT_JOB_IDS_EQUAL_FROZEN_REPOSITORY_JOB_IDS": typed_spec(
+                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
+                ["candidate://canonical_sources/SOURCE_MANIFEST.json#/sources/*/job_id"],
+                "Require fixture result Job IDs to equal the frozen repository Job IDs.",
+            ),
+            "FIXTURE_RESULT_SOURCE_IDS_EQUAL_FROZEN_REPOSITORY_SOURCE_IDS": typed_spec(
+                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
+                ["candidate://canonical_sources/SOURCE_MANIFEST.json#/sources/*/source_id"],
+                "Require fixture result source IDs to equal the frozen repository source IDs.",
+            ),
+            "NEGATIVE_CASE_RESULT_IDS_EQUAL_COMPLETE_NEGATIVE_CASE_IDS": typed_spec(
+                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
+                ["candidate://validation/NEGATIVE_CASES.json#/cases/*/case_id"],
+                "Require negative result Case IDs to equal the complete frozen negative Case IDs.",
+            ),
+            "NEGATIVE_CASE_RESULT_REFS_EQUAL_FROZEN_CASE_RESULT_REFS": typed_spec(
+                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
+                ["candidate://validation/CASE_EXECUTION_MANIFEST.json#/negative_case_invocations/*/result_ref"],
+                "Require negative result refs to equal the frozen negative invocation result refs.",
+            ),
+            "INVARIANT_NEGATIVE_CASE_RESULT_IDS_EQUAL_REGISTRY_CASE_IDS": typed_spec(
+                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
+                ["candidate://validation/ORACLE_EVALUATOR_REGISTRY.json#/invariant_negative_case_matrix/*/case_id"],
+                "Require invariant result Case IDs to equal the Oracle registry invariant Case IDs.",
+            ),
+            "INVARIANT_NEGATIVE_RESULT_REFS_EQUAL_FROZEN_REGISTRY_RESULT_REFS": typed_spec(
+                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
+                ["candidate://validation/CASE_EXECUTION_MANIFEST.json#/registry_case_invocations/*/result_ref"],
+                "Require invariant result refs to equal the frozen registry invocation result refs.",
+            ),
+            "EVERY_INVARIANT_RESULT_COVERS_EXACT_APPLICABLE_SCHEMA_SHA256S": typed_spec(
+                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
+                ["candidate://validation/ORACLE_EVALUATOR_REGISTRY.json#/invariant_negative_case_matrix/*/applicable_schema_sha256s/*"],
+                "For every invariant Case require the result schema hashes to equal the exact applicable schema hashes declared by the Oracle registry.",
+            ),
+            "SCHEMA_NATIVE_NEGATIVE_CASE_RESULT_IDS_EQUAL_REGISTRY_CASE_IDS": typed_spec(
+                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
+                ["candidate://validation/ORACLE_EVALUATOR_REGISTRY.json#/schema_native_negative_case_matrix/*/case_id"],
+                "Require schema-native result Case IDs to equal the Oracle registry Case IDs.",
+            ),
+            "SCHEMA_NATIVE_RESULT_REFS_EQUAL_FROZEN_REGISTRY_RESULT_REFS": typed_spec(
+                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
+                ["candidate://validation/CASE_EXECUTION_MANIFEST.json#/registry_case_invocations/*/result_ref"],
+                "Require schema-native result refs to equal the frozen registry invocation result refs.",
+            ),
+            "NEGATIVE_MUTATION_VARIANT_RESULT_IDS_EQUAL_DECLARED_VARIANT_IDS": typed_spec(
+                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
+                ["candidate://validation/NEGATIVE_CASES.json#/cases/*/mutation_variants/*/variant_id"],
+                "Require mutation variant result IDs to equal the declared negative Case variant IDs.",
+            ),
+            "WORD_ANCHORS_ARE_MONOTONIC_AND_NON_OVERLAPPING": typed_spec(
+                "ORDERED_NUMERIC_PREDICATE_V1",
+                [
+                    "/word_anchors/*/start_seconds",
+                    "/word_anchors/*/end_seconds",
+                ],
+                "Require every anchor start to be at or after the preceding anchor end in declared order.",
+                parameters={
+                    "relation": "CURRENT_START_GTE_PREVIOUS_END",
+                    "unit": "seconds",
+                },
+            ),
+            "FULL_TIMELINE_CONTIGUOUS_NO_GAPS_OR_OVERLAPS": typed_spec(
+                "ORDERED_NUMERIC_PREDICATE_V1",
+                ["/shots/*/start_seconds", "/shots/*/end_seconds"],
+                "Require every non-initial shot start to equal the preceding shot end exactly.",
+                parameters={
+                    "relation": "CURRENT_START_EQUALS_PREVIOUS_END",
+                    "unit": "seconds",
+                },
+            ),
+            "ENTER_TIME_LESS_THAN_OR_EQUAL_TO_HOLD_START": typed_spec(
+                "ORDERED_NUMERIC_PREDICATE_V1",
+                ["/shots/*/objects/*/hold_interval/start_seconds"],
+                "For every object require enter_time to be less than or equal to hold start.",
+                parameters={"relation": "LTE", "unit": "seconds"},
+            ),
+            "HOLD_START_LESS_THAN_HOLD_END": typed_spec(
+                "ORDERED_NUMERIC_PREDICATE_V1",
+                ["/shots/*/objects/*/hold_interval/start_seconds"],
+                "For every object require hold start to be strictly less than hold end.",
+                parameters={"relation": "GT_OTHER_OPERAND", "unit": "seconds"},
+            ),
+            "HOLD_END_LESS_THAN_OR_EQUAL_TO_EXIT_TIME": typed_spec(
+                "ORDERED_NUMERIC_PREDICATE_V1",
+                ["/shots/*/objects/*/hold_interval/end_seconds"],
+                "For every object require hold end to be less than or equal to exit_time.",
+                parameters={"relation": "GTE_OTHER_OPERAND", "unit": "seconds"},
+            ),
+            "ENTER_HOLD_EXIT_SEGMENTS_ARE_CONTIGUOUS_AND_MATCH_DECLARED_INTERVALS": typed_spec(
+                "ORDERED_NUMERIC_PREDICATE_V1",
+                [
+                    "/shots/*/objects/*/motion_segments/*/start_seconds",
+                    "/shots/*/objects/*/motion_segments/*/end_seconds",
+                    "/shots/*/objects/*/enter_time",
+                    "/shots/*/objects/*/hold_interval/start_seconds",
+                    "/shots/*/objects/*/hold_interval/end_seconds",
+                    "/shots/*/objects/*/exit_time",
+                ],
+                "Require ENTER, HOLD, and EXIT motion segments to be contiguous and to match the declared object intervals.",
+                parameters={
+                    "relation": "ENTER_HOLD_EXIT_EXACT_CONTIGUITY",
+                    "unit": "seconds",
+                },
+            ),
+            "ABSOLUTE_FINAL_AV_DRIFT_DOES_NOT_EXCEED_ONE_FRAME": typed_spec(
+                "ORDERED_NUMERIC_PREDICATE_V1",
+                [],
+                "Require the absolute final A/V drift to be at most one frame.",
+                parameters={
+                    "relation": "ABS_LTE",
+                    "threshold": 1,
+                    "unit": "frames",
+                },
+            ),
+            "RECOMPUTED_ANCHOR_ERROR_DOES_NOT_EXCEED_0_1_SECONDS": typed_spec(
+                "ORDERED_NUMERIC_PREDICATE_V1",
+                [],
+                "Require recomputed max anchor error to be at most 0.1 seconds.",
+                parameters={
+                    "relation": "LTE",
+                    "threshold": 0.1,
+                    "unit": "seconds",
+                },
+            ),
+            "OBSERVED_DYNAMIC_FRAME_COUNT_IS_NONZERO": typed_spec(
+                "ORDERED_NUMERIC_PREDICATE_V1",
+                [],
+                "Require the observed dynamic frame count to be greater than zero.",
+                parameters={
+                    "relation": "GT",
+                    "threshold": 0,
+                    "unit": "frames",
+                },
+            ),
+            "EACH_DECLARED_OBJECT_HAS_NONZERO_PROBED_MOTION": typed_spec(
+                "ORDERED_NUMERIC_PREDICATE_V1",
+                ["/observed_motion_objects/*/changed_frame_count"],
+                "For every declared object require its probed changed-frame count to be greater than zero.",
+                parameters={
+                    "relation": "GT",
+                    "threshold": 0,
+                    "unit": "frames",
+                },
+            ),
+            "PREVIOUS_STAGE_ID_MATCHES_FROZEN_STAGE_ORDER": typed_spec(
+                "FROZEN_PREDECESSOR_EQUALITY_V1",
+                ["/stage_index", "/required_stage_ids"],
+                "Require previous_stage_id to equal the predecessor derived from stage_index and the frozen stage order, or null for index zero.",
+                parameters={"stage_order": list(RESUMABLE_STAGE_ORDER)},
+            ),
+            "DEMO_EFFECT_DELTA_EVIDENCE_BINDS_BEFORE_AND_AFTER_BYTES": typed_spec(
+                "EVIDENCE_BYTES_DECLARE_INPUT_AND_OUTPUT_SHA256_EQUAL_TO_TOP_LEVEL_BEFORE_AND_AFTER_SHA256",
+                [
+                    "/effect_delta/*/evidence_input_sha256",
+                    "/input_before_sha256",
+                    "/output_after_sha256",
+                ],
+                "Require every effect-delta evidence record to bind the exact top-level before and after byte hashes.",
+            ),
+        }
+    )
     if invariant_id in explicit_specs:
         contract.update(deepcopy(explicit_specs[invariant_id]))
     if invariant_id == (
@@ -973,6 +1673,31 @@ def _invariant_evaluation_contract(invariant_id: str) -> dict[str, Any]:
                 },
             }
         )
+    contract["operand_refs"] = _concrete_invariant_operand_refs(
+        target_ref, list(contract["input_refs"]), schema
+    )
+    contract["branch_selector"] = _invariant_branch_selector(invariant_id)
+    contract["evaluator_entrypoint"] = (
+        "external_lab.invariants:evaluate_predicate_ast_v1"
+    )
+    contract["predicate_ast"] = {
+        "operator": contract["algorithm"],
+        "quantifier": contract["quantifier"],
+        "subject_selector": contract["subject_selector"],
+        "operand_refs": list(contract["operand_refs"]),
+        "branch_precondition": contract["branch_precondition"],
+        "branch_selector": deepcopy(contract["branch_selector"]),
+        "numeric_tolerance": deepcopy(contract["numeric_tolerance"]),
+        "parameters": deepcopy(contract.get("parameters", {})),
+    }
+    contract["predicate_sha256"] = hashlib.sha256(
+        json.dumps(
+            contract["predicate_ast"],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
     return contract
 
 
@@ -986,10 +1711,41 @@ def _bind_invariant_evaluation_contracts(schema: dict[str, Any]) -> None:
     declared = declared if isinstance(declared, Mapping) else {}
     contracts: dict[str, Any] = {}
     for invariant_id in invariants:
-        contract = _invariant_evaluation_contract(invariant_id)
+        contract = _invariant_evaluation_contract(invariant_id, schema)
         existing = declared.get(invariant_id)
         if isinstance(existing, Mapping):
             contract.update(deepcopy(dict(existing)))
+            contract["operand_refs"] = _concrete_invariant_operand_refs(
+                str(contract["target_ref"]),
+                list(contract["input_refs"]),
+                schema,
+            )
+            contract["branch_selector"] = _invariant_branch_selector(
+                invariant_id
+            )
+            contract["predicate_ast"] = {
+                "operator": contract["algorithm"],
+                "quantifier": contract["quantifier"],
+                "subject_selector": contract["subject_selector"],
+                "operand_refs": list(contract["operand_refs"]),
+                "branch_precondition": contract["branch_precondition"],
+                "branch_selector": deepcopy(contract["branch_selector"]),
+                "numeric_tolerance": deepcopy(
+                    contract["numeric_tolerance"]
+                ),
+                "parameters": deepcopy(contract.get("parameters", {})),
+            }
+            contract["predicate_sha256"] = hashlib.sha256(
+                json.dumps(
+                    contract["predicate_ast"],
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+        _assert_invariant_contract_semantics(
+            schema, invariant_id, contract
+        )
         contracts[invariant_id] = contract
     schema["x-invariant-contracts"] = contracts
 
@@ -1007,6 +1763,24 @@ def schema_invariant_contracts_are_complete(schema: Any) -> bool:
     contracts = schema.get("x-invariant-contracts")
     if not isinstance(contracts, Mapping) or set(contracts) != invariants:
         return False
+
+    branch_selectors: set[tuple[str, str]] = set()
+    for keyword in ("oneOf", "anyOf"):
+        for branch in schema.get(keyword, []):
+            properties = (
+                branch.get("properties", {})
+                if isinstance(branch, Mapping)
+                else {}
+            )
+            if not isinstance(properties, Mapping):
+                continue
+            for field, field_schema in properties.items():
+                if isinstance(field_schema, Mapping) and isinstance(
+                    field_schema.get("const"), str
+                ):
+                    branch_selectors.add(
+                        (f"/{field}", str(field_schema["const"]))
+                    )
     for invariant_id, contract in contracts.items():
         if (
             not isinstance(contract, Mapping)
@@ -1030,6 +1804,59 @@ def schema_invariant_contracts_are_complete(schema: Any) -> bool:
                 )
             )
             or not isinstance(contract.get("numeric_tolerance"), Mapping)
+            or contract.get("quantifier") not in {"SINGLE", "FOR_ALL"}
+            or not isinstance(contract.get("subject_selector"), str)
+            or not contract.get("subject_selector")
+            or not isinstance(contract.get("operand_refs"), list)
+            or not contract.get("operand_refs")
+            or contract.get("evaluator_entrypoint")
+            != "external_lab.invariants:evaluate_predicate_ast_v1"
+            or not isinstance(contract.get("predicate_ast"), Mapping)
+            or contract.get("predicate_ast", {}).get("operator")
+            != contract.get("algorithm")
+            or contract.get("predicate_ast", {}).get("quantifier")
+            != contract.get("quantifier")
+            or contract.get("predicate_ast", {}).get("subject_selector")
+            != contract.get("subject_selector")
+            or contract.get("predicate_ast", {}).get("operand_refs")
+            != contract.get("operand_refs")
+            or contract.get("predicate_ast", {}).get("branch_precondition")
+            != contract.get("branch_precondition")
+            or contract.get("predicate_ast", {}).get("branch_selector")
+            != contract.get("branch_selector")
+            or contract.get("predicate_sha256")
+            != hashlib.sha256(
+                json.dumps(
+                    contract.get("predicate_ast"),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            or (
+                str(invariant_id).startswith(("EVERY_", "ALL_", "EACH_"))
+                and (
+                    contract.get("quantifier") != "FOR_ALL"
+                    or "*" not in contract.get("subject_selector", "")
+                )
+            )
+            or contract.get("branch_selector")
+            != _invariant_branch_selector(str(invariant_id))
+            or (
+                contract.get("branch_selector", {}).get("mode")
+                == "REQUIRE_DISCRIMINATOR_CONST"
+                and (
+                    contract.get("branch_precondition")
+                    != contract.get("branch_selector", {}).get("const")
+                    or (
+                        contract.get("branch_selector", {}).get(
+                            "discriminator_ref"
+                        ),
+                        contract.get("branch_selector", {}).get("const"),
+                    )
+                    not in branch_selectors
+                )
+            )
         ):
             return False
     return True
@@ -1141,13 +1968,10 @@ def public_skill_job_interface(
 
     frozen_fixtures = repository_job_bindings(requirement_ir)
     frozen_urls = {item["repository_url"] for item in frozen_fixtures}
-    sample_url = "https://github.com/harness-foundry/nonfixture-skill"
-    suffix = 1
-    while sample_url in frozen_urls:
-        suffix += 1
-        sample_url = (
-            "https://github.com/harness-foundry/"
-            f"nonfixture-skill-{suffix}"
+    sample_url = PUBLIC_SKILL_METAMORPHIC_REPOSITORY_URL
+    if sample_url in frozen_urls:
+        raise ValueError(
+            "public Skill metamorphic repository must remain outside frozen fixtures"
         )
     sample_request = {
         "request_id": "METAMORPHIC-PUBLIC-SKILL-URL-001",
@@ -1158,18 +1982,66 @@ def public_skill_job_interface(
         "output_video_count": 1,
         "target_skill_execution_enabled": False,
     }
-    identity_payload = {
-        "skill_url": sample_request["skill_url"],
-        "requested_revision": sample_request["requested_revision"],
+    normalized_skill_url = sample_url.removesuffix(".git").rstrip("/")
+    resolution_receipt_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "request_id",
+            "skill_url",
+            "requested_revision",
+            "normalized_skill_url",
+            "resolved_commit_sha",
+            "resolved_git_tree_oid",
+            "resolved_tree_ref",
+            "resolved_tree_sha256",
+            "resolution_command_receipt_ref",
+            "resolution_command_receipt_sha256",
+            "repository_readable",
+            "status",
+        ],
+        "properties": {
+            "request_id": {"const": sample_request["request_id"]},
+            "skill_url": {"const": sample_url},
+            "requested_revision": {
+                "const": sample_request["requested_revision"]
+            },
+            "normalized_skill_url": {"const": normalized_skill_url},
+            "resolved_commit_sha": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{40}$",
+            },
+            "resolved_git_tree_oid": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{40}$",
+            },
+            "resolved_tree_ref": {"type": "string", "minLength": 1},
+            "resolved_tree_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$",
+            },
+            "resolution_command_receipt_ref": {
+                "type": "string",
+                "minLength": 1,
+            },
+            "resolution_command_receipt_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$",
+            },
+            "repository_readable": {"const": True},
+            "status": {"const": "PASS"},
+        },
+        "x-ref-sha256-bindings": [
+            {
+                "ref_pointer": "/resolved_tree_ref",
+                "sha256_pointer": "/resolved_tree_sha256",
+            },
+            {
+                "ref_pointer": "/resolution_command_receipt_ref",
+                "sha256_pointer": "/resolution_command_receipt_sha256",
+            },
+        ],
     }
-    identity_sha256 = hashlib.sha256(
-        json.dumps(
-            identity_payload,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    ).hexdigest()
     target = requirement_ir.get("target")
     catalog = (
         target.get("artifact_schema_catalog", {})
@@ -1234,8 +2106,20 @@ def public_skill_job_interface(
         },
         "dynamic_specialization_contract": {
             "algorithm_id": "PUBLIC-SKILL-JOB-SPECIALIZATION-V1",
-            "job_id_derivation": "SHA256_CANONICAL_JOB_REQUEST_PREFIX_16",
-            "job_identity_fields": ["skill_url", "requested_revision"],
+            "job_id_derivation": (
+                "SHA256_CANONICAL_RESOLVED_JOB_IDENTITY_PREFIX_16"
+            ),
+            "job_identity_derivation_stage": "AFTER_EXACT_SOURCE_RESOLUTION",
+            "job_identity_fields": [
+                "request_id",
+                "normalized_skill_url",
+                "resolved_commit_sha",
+                "resolved_git_tree_oid",
+                "resolved_tree_sha256",
+            ],
+            "mutable_request_fields_excluded_from_final_identity": [
+                "requested_revision"
+            ],
             "url_normalization": (
                 "HTTPS_GITHUB_HOST_LOWERCASE_STRIP_TRAILING_SLASH_AND_DOT_GIT_"
                 "PRESERVE_OWNER_REPOSITORY_CASE"
@@ -1245,6 +2129,12 @@ def public_skill_job_interface(
                 "RESOLVE_REQUESTED_REVISION_THEN_BIND_EXACT_COMMIT_TREE_AND_"
                 "CONTENT_SHA256"
             ),
+            "source_resolution_entrypoint": (
+                PUBLIC_SKILL_SOURCE_RESOLUTION_ENTRYPOINT
+            ),
+            "source_resolution_receipt_required": True,
+            "source_resolution_receipt_bytes_must_hash_match": True,
+            "resolved_tree_bytes_must_hash_match": True,
             "schema_template_bindings": template_bindings,
             "schema_binding_rule": (
                 "DEEP_COPY_GENERIC_TEMPLATE_THEN_BIND_ONLY_JOB_SOURCE_PIN_AND_"
@@ -1256,8 +2146,20 @@ def public_skill_job_interface(
         },
         "frozen_certification_fixtures": frozen_fixtures,
         "metamorphic_acceptance_vector": {
-            "case_id": "AC-PUBLIC-SKILL-URL-NOT-IN-FROZEN-FIXTURES",
+            "case_id": PUBLIC_SKILL_METAMORPHIC_CASE_ID,
             "input": sample_request,
+            "resolution_contract": {
+                "status": "RUNTIME_RESOLUTION_REQUIRED_NOT_RUN",
+                "resolution_receipt_ref": (
+                    PUBLIC_SKILL_METAMORPHIC_RESOLUTION_RECEIPT_REF
+                ),
+                "resolution_receipt_schema": resolution_receipt_schema,
+                "network_access_mode": (
+                    "READ_ONLY_HTTPS_FOR_DECLARED_PUBLIC_SKILL_URL"
+                ),
+                "allowed_hosts": ["github.com"],
+                "simulated_resolution_values_forbidden": True,
+            },
             "preconditions": [
                 "SKILL_URL_NOT_IN_FROZEN_CERTIFICATION_FIXTURES",
                 "PUBLIC_GITHUB_REPOSITORY_IS_READABLE_AT_EXECUTION_TIME",
@@ -1272,18 +2174,26 @@ def public_skill_job_interface(
                 "input_skill_count": 1,
                 "output_video_count": 1,
                 "job_id_derivation": (
-                    "SHA256_CANONICAL_JOB_REQUEST_PREFIX_16"
+                    "SHA256_CANONICAL_RESOLVED_JOB_IDENTITY_PREFIX_16"
                 ),
-                "expected_job_id": f"JOB-{identity_sha256[:16].upper()}",
+                "expected_job_id_source": (
+                    "HASH_VERIFIED_RUNTIME_RESOLUTION_RECEIPT_FIELDS"
+                ),
                 "source_is_frozen_before_analysis": True,
+                "source_resolution_receipt_required": True,
                 "target_skill_execution_enabled": False,
             },
             "oracle": {
-                "algorithm_id": "PUBLIC-SKILL-JOB-METAMORPHIC-ORACLE-V1",
+                "algorithm_id": "PUBLIC-SKILL-JOB-METAMORPHIC-ORACLE-V2",
+                "algorithm_version": "2.0",
+                "implementation_entrypoint": (
+                    "external_lab.oracle:evaluate_public_skill_job_v2"
+                ),
                 "decision_rule": (
-                    "PASS_ONLY_IF_THE_UNLISTED_SCHEMA_VALID_URL_PRODUCES_EXACTLY_"
-                    "ONE_DISTINCT_JOB_ID_ONE_DYNAMIC_SCHEMA_BINDING_SET_AND_ONE_"
-                    "VIDEO_OUTPUT_WITHOUT_MATCHING_ANY_FROZEN_FIXTURE_URL"
+                    "HASH_RESOLUTION_RECEIPT_AND_RESOLVED_TREE_BYTES_THEN_DERIVE_"
+                    "JOB_ID_FROM_REQUEST_ID_NORMALIZED_URL_COMMIT_TREE_OID_AND_"
+                    "TREE_SHA256_AND_REQUIRE_ONE_DYNAMIC_SCHEMA_BINDING_SET_AND_"
+                    "ONE_VIDEO_OUTPUT_FOR_THE_UNLISTED_PUBLIC_SKILL_URL"
                 ),
                 "side_effects_allowed_during_authoring": False,
             },
@@ -1318,7 +2228,7 @@ def _schema_at_json_pointer(
     for token in pointer.removeprefix("/").split("/"):
         if not isinstance(current, Mapping):
             return None
-        if token.isdigit():
+        if token in {"*", "-1"} or token.isdigit():
             current = current.get("items")
             continue
         properties = current.get("properties")
@@ -1567,6 +2477,35 @@ def oracle_evaluator_registry(
             "DUPLICATE_OMITTED_OR_SUBSTITUTED_SET_MEMBER_MUST_FAIL"
         ),
     }
+    for evaluator_id, artifact_kind, failure_code in (
+        (
+            "CASE_RESULT_REF_SHA256_LINEAGE_V1",
+            "CASE_RESULT",
+            "CASE_RESULT_BYTE_LINEAGE_MISMATCH",
+        ),
+        (
+            "CASE_AGGREGATION_REF_SHA256_LINEAGE_V1",
+            "CASE_AGGREGATION_RECEIPT",
+            "CASE_AGGREGATION_BYTE_LINEAGE_MISMATCH",
+        ),
+    ):
+        evaluators[evaluator_id] = {
+            "artifact_kind": artifact_kind,
+            "implementation_entrypoint": (
+                "external_lab.oracle:verify_ref_sha256_bindings_v1"
+            ),
+            "algorithm_version": "1.0",
+            "decision_rule": (
+                "RESOLVE_EACH_DECLARED_REF_AND_REQUIRE_SHA256_OF_EXACT_BYTES_"
+                "TO_EQUAL_ITS_PAIRED_DECLARED_DIGEST"
+            ),
+            "required_inputs": [
+                "SCHEMA_X_REF_SHA256_BINDINGS",
+                "RESULT_OR_RECEIPT_BYTES",
+                "REFERENCED_BYTES",
+            ],
+            "failure_code": failure_code,
+        }
     registry = {
         "schema_version": "1.0",
         "registry_id": "ORACLE-EVALUATOR-REGISTRY-V1",
@@ -4348,6 +5287,7 @@ def _bind_artifact_dependencies(requirement_ir: dict[str, Any]) -> None:
     }
     registry = oracle_evaluator_registry(artifact_kinds, artifact_contracts)
     certification_evidence_refs = [
+        case_result_ref("METAMORPHIC", PUBLIC_SKILL_METAMORPHIC_CASE_ID),
         *[
             case_result_ref("ACCEPTANCE", str(case["case_id"]))
             for case in requirement_ir.get("acceptance_cases", [])
@@ -5993,14 +6933,23 @@ def task_bundle_for_workpack(
                 "LAB-RUN-ACCEPTANCE-CASE",
                 "LAB-RUN-NEGATIVE-CASE",
                 "LAB-RUN-REGISTRY-CASE",
+                "LAB-RUN-CASE-PARTITION",
+                "LAB-AGGREGATE-CASE-PARTITIONS",
+                "LAB-RUN-METAMORPHIC-CASE",
                 "LAB-EVALUATE-CASE-ORACLE",
             ],
             "required_subcommands": [
                 "run-acceptance-case",
                 "run-negative-case",
                 "run-registry-case",
+                "run-case-partition",
+                "aggregate-case-partitions",
+                "run-metamorphic-case",
                 "evaluate-case-oracle",
             ],
+            "required_source_resolution_entrypoint": (
+                PUBLIC_SKILL_SOURCE_RESOLUTION_ENTRYPOINT
+            ),
             "assertion_operators": [
                 "VALIDATED_RECEIPT_EXISTS",
                 "SET_EQUALS",
@@ -6010,6 +6959,8 @@ def task_bundle_for_workpack(
             ],
             "required_evaluator_ids": [
                 "EXACT_CASE_SET_ORACLE_V1",
+                "CASE_RESULT_REF_SHA256_LINEAGE_V1",
+                "CASE_AGGREGATION_REF_SHA256_LINEAGE_V1",
                 *artifact_evaluator_ids,
             ],
             "implementation_obligations": {
@@ -6019,7 +6970,8 @@ def task_bundle_for_workpack(
                     "Fail closed on unknown operators, evaluator IDs, or evidence references.",
                 ],
                 "LAB-CLI": [
-                    "Expose the three required subcommands with fixture-ref and result-ref arguments.",
+                    "Expose all seven required subcommands with their declared parameter contracts.",
+                    "Implement and invoke external_lab.sources:resolve_public_skill_source_v1 from run-metamorphic-case before content analysis.",
                     "Write hash-bound command and side-effect receipts for every invocation.",
                 ],
                 "LAB-FIXTURES": [

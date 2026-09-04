@@ -45,6 +45,8 @@ from .semantic_contracts import (
     CASE_EXECUTION_RESULT_ROOT_REF,
     ORACLE_EVALUATOR_REGISTRY_REF,
     PUBLIC_SKILL_JOB_INTERFACE_REF,
+    PUBLIC_SKILL_METAMORPHIC_CASE_ID,
+    PUBLIC_SKILL_SOURCE_RESOLUTION_ENTRYPOINT,
     build_artifact_obligation_manifest,
     compile_declared_production_contracts,
     explicit_production_enabled,
@@ -16081,11 +16083,7 @@ def _bind_commands_to_workpack_artifact_roots(
             if is_coding_command
             else []
         )
-        is_case_runner = command_id in {
-            "LAB-RUN-ACCEPTANCE-CASE",
-            "LAB-RUN-NEGATIVE-CASE",
-            "LAB-RUN-REGISTRY-CASE",
-        }
+        is_case_runner = command_id == "LAB-RUN-CASE-PARTITION"
         lease_eligible = is_coding_command or (
             workpack_id == CASE_EVIDENCE_WRITER_WORKPACK_ID
             and is_case_runner
@@ -17475,6 +17473,97 @@ def _case_oracle_bindings(
     }
 
 
+def _case_aggregation_receipt_schema(
+    *,
+    schema_id: str,
+    case_id: str,
+    case_kind: str,
+    fragment_manifest_ref: str,
+    fragment_refs: Sequence[str],
+    result_ref: str,
+) -> dict[str, Any]:
+    """Bind one Case aggregate receipt to the exact partition fragments."""
+
+    return {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": schema_id,
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "case_id",
+            "case_kind",
+            "fragment_manifest_ref",
+            "fragment_manifest_sha256",
+            "fragment_refs",
+            "fragment_sha256s",
+            "result_ref",
+            "aggregation_command_receipt_ref",
+            "aggregation_command_receipt_sha256",
+            "status",
+        ],
+        "properties": {
+            "case_id": {"const": case_id},
+            "case_kind": {"const": case_kind},
+            "fragment_manifest_ref": {"const": fragment_manifest_ref},
+            "fragment_manifest_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$",
+            },
+            "fragment_refs": {"const": list(fragment_refs)},
+            "fragment_sha256s": {
+                "type": "array",
+                "minItems": len(fragment_refs),
+                "maxItems": len(fragment_refs),
+                "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            },
+            "result_ref": {"const": result_ref},
+            "aggregation_command_receipt_ref": {
+                "type": "string",
+                "minLength": 1,
+            },
+            "aggregation_command_receipt_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$",
+            },
+            "status": {"const": "PASS"},
+        },
+        "x-ref-sha256-bindings": [
+            {
+                "ref_pointer": "/fragment_manifest_ref",
+                "sha256_pointer": "/fragment_manifest_sha256",
+                "pairing": "SINGLE",
+            },
+            {
+                "ref_pointer": "/fragment_refs/*",
+                "sha256_pointer": "/fragment_sha256s/*",
+                "pairing": "SAME_INDEX_EXACT_CARDINALITY",
+            },
+            {
+                "ref_pointer": "/aggregation_command_receipt_ref",
+                "sha256_pointer": "/aggregation_command_receipt_sha256",
+                "pairing": "SINGLE",
+            },
+        ],
+        "x-byte-lineage-evaluator": {
+            "evaluator_id": "CASE_AGGREGATION_REF_SHA256_LINEAGE_V1",
+            "implementation_entrypoint": (
+                "external_lab.oracle:verify_ref_sha256_bindings_v1"
+            ),
+            "algorithm_version": "1.0",
+            "hash_algorithm": "SHA-256",
+            "byte_mode": "EXACT_REFERENCED_BYTES_NO_REENCODING",
+            "unknown_or_unresolved_ref_disposition": "FAIL_CLOSED",
+            "failure_code": "CASE_AGGREGATION_BYTE_LINEAGE_MISMATCH",
+        },
+        "x-invariants": [
+            "FRAGMENT_REFS_AND_SHA256S_HAVE_EQUAL_CARDINALITY",
+            "EVERY_FRAGMENT_SHA256_MATCHES_REFERENCED_BYTES",
+            "FRAGMENT_MANIFEST_SHA256_MATCHES_REFERENCED_BYTES",
+            "AGGREGATION_COMMAND_RECEIPT_SHA256_MATCHES_REFERENCED_BYTES",
+        ],
+    }
+
+
 def _specialize_case_result_schema(
     base_schema: Mapping[str, Any],
     *,
@@ -17483,6 +17572,7 @@ def _specialize_case_result_schema(
     case_kind: str,
     fixture_sha256: str,
     oracle_bindings: Mapping[str, Any],
+    job_read_partitions: Sequence[Mapping[str, Any]],
     expected_failure: str | None,
 ) -> dict[str, Any]:
     schema = deepcopy(dict(base_schema))
@@ -17516,6 +17606,54 @@ def _specialize_case_result_schema(
                     "maxContains": 1,
                 }
                 for item in assertion_manifest
+            ],
+        }
+    )
+    partition_manifest = [dict(item) for item in job_read_partitions]
+    properties["job_partition_manifest_sha256"] = {
+        "const": _json_hash(partition_manifest)
+    }
+    properties["aggregation_receipt_ref"] = {
+        "const": (
+            f"{CASE_EXECUTION_RESULT_ROOT_REF}/aggregation/"
+            f"{case_kind.lower()}-{_slug(case_id).lower()}.receipt.json"
+        )
+    }
+    partition_results = properties["job_partition_results"]
+    partition_results.update(
+        {
+            "minItems": len(partition_manifest),
+            "maxItems": len(partition_manifest),
+            "uniqueItems": True,
+            "allOf": [
+                {
+                    "contains": {
+                        "type": "object",
+                        "properties": {
+                            "job_id": {"const": item["job_id"]},
+                            "lease_receipt_ref": {
+                                "const": item["lease_receipt_ref"]
+                            },
+                            "result_fragment_ref": {
+                                "const": item["result_fragment_ref"]
+                            },
+                            "fragment_artifact_manifest_ref": {
+                                "const": item[
+                                    "fragment_artifact_manifest_ref"
+                                ]
+                            },
+                        },
+                        "required": [
+                            "job_id",
+                            "lease_receipt_ref",
+                            "result_fragment_ref",
+                            "fragment_artifact_manifest_ref",
+                        ],
+                    },
+                    "minContains": 1,
+                    "maxContains": 1,
+                }
+                for item in partition_manifest
             ],
         }
     )
@@ -17840,18 +17978,73 @@ def _external_lab_case_command_contracts(
 
     result_root = f"{execution_root}/evidence/cases"
     contracts: list[dict[str, Any]] = []
-    for command_id, subcommand, case_kinds in (
-        ("LAB-RUN-ACCEPTANCE-CASE", "run-acceptance-case", ["ACCEPTANCE"]),
-        ("LAB-RUN-NEGATIVE-CASE", "run-negative-case", ["NEGATIVE"]),
+    for command_id, subcommand, case_kinds, required_flags, read_result_root in (
+        (
+            "LAB-RUN-ACCEPTANCE-CASE",
+            "run-acceptance-case",
+            ["ACCEPTANCE"],
+            ["--fixture-ref", "--result-ref"],
+            True,
+        ),
+        (
+            "LAB-RUN-NEGATIVE-CASE",
+            "run-negative-case",
+            ["NEGATIVE"],
+            ["--fixture-ref", "--result-ref"],
+            True,
+        ),
         (
             "LAB-RUN-REGISTRY-CASE",
             "run-registry-case",
             ["INVARIANT", "SCHEMA_NATIVE"],
+            ["--fixture-ref", "--result-ref"],
+            False,
+        ),
+        (
+            "LAB-RUN-CASE-PARTITION",
+            "run-case-partition",
+            ["ACCEPTANCE", "NEGATIVE"],
+            [
+                "--fixture-ref",
+                "--job-id",
+                "--lease-receipt-ref",
+                "--result-fragment-ref",
+                "--fragment-artifact-manifest-ref",
+            ],
+            False,
+        ),
+        (
+            "LAB-AGGREGATE-CASE-PARTITIONS",
+            "aggregate-case-partitions",
+            ["ACCEPTANCE", "NEGATIVE"],
+            [
+                "--fixture-ref",
+                "--fragment-manifest-ref",
+                "--aggregation-receipt-ref",
+                "--aggregation-receipt-schema-ref",
+                "--result-ref",
+            ],
+            True,
+        ),
+        (
+            "LAB-RUN-METAMORPHIC-CASE",
+            "run-metamorphic-case",
+            ["METAMORPHIC"],
+            ["--fixture-ref", "--resolution-receipt-ref", "--result-ref"],
+            False,
         ),
         (
             "LAB-EVALUATE-CASE-ORACLE",
             "evaluate-case-oracle",
-            ["ACCEPTANCE", "NEGATIVE", "INVARIANT", "SCHEMA_NATIVE"],
+            [
+                "ACCEPTANCE",
+                "NEGATIVE",
+                "INVARIANT",
+                "SCHEMA_NATIVE",
+                "METAMORPHIC",
+            ],
+            ["--fixture-ref", "--result-ref"],
+            True,
         ),
     ):
         command = {
@@ -17864,7 +18057,7 @@ def _external_lab_case_command_contracts(
             "executable_status": "PLANNED_NOT_INSTALLED",
             "argv": [executable, "-m", "external_lab", subcommand],
             "parameter_contract": {
-                "required_flags": ["--fixture-ref", "--result-ref"],
+                "required_flags": required_flags,
                 "fixture_ref_contract": {
                     "scheme": "harness-resource",
                     "authority": "candidate",
@@ -17893,11 +18086,29 @@ def _external_lab_case_command_contracts(
             "allowed_modes": ["LAB_CERTIFICATION"],
             "expected_exit_codes": [0, 2],
             "stdout_stderr_evidence_required": True,
-            "allowed_read_roots": [candidate_root, result_root],
+            "allowed_read_roots": [
+                candidate_root,
+                *([result_root] if read_result_root else []),
+            ],
             "allowed_write_roots": [result_root],
             "auto_execute": False,
             "shell": False,
         }
+        if command_id == "LAB-RUN-METAMORPHIC-CASE":
+            command["implementation_entrypoint"] = (
+                PUBLIC_SKILL_SOURCE_RESOLUTION_ENTRYPOINT
+            )
+            command["parameter_contract"][
+                "source_resolution_entrypoint"
+            ] = PUBLIC_SKILL_SOURCE_RESOLUTION_ENTRYPOINT
+            command["network_access_contract"] = {
+                "mode": "READ_ONLY_HTTPS_FOR_DECLARED_PUBLIC_SKILL_URL",
+                "allowed_hosts": ["github.com"],
+                "request_url_pointer": "/input/skill_url",
+                "resolution_receipt_required": True,
+                "resolved_tree_bytes_required": True,
+                "target_skill_execution_forbidden": True,
+            }
         command["command_sha256"] = _hash_without_field(
             command, "command_sha256"
         )
@@ -18008,6 +18219,188 @@ def _bind_case_execution_contracts(
                         ],
                     }
                 )
+    public_vector = public_job_interface["metamorphic_acceptance_vector"]
+    public_case_id = str(public_vector["case_id"])
+    if public_case_id != PUBLIC_SKILL_METAMORPHIC_CASE_ID:
+        raise ValueError("public Skill metamorphic Case identity drifted")
+    public_case_result_ref = case_result_ref("METAMORPHIC", public_case_id)
+    public_case_schema_relative = (
+        "validation/schemas/cases/"
+        f"metamorphic-{_slug(public_case_id).lower()}.result.schema.json"
+    )
+    public_case_schema_ref = (
+        f"{LOGICAL_CANDIDATE_ROOT}/{public_case_schema_relative}"
+    )
+    public_case_schema = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": public_case_schema_ref,
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "case_id",
+            "case_kind",
+            "request_sha256",
+            "request_id",
+            "normalized_skill_url",
+            "requested_revision",
+            "resolution_receipt_ref",
+            "resolution_receipt_sha256",
+            "resolved_commit_sha",
+            "resolved_git_tree_oid",
+            "resolved_tree_ref",
+            "resolved_tree_sha256",
+            "derived_job_id",
+            "output_video_count",
+            "source_is_frozen_before_analysis",
+            "target_skill_execution_enabled",
+            "command_receipt_ref",
+            "command_receipt_sha256",
+            "side_effects_started",
+            "oracle_decision",
+            "status",
+        ],
+        "properties": {
+            "case_id": {"const": public_case_id},
+            "case_kind": {"const": "METAMORPHIC"},
+            "request_sha256": {"const": _json_hash(public_vector["input"])},
+            "request_id": {
+                "const": public_vector["input"]["request_id"]
+            },
+            "normalized_skill_url": {
+                "const": public_vector["input"]["skill_url"]
+                .removesuffix(".git")
+                .rstrip("/")
+            },
+            "requested_revision": {
+                "const": public_vector["input"]["requested_revision"]
+            },
+            "resolution_receipt_ref": {
+                "const": public_vector["resolution_contract"][
+                    "resolution_receipt_ref"
+                ]
+            },
+            "resolution_receipt_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$",
+            },
+            "resolved_commit_sha": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{40}$",
+            },
+            "resolved_git_tree_oid": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{40}$",
+            },
+            "resolved_tree_ref": {"type": "string", "minLength": 1},
+            "resolved_tree_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$",
+            },
+            "derived_job_id": {
+                "type": "string",
+                "pattern": "^JOB-[0-9A-F]{16}$",
+            },
+            "output_video_count": {"const": 1},
+            "source_is_frozen_before_analysis": {"const": True},
+            "target_skill_execution_enabled": {"const": False},
+            "command_receipt_ref": {"type": "string", "minLength": 1},
+            "command_receipt_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$",
+            },
+            "side_effects_started": {"const": False},
+            "oracle_decision": {"enum": ["PASS", "FAIL"]},
+            "status": {"enum": ["PASS", "FAIL"]},
+        },
+        "x-ref-sha256-bindings": [
+            {
+                "ref_pointer": "/resolution_receipt_ref",
+                "sha256_pointer": "/resolution_receipt_sha256",
+            },
+            {
+                "ref_pointer": "/resolved_tree_ref",
+                "sha256_pointer": "/resolved_tree_sha256",
+            },
+            {
+                "ref_pointer": "/command_receipt_ref",
+                "sha256_pointer": "/command_receipt_sha256",
+            },
+        ],
+        "x-job-identity-derivation": {
+            "algorithm": "SHA256_CANONICAL_RESOLVED_JOB_IDENTITY_PREFIX_16",
+            "canonicalization": (
+                "UTF8_JSON_SORT_KEYS_COMPACT_SEPARATORS_PRESERVE_ARRAY_ORDER_V1"
+            ),
+            "identity_field_pointers": [
+                "/request_id",
+                "/normalized_skill_url",
+                "/resolved_commit_sha",
+                "/resolved_git_tree_oid",
+                "/resolved_tree_sha256",
+            ],
+            "output_pointer": "/derived_job_id",
+            "output_format": "JOB-UPPERCASE-FIRST-16-SHA256-HEX",
+            "resolution_receipt_field_equality_required": True,
+        },
+        "x-invariants": [
+            "RESOLUTION_RECEIPT_SHA256_MATCHES_REFERENCED_BYTES",
+            "RESOLVED_TREE_SHA256_MATCHES_REFERENCED_BYTES",
+            "RESULT_RESOLVED_FIELDS_EQUAL_HASH_VERIFIED_RESOLUTION_RECEIPT",
+            "DERIVED_JOB_ID_EQUALS_CANONICAL_RESOLVED_IDENTITY_HASH",
+        ],
+        "allOf": [
+            {
+                "if": {
+                    "properties": {"status": {"const": "PASS"}},
+                    "required": ["status"],
+                },
+                "then": {
+                    "properties": {"oracle_decision": {"const": "PASS"}}
+                },
+            }
+        ],
+    }
+    _write_json(staging / public_case_schema_relative, public_case_schema)
+    public_case_schema_sha256 = _file_hash(
+        staging / public_case_schema_relative
+    )
+    public_fixture_ref = (
+        f"{PUBLIC_SKILL_JOB_INTERFACE_REF}#/metamorphic_acceptance_vector"
+    )
+    metamorphic_case_invocations = [
+        {
+            "case_id": public_case_id,
+            "case_kind": "METAMORPHIC",
+            "owner_workpack_id": CASE_EVIDENCE_WRITER_WORKPACK_ID,
+            "executor_command_id": "LAB-RUN-METAMORPHIC-CASE",
+            "source_resolution_entrypoint": (
+                PUBLIC_SKILL_SOURCE_RESOLUTION_ENTRYPOINT
+            ),
+            "fixture_ref": public_fixture_ref,
+            "fixture_fragment_sha256": _json_hash(public_vector),
+            "result_ref": public_case_result_ref,
+            "result_schema_ref": public_case_schema_ref,
+            "result_schema_sha256": public_case_schema_sha256,
+            "executor_argv": [
+                planned_python,
+                "-m",
+                "external_lab",
+                "run-metamorphic-case",
+                "--fixture-ref",
+                public_fixture_ref,
+                "--resolution-receipt-ref",
+                public_vector["resolution_contract"]["resolution_receipt_ref"],
+                "--result-ref",
+                public_case_result_ref,
+            ],
+            "oracle_contract": {
+                **deepcopy(public_vector["oracle"]),
+                "executor_command_id": "LAB-EVALUATE-CASE-ORACLE",
+                "result_schema_ref": public_case_schema_ref,
+                "result_schema_sha256": public_case_schema_sha256,
+            },
+        }
+    ]
     manifest = {
         "schema_version": "1.0",
         "status": "DECLARE_ONLY",
@@ -18035,9 +18428,11 @@ def _bind_case_execution_contracts(
                     str(item["result_ref"])
                     for item in registry_case_invocations
                 ],
+                public_case_result_ref,
             ]
         ),
         "registry_case_invocations": registry_case_invocations,
+        "metamorphic_case_invocations": metamorphic_case_invocations,
         "oracle_evaluator_registry_ref": ORACLE_EVALUATOR_REGISTRY_REF,
         "oracle_evaluator_registry_sha256": registry_sha256,
         "public_skill_job_interface_ref": PUBLIC_SKILL_JOB_INTERFACE_REF,
@@ -18067,6 +18462,10 @@ def _bind_case_execution_contracts(
             "assertion_manifest_sha256",
             "command_receipt_ref",
             "command_receipt_sha256",
+            "job_partition_results",
+            "job_partition_manifest_sha256",
+            "aggregation_receipt_ref",
+            "aggregation_receipt_sha256",
             "assertion_results",
             "oracle_decision",
             "status",
@@ -18089,6 +18488,63 @@ def _bind_case_execution_contracts(
             },
             "command_receipt_ref": {"type": "string", "minLength": 1},
             "command_receipt_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$",
+            },
+            "job_partition_results": {
+                "type": "array",
+                "minItems": 0,
+                "uniqueItems": True,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": [
+                        "job_id",
+                        "lease_receipt_ref",
+                        "lease_receipt_sha256",
+                        "result_fragment_ref",
+                        "result_fragment_sha256",
+                        "fragment_artifact_manifest_ref",
+                        "fragment_artifact_manifest_sha256",
+                    ],
+                    "properties": {
+                        "job_id": {"type": "string", "minLength": 1},
+                        "lease_receipt_ref": {
+                            "type": "string",
+                            "minLength": 1,
+                        },
+                        "lease_receipt_sha256": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{64}$",
+                        },
+                        "result_fragment_ref": {
+                            "type": "string",
+                            "minLength": 1,
+                        },
+                        "result_fragment_sha256": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{64}$",
+                        },
+                        "fragment_artifact_manifest_ref": {
+                            "type": "string",
+                            "minLength": 1,
+                        },
+                        "fragment_artifact_manifest_sha256": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{64}$",
+                        },
+                    },
+                },
+            },
+            "job_partition_manifest_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$",
+            },
+            "aggregation_receipt_ref": {
+                "type": "string",
+                "minLength": 1,
+            },
+            "aggregation_receipt_sha256": {
                 "type": "string",
                 "pattern": "^[0-9a-f]{64}$",
             },
@@ -18248,6 +18704,52 @@ def _bind_case_execution_contracts(
             "side_effects_started": {"const": False},
             "oracle_decision": {"enum": ["PASS", "FAIL"]},
             "status": {"enum": ["PASS", "FAIL"]},
+        },
+        "x-ref-sha256-bindings": [
+            {
+                "ref_pointer": "/command_receipt_ref",
+                "sha256_pointer": "/command_receipt_sha256",
+                "pairing": "SINGLE",
+            },
+            {
+                "ref_pointer": "/job_partition_results/*/lease_receipt_ref",
+                "sha256_pointer": (
+                    "/job_partition_results/*/lease_receipt_sha256"
+                ),
+                "pairing": "SAME_ARRAY_ITEM",
+            },
+            {
+                "ref_pointer": "/job_partition_results/*/result_fragment_ref",
+                "sha256_pointer": (
+                    "/job_partition_results/*/result_fragment_sha256"
+                ),
+                "pairing": "SAME_ARRAY_ITEM",
+            },
+            {
+                "ref_pointer": (
+                    "/job_partition_results/*/fragment_artifact_manifest_ref"
+                ),
+                "sha256_pointer": (
+                    "/job_partition_results/*/fragment_artifact_manifest_sha256"
+                ),
+                "pairing": "SAME_ARRAY_ITEM",
+            },
+            {
+                "ref_pointer": "/aggregation_receipt_ref",
+                "sha256_pointer": "/aggregation_receipt_sha256",
+                "pairing": "SINGLE",
+            },
+        ],
+        "x-byte-lineage-evaluator": {
+            "evaluator_id": "CASE_RESULT_REF_SHA256_LINEAGE_V1",
+            "implementation_entrypoint": (
+                "external_lab.oracle:verify_ref_sha256_bindings_v1"
+            ),
+            "algorithm_version": "1.0",
+            "hash_algorithm": "SHA-256",
+            "byte_mode": "EXACT_REFERENCED_BYTES_NO_REENCODING",
+            "unknown_or_unresolved_ref_disposition": "FAIL_CLOSED",
+            "failure_code": "CASE_RESULT_BYTE_LINEAGE_MISMATCH",
         },
         "allOf": [
             {
@@ -18457,6 +18959,70 @@ def _bind_case_execution_contracts(
             result_schema_ref = (
                 f"{LOGICAL_CANDIDATE_ROOT}/{result_schema_relative}"
             )
+            partition_job_ids = sorted(
+                {
+                    str(expectation["job_id"])
+                    for expectation in (
+                        fixture_input.get("artifact_expectations", [])
+                        if isinstance(fixture_input, Mapping)
+                        else []
+                    )
+                    if isinstance(expectation, Mapping)
+                    and expectation.get("job_id")
+                }
+            )
+            job_read_partitions = [
+                {
+                    "job_id": job_id,
+                    "lease_receipt_ref": (
+                        f"{LOGICAL_EXECUTION_ROOT}/evidence/"
+                        "job_artifact_leases/LAB-CERTIFICATION/"
+                        f"LAB-RUN-CASE-PARTITION/{job_id}.lease.json"
+                    ),
+                    "result_fragment_ref": (
+                        f"{CASE_EXECUTION_RESULT_ROOT_REF}/fragments/"
+                        f"{case_kind.lower()}-{_slug(case_id).lower()}/"
+                        f"{_slug(job_id).lower()}.result.json"
+                    ),
+                    "fragment_artifact_manifest_ref": (
+                        f"{CASE_EXECUTION_RESULT_ROOT_REF}/fragments/"
+                        f"{case_kind.lower()}-{_slug(case_id).lower()}/"
+                        f"{_slug(job_id).lower()}.artifact-manifest.json"
+                    ),
+                }
+                for job_id in partition_job_ids
+            ]
+            fragment_manifest_ref = (
+                f"{CASE_EXECUTION_RESULT_ROOT_REF}/fragments/"
+                f"{case_kind.lower()}-{_slug(case_id).lower()}/manifest.json"
+            )
+            aggregation_receipt_ref = (
+                f"{CASE_EXECUTION_RESULT_ROOT_REF}/aggregation/"
+                f"{case_kind.lower()}-{_slug(case_id).lower()}.receipt.json"
+            )
+            aggregation_schema_relative = (
+                "validation/schemas/cases/"
+                f"{case_kind.lower()}-{_slug(case_id).lower()}."
+                "aggregation-receipt.schema.json"
+            )
+            aggregation_schema_ref = (
+                f"{LOGICAL_CANDIDATE_ROOT}/{aggregation_schema_relative}"
+            )
+            aggregation_schema = _case_aggregation_receipt_schema(
+                schema_id=aggregation_schema_ref,
+                case_id=case_id,
+                case_kind=case_kind,
+                fragment_manifest_ref=fragment_manifest_ref,
+                fragment_refs=[
+                    item["result_fragment_ref"]
+                    for item in job_read_partitions
+                ],
+                result_ref=result_ref,
+            )
+            _write_json(staging / aggregation_schema_relative, aggregation_schema)
+            aggregation_schema_sha256 = _file_hash(
+                staging / aggregation_schema_relative
+            )
             specialized_result_schema = _specialize_case_result_schema(
                 result_schema,
                 schema_id=result_schema_ref,
@@ -18464,12 +19030,17 @@ def _bind_case_execution_contracts(
                 case_kind=case_kind,
                 fixture_sha256=fixture_sha256,
                 oracle_bindings=oracle_bindings,
+                job_read_partitions=job_read_partitions,
                 expected_failure=(
                     str(case.get("expected_failure") or "EXPECTED_REJECTION")
                     if case_kind == "NEGATIVE"
                     else None
                 ),
             )
+            specialized_result_schema["x-aggregation-receipt-schema"] = {
+                "ref": aggregation_schema_ref,
+                "sha256": aggregation_schema_sha256,
+            }
             _write_json(
                 staging / result_schema_relative,
                 specialized_result_schema,
@@ -18489,33 +19060,40 @@ def _bind_case_execution_contracts(
                 "--result-ref",
                 result_ref,
             ]
-            partition_job_ids = sorted(
-                {
-                    str(expectation["job_id"])
-                    for expectation in (
-                        fixture_input.get("artifact_expectations", [])
-                        if isinstance(fixture_input, Mapping)
-                        else []
-                    )
-                    if isinstance(expectation, Mapping)
-                    and expectation.get("job_id")
-                }
-            )
-            job_read_partitions = [
-                {
-                    "job_id": job_id,
-                    "lease_receipt_ref": (
-                        f"{LOGICAL_EXECUTION_ROOT}/evidence/"
-                        "job_artifact_leases/LAB-CERTIFICATION/"
-                        f"{command_id}/{job_id}.lease.json"
-                    ),
-                    "result_fragment_ref": (
-                        f"{CASE_EXECUTION_RESULT_ROOT_REF}/fragments/"
-                        f"{case_kind.lower()}-{_slug(case_id).lower()}/"
-                        f"{_slug(job_id).lower()}.result.json"
-                    ),
-                }
-                for job_id in partition_job_ids
+            partition_executor_argvs = [
+                [
+                    planned_python,
+                    "-m",
+                    "external_lab",
+                    "run-case-partition",
+                    "--fixture-ref",
+                    fixture_ref,
+                    "--job-id",
+                    partition["job_id"],
+                    "--lease-receipt-ref",
+                    partition["lease_receipt_ref"],
+                    "--result-fragment-ref",
+                    partition["result_fragment_ref"],
+                    "--fragment-artifact-manifest-ref",
+                    partition["fragment_artifact_manifest_ref"],
+                ]
+                for partition in job_read_partitions
+            ]
+            aggregation_executor_argv = [
+                planned_python,
+                "-m",
+                "external_lab",
+                "aggregate-case-partitions",
+                "--fixture-ref",
+                fixture_ref,
+                "--fragment-manifest-ref",
+                fragment_manifest_ref,
+                "--aggregation-receipt-ref",
+                aggregation_receipt_ref,
+                "--aggregation-receipt-schema-ref",
+                aggregation_schema_ref,
+                "--result-ref",
+                result_ref,
             ]
             for step in case.get("steps", []):
                 if isinstance(step, dict):
@@ -18534,6 +19112,23 @@ def _bind_case_execution_contracts(
                         "THEN_HASH_BOUND_CASE_AGGREGATION"
                     ),
                     "job_read_partitions": job_read_partitions,
+                    "job_partition_manifest_sha256": _json_hash(
+                        job_read_partitions
+                    ),
+                    "partition_executor_command_id": (
+                        "LAB-RUN-CASE-PARTITION"
+                    ),
+                    "partition_executor_argvs": partition_executor_argvs,
+                    "fragment_manifest_ref": fragment_manifest_ref,
+                    "aggregation_executor_command_id": (
+                        "LAB-AGGREGATE-CASE-PARTITIONS"
+                    ),
+                    "aggregation_executor_argv": aggregation_executor_argv,
+                    "aggregation_receipt_ref": aggregation_receipt_ref,
+                    "aggregation_receipt_schema_ref": aggregation_schema_ref,
+                    "aggregation_receipt_schema_sha256": (
+                        aggregation_schema_sha256
+                    ),
                     "result_ref": result_ref,
                     "result_schema_ref": result_schema_ref,
                     "result_schema_sha256": result_schema_sha256,
@@ -19693,6 +20288,74 @@ def _write_factory_regression_execution_receipt(
     _write_json(staging / FACTORY_REGRESSION_EXECUTION_RECEIPT_REF, receipt)
 
 
+def _validation_check_evidence_refs(check_id: Any) -> list[str]:
+    """Return check-specific Candidate evidence instead of a generic bundle."""
+
+    check = str(check_id or "")
+    if check == "EXECUTABLE_ACCEPTANCE_AND_ORACLE_CONTRACTS":
+        return [
+            "validation/PUBLIC_SKILL_JOB_INTERFACE.json",
+            "validation/CASE_EXECUTION_MANIFEST.json",
+            "validation/ORACLE_EVALUATOR_REGISTRY.json",
+            "validation/ACCEPTANCE_CASES.json",
+            "validation/NEGATIVE_CASES.json",
+            "validation/schemas/CASE_RESULT.schema.json",
+            "project_start_packages/external_lab/commands/LAB-CERTIFICATION.commands.json",
+        ]
+    if check == "SEMANTIC_PRODUCTION_CONTRACTS":
+        return [
+            "canonical_sources/FROZEN_REQUIREMENT_IR.json",
+            "canonical_sources/NORMATIVE_ATOM_CATALOG.json",
+            "canonical_sources/ATOM_COVERAGE_MATRIX.json",
+        ]
+    if check == "WORKPACK_ARTIFACT_HASH_BINDINGS":
+        return [
+            "PACKAGE_MANIFEST.json",
+            "PHASE_DEPENDENCY_MANIFEST.json",
+            "ENGINEERING_PROJECT_DAG.json",
+        ]
+    if check in {
+        "SOURCE_ATOM_AND_COVERAGE",
+        "AUTHORITATIVE_SOURCE_REGISTRY",
+    }:
+        return [
+            "canonical_sources/SOURCE_MANIFEST.json",
+            "canonical_sources/NORMATIVE_ATOM_CATALOG.json",
+            "canonical_sources/ATOM_COVERAGE_MATRIX.json",
+        ]
+    if check in {
+        "IDENTITY_REFERENCES_AND_HASHES",
+        "PACKAGE_LIFECYCLE_IDENTITY",
+        "LOGICAL_TARGET_ROOT_BINDING",
+    }:
+        return [
+            "PACKAGE_MANIFEST.json",
+            "START_CONTEXT.json",
+            "FACTORY_PROVENANCE.json",
+        ]
+    if check in {
+        "CANDIDATE_IMMUTABILITY_AND_EXECUTION_ROOT",
+        "PHYSICAL_CANDIDATE_READ_ONLY",
+    }:
+        return ["START_CONTEXT.json", "CAPSULE.json"]
+    if check in {
+        "PHASE_P3_AND_RELEASE_ORDER",
+        "THREE_PROJECT_DAG_AND_PACKAGES",
+    }:
+        return [
+            "PHASE_DEPENDENCY_MANIFEST.json",
+            "ENGINEERING_PROJECT_DAG.json",
+            "RELEASE_PIPELINE_MANIFEST.json",
+        ]
+    if check == "VALIDATION_HANDOFF_AND_NONCLAIMS":
+        return ["AUTHORING_HANDOFF.md", "START.md", "README.md"]
+    return [
+        "PACKAGE_MANIFEST.json",
+        "canonical_sources/FROZEN_REQUIREMENT_IR.json",
+        "ENGINEERING_PROJECT_DAG.json",
+    ]
+
+
 def _write_validation_report(
     staging: Path,
     context: Mapping[str, str],
@@ -19701,14 +20364,6 @@ def _write_validation_report(
     repair_attempts: int = 0,
 ) -> None:
     validated = validator_report is not None and validator_report.get("status") == "PASS"
-    evidence_refs = [
-        "PACKAGE_MANIFEST.json",
-        "START_CONTEXT.json",
-        "canonical_sources/ATOM_COVERAGE_MATRIX.json",
-        "PHASE_DEPENDENCY_MANIFEST.json",
-        "ENGINEERING_PROJECT_DAG.json",
-        "AUTHORING_HANDOFF.md",
-    ]
     checks = []
     if validator_report:
         checks = [
@@ -19723,7 +20378,9 @@ def _write_validation_report(
                     else item.get("status")
                 ),
                 "finding_count": len(item.get("findings", [])),
-                "evidence_refs": evidence_refs,
+                "evidence_refs": _validation_check_evidence_refs(
+                    item.get("check_id")
+                ),
                 **(
                     {
                         "observation_status": (
