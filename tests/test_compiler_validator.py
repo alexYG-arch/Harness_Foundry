@@ -15,6 +15,7 @@ from unittest.mock import patch
 from harness_foundry_factory.compiler import (
     _mandatory_negative_cases,
     _repair_structural_hashes,
+    _seal_candidate_tree,
     compile_candidate,
 )
 from harness_foundry_factory.validator import (
@@ -51,7 +52,18 @@ class CompilerValidatorTests(unittest.TestCase):
         self.compile_result = self._compile("staging")
 
     def tearDown(self) -> None:
+        self._make_tree_writable(self.root)
         self.temporary.cleanup()
+
+    @staticmethod
+    def _make_tree_writable(root: Path) -> None:
+        if not root.exists():
+            return
+        for path in (root, *root.rglob("*")):
+            if path.is_symlink():
+                continue
+            mode = path.stat().st_mode
+            path.chmod(mode | (0o700 if path.is_dir() else 0o600))
 
     def _compile(self, staging_name: str, candidate: Path | None = None) -> dict:
         target = candidate or self.candidate
@@ -86,7 +98,34 @@ class CompilerValidatorTests(unittest.TestCase):
         )
         return candidate
 
+    def _compile_best_effort_permission_candidate(self, name: str) -> Path:
+        candidate = self.root / f"{name}-candidate"
+        ir = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+        ir["target"].update(
+            {
+                "output_root": str(candidate),
+                "execution_root": str(self.root / f"{name}-execution"),
+                "portability_mode": "LOGICAL_RESOURCE_URI",
+            }
+        )
+        ir["target"]["start_package_immutability_policy"] = {
+            "candidate_root_read_only_after_atomic_publication": True,
+            "candidate_execution_roots_must_not_overlap": True,
+            "candidate_write_after_publication": "FORBIDDEN",
+            "physical_permission_enforcement": "BEST_EFFORT_PERSONAL_LOCAL",
+            "permission_drift_disposition": "NON_BLOCKING_DIAGNOSTIC",
+        }
+        compile_candidate(
+            ir,
+            SPEC_ROOT,
+            self.root / f"{name}-staging",
+            candidate,
+            CREATED_AT,
+        )
+        return candidate
+
     def _mutate_json(self, relative_path: str, change) -> None:
+        self._make_tree_writable(self.candidate)
         path = self.candidate / relative_path
         value = json.loads(path.read_text(encoding="utf-8"))
         change(value)
@@ -120,8 +159,8 @@ class CompilerValidatorTests(unittest.TestCase):
             )
         )
 
-    @staticmethod
-    def _write_json(path: Path, value: dict) -> None:
+    def _write_json(self, path: Path, value: dict) -> None:
+        self._make_tree_writable(path.parent)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
             json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
@@ -301,6 +340,319 @@ class CompilerValidatorTests(unittest.TestCase):
             self.assertTrue(
                 (self.candidate / "project_start_packages" / directory).is_dir()
             )
+        self.assertFalse(
+            any(
+                path.stat().st_mode & 0o222
+                for path in (self.candidate, *self.candidate.rglob("*"))
+                if not path.is_symlink()
+            )
+        )
+        manifest = json.loads(
+            (self.candidate / "THREE_PROJECT_PROGRAM_MANIFEST.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(
+            manifest["epoch_domains"]["projection_rule"],
+            "NULL_REQUIREMENT_EPOCHS_TO_EXPLICIT_UNBOUND_ZERO_SENTINEL",
+        )
+        self.assertTrue(manifest["epoch_domains"]["unbound_zero_semantics"])
+        consistency = {
+            item["check_id"]: item for item in report["checks"]
+        }
+        self.assertEqual(
+            consistency["FACTORY_LOCAL_SOURCE_CONSISTENCY"]["status"],
+            "NOT_EVALUATED",
+        )
+        self.assertFalse(report["external_authority_oracles_evaluated"])
+        acceptance = json.loads(
+            (self.candidate / "validation/ACCEPTANCE_CASES.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        case = acceptance["cases"][0]
+        self.assertEqual(case["executor_command_id"], "LAB-RUN-ACCEPTANCE-CASE")
+        self.assertTrue(case["fixture_ref"].startswith("harness-resource://candidate/"))
+        self.assertTrue(case["result_ref"].startswith("harness-resource://execution/"))
+        self.assertEqual(
+            case["oracle_contract"]["executor_command_id"],
+            "LAB-EVALUATE-CASE-ORACLE",
+        )
+
+    def test_physical_candidate_write_bit_is_rejected(self) -> None:
+        path = self.candidate / "README.md"
+        path.chmod(path.stat().st_mode | 0o200)
+
+        self.assertIn("CANDIDATE_PHYSICALLY_WRITABLE", self._finding_codes())
+
+    def test_personal_local_permission_drift_is_nonblocking(self) -> None:
+        candidate = self._compile_best_effort_permission_candidate(
+            "best-effort-permission"
+        )
+        embedded = json.loads(
+            (
+                candidate
+                / "validation/START_PACKAGE_VALIDATION_REPORT.json"
+            ).read_text(encoding="utf-8")
+        )
+        embedded_permission = next(
+            check
+            for check in embedded["checks"]
+            if check["check_id"] == "PHYSICAL_CANDIDATE_READ_ONLY"
+        )
+        self.assertEqual(
+            embedded_permission["status"], "DEFERRED_NOT_OBSERVED"
+        )
+        self.assertEqual(
+            embedded_permission["observation_status"],
+            "NOT_OBSERVED_PREPUBLICATION",
+        )
+        self.assertEqual(
+            embedded_permission["validation_basis"],
+            "PREPUBLICATION_STAGING_NOT_YET_SEALED",
+        )
+        candidate.chmod(candidate.stat().st_mode | 0o200)
+
+        report = validate_candidate(candidate)
+        permission_check = next(
+            check
+            for check in report["checks"]
+            if check["check_id"] == "PHYSICAL_CANDIDATE_READ_ONLY"
+        )
+
+        self.assertEqual(report["status"], "PASS", report)
+        self.assertEqual(permission_check["status"], "PASS")
+        self.assertEqual(
+            permission_check["enforcement"], "BEST_EFFORT_PERSONAL_LOCAL"
+        )
+        self.assertEqual(permission_check["findings"], [])
+        self.assertIn(
+            "CANDIDATE_PERMISSION_DRIFT",
+            {item["code"] for item in report["non_blocking_findings"]},
+        )
+
+    def test_personal_local_content_drift_remains_blocking(self) -> None:
+        candidate = self._compile_best_effort_permission_candidate(
+            "best-effort-content-drift"
+        )
+        path = candidate / "README.md"
+        path.chmod(path.stat().st_mode | 0o200)
+        path.write_text(
+            path.read_text(encoding="utf-8") + "content drift\n",
+            encoding="utf-8",
+        )
+
+        report = validate_candidate(candidate)
+
+        self.assertEqual(report["status"], "FAIL")
+        self.assertIn(
+            "PORTABLE_FILE_HASH_MISMATCH",
+            {item["code"] for item in report["blocking_findings"]},
+        )
+
+    def test_case_fixture_hash_and_executor_binding_are_enforced(self) -> None:
+        self._make_tree_writable(self.candidate)
+        acceptance = json.loads(
+            (self.candidate / "validation/ACCEPTANCE_CASES.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        fixture_ref = acceptance["cases"][0]["fixture_ref"]
+        fixture = self.candidate / fixture_ref.removeprefix(
+            "harness-resource://candidate/"
+        )
+        fixture.write_text("{}\n", encoding="utf-8")
+
+        self.assertIn(
+            "EXECUTABLE_CASE_ORACLE_INCOMPLETE", self._finding_codes()
+        )
+
+    def test_string_tool_requirements_and_repository_pins_are_preserved(self) -> None:
+        candidate = self.root / "tool-and-source-candidate"
+        ir = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+        ir["target"]["output_root"] = str(candidate)
+        ir["target"]["required_tools"] = [
+            "Python 3.12",
+            "Node.js 22 LTS",
+            "Remotion",
+            "FFmpeg",
+            "FFprobe",
+            "MLX-Audio",
+            "Qwen3-TTS 0.6B 8-bit",
+            "Qwen3 ForcedAligner 0.6B 8-bit",
+            "Kokoro 82M fallback",
+            "pinned video-shotcraft",
+        ]
+        source = ir["sources"][0]
+        source.update(
+            {
+                "scope": "Reference repository https://github.com/example/example",
+                "repository_url": "https://github.com/example/example",
+                "revision": "main",
+                "commit_sha": "1" * 40,
+                "git_tree_oid": "2" * 40,
+                "tree_sha256": source["sha256"],
+                "license_spdx": "MIT",
+            }
+        )
+        compile_candidate(
+            ir,
+            SPEC_ROOT,
+            self.root / "tool-and-source-staging",
+            candidate,
+            CREATED_AT,
+        )
+
+        toolchain = json.loads(
+            (candidate / "validation/TOOLCHAIN_MANIFEST.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        labels = {
+            item.get("requirement_label") for item in toolchain["required_tools"]
+        }
+        self.assertTrue(set(ir["target"]["required_tools"]).issubset(labels))
+        source_manifest = json.loads(
+            (candidate / "canonical_sources/SOURCE_MANIFEST.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        compiled_source = next(
+            item
+            for item in source_manifest["sources"]
+            if item["source_id"] == source["source_id"]
+        )
+        self.assertEqual(compiled_source["commit_sha"], "1" * 40)
+        receipt = json.loads(
+            (
+                candidate
+                / "canonical_sources/evidence/SRC-CHAT-001.source_receipt.json"
+            ).read_text(encoding="utf-8")
+        )
+        self.assertEqual(receipt["repository_metadata"]["git_tree_oid"], "2" * 40)
+        self.assertEqual(validate_candidate(candidate)["status"], "PASS")
+
+    def test_factory_epoch_portability_and_target_subauthorizations_are_compiled(
+        self,
+    ) -> None:
+        candidate = self.root / "epoch-portable-candidate"
+        ir = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+        ir["target"].update(
+            {"output_root": str(candidate), "version": "1.0.0"}
+        )
+        common = {
+            "source_id": "SRC-CHAT-001",
+            "source_locator": "turn-1#target-side-effect-gates",
+            "text_or_lossless_paraphrase": "A target side effect requires a separate exact authorization.",
+            "modality": "MUST",
+            "qualifiers": [],
+            "order_constraints": [],
+            "units": [],
+            "defaults": [],
+            "cancel_retry_timeout": [],
+            "compatibility_constraints": [],
+            "explicit_non_goals": [],
+            "owner": "MAIN_HARNESS_BUILD",
+            "verification_mode": "AUTHORIZATION_GATE_RECEIPT",
+            "status": "PLANNED_NOT_VERIFIED",
+        }
+        ir["atoms"].extend(
+            [
+                {
+                    **common,
+                    "atom_id": "ATOM-TARGET-SKILL-EXECUTION-GATE",
+                    "error_semantics": [
+                        "TARGET_SKILL_EXECUTION_AUTHORIZATION_REQUIRED"
+                    ],
+                },
+                {
+                    **common,
+                    "atom_id": "ATOM-ASSET-ROUTING",
+                    "error_semantics": [
+                        "CODEX_IMAGE_GENERATION_AUTHORIZATION_REQUIRED"
+                    ],
+                },
+            ]
+        )
+        ir["acceptance_cases"].append(
+            {
+                "case_id": "AC-TARGET-SIDE-EFFECT-GATES",
+                "atom_ids": [
+                    "ATOM-TARGET-SKILL-EXECUTION-GATE",
+                    "ATOM-ASSET-ROUTING",
+                ],
+                "description": "Both target-side effects remain denied without separate exact authorizations.",
+                "evidence_type": "TARGET_SUBAUTHORIZATION_GATE_RECEIPTS",
+            }
+        )
+        compile_candidate(
+            ir,
+            SPEC_ROOT,
+            self.root / "epoch-portable-staging",
+            candidate,
+            CREATED_AT,
+            active_requirement_epoch=4,
+        )
+
+        package = json.loads(
+            (candidate / "PACKAGE_MANIFEST.json").read_text(encoding="utf-8")
+        )
+        context = json.loads(
+            (candidate / "START_CONTEXT.json").read_text(encoding="utf-8")
+        )
+        provenance = json.loads(
+            (candidate / "FACTORY_PROVENANCE.json").read_text(encoding="utf-8")
+        )
+        policy = json.loads(
+            (candidate / "AUTHORIZATION_POLICY.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            {package["requirement_epoch"], context["requirement_epoch"], provenance["requirement_epoch"]},
+            {4},
+        )
+        self.assertEqual(package["version"], "1.0.0")
+        self.assertEqual(context["candidate_root"], "harness-resource://candidate")
+        self.assertEqual(context["execution_root"], "harness-resource://execution")
+        for authorization_class in (
+            "TARGET_SKILL_EXECUTION_AUTHORIZATION",
+            "CODEX_IMAGE_GENERATION_AUTHORIZATION",
+        ):
+            self.assertIn(authorization_class, policy["authorization_classes"])
+            authorization = json.loads(
+                (candidate / f"{authorization_class}.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(authorization["status"], "NOT_GRANTED")
+            self.assertIsNone(authorization["exact_scope"])
+            self.assertEqual(
+                authorization["exact_scope_contract"],
+                {
+                    "required_fields": [
+                        "target_skill_id",
+                        "job_id",
+                        "commit_sha",
+                        "input_manifest_sha256",
+                        "environment_id",
+                        "environment_manifest_ref",
+                        "environment_manifest_sha256",
+                        "output_root_ref",
+                        "output_manifest_sha256",
+                    ],
+                    "scope_kind": (
+                        "EXACT_JOB_COMMIT_INPUT_ENVIRONMENT_AND_OUTPUT"
+                    ),
+                    "program_wide_scope_forbidden": True,
+                },
+            )
+            for field in (
+                "environment_receipt_ref",
+                "environment_receipt_sha256",
+                "output_receipt_ref",
+                "output_receipt_sha256",
+            ):
+                self.assertIsNone(authorization[field])
+        self.assertEqual(validate_candidate(candidate)["status"], "PASS")
 
     def test_immutable_candidate_uses_disjoint_external_execution_root(self) -> None:
         candidate = self.root / "immutable-candidate"
@@ -338,24 +690,31 @@ class CompilerValidatorTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        self.assertEqual(context["candidate_root"], str(candidate))
-        self.assertEqual(context["target_root"], str(candidate))
-        self.assertEqual(context["execution_root"], str(execution))
+        self.assertEqual(context["candidate_root"], "harness-resource://candidate")
+        self.assertEqual(context["target_root"], "harness-resource://candidate")
+        self.assertEqual(context["execution_root"], "harness-resource://execution")
         self.assertEqual(
             context["candidate_root_access"],
             "READ_ONLY_AFTER_ATOMIC_PUBLICATION",
         )
         self.assertFalse(context["candidate_execution_root_overlap"])
-        self.assertIn(str(candidate), capsule["forbidden_write_paths"])
+        self.assertIn(
+            "harness-resource://candidate", capsule["forbidden_write_paths"]
+        )
         self.assertTrue(
-            Path(capsule["workspace_root_abs"]).is_relative_to(execution)
+            capsule["workspace_root_abs"].startswith(
+                "harness-resource://execution/"
+            )
         )
         self.assertEqual(
             driver["driver_entrypoint_abs"],
-            str(execution / "control_plane/.venv/bin/program-driver"),
+            "harness-resource://execution/control_plane/.venv/bin/program-driver",
         )
         self.assertTrue(
-            all(Path(item["root_abs"]).is_relative_to(execution) for item in projects["projects"])
+            all(
+                item["root_abs"].startswith("harness-resource://execution/")
+                for item in projects["projects"]
+            )
         )
         self.assertFalse(execution.exists())
         self.assertEqual(validate_candidate(candidate)["status"], "PASS")
@@ -575,6 +934,8 @@ class CompilerValidatorTests(unittest.TestCase):
             )
         )
 
+        self._make_tree_writable(relocated)
+
         relocated_self_check = relocated / "tools/self_check.py"
         relocated_self_check.unlink()
         missing_self_check_codes = {
@@ -663,6 +1024,7 @@ class CompilerValidatorTests(unittest.TestCase):
             CREATED_AT,
         )
 
+        self._make_tree_writable(candidate)
         readme_path = candidate / "README.md"
         readme_path.write_text(
             readme_path.read_text(encoding="utf-8")
@@ -736,6 +1098,7 @@ class CompilerValidatorTests(unittest.TestCase):
             candidate,
             CREATED_AT,
         )
+        self._make_tree_writable(candidate)
         extra = candidate / "tools/uninventoried-runtime.py"
         extra.write_text("# physical but not inventoried\n", encoding="utf-8")
         report_path = candidate / "validation/START_PACKAGE_VALIDATION_REPORT.json"
@@ -2438,6 +2801,7 @@ class CompilerValidatorTests(unittest.TestCase):
             candidate,
             CREATED_AT,
         )
+        self._make_tree_writable(candidate)
         capsule_path = candidate / "CAPSULE.json"
         capsule = json.loads(capsule_path.read_text(encoding="utf-8"))
         capsule["allowed_write_paths"] = [str(candidate / "repository")]
@@ -2486,7 +2850,8 @@ class CompilerValidatorTests(unittest.TestCase):
                 "EPOCH48_NONEXECUTABLE_NEGATIVE_FIXTURE_IMMUTABILITY_SCOPE"
             ),
         }
-        projected_cases = [*_mandatory_negative_cases(ir), fixture]
+        projected_ir = {**ir, "negative_cases": [*ir["negative_cases"], fixture]}
+        projected_cases = _mandatory_negative_cases(projected_ir)
         with patch(
             "harness_foundry_factory.compiler._mandatory_negative_cases",
             return_value=projected_cases,
@@ -2533,7 +2898,7 @@ class CompilerValidatorTests(unittest.TestCase):
                 CREATED_AT,
             )
 
-    def test_immutable_policy_requires_an_execution_root(self) -> None:
+    def test_missing_execution_root_compiles_to_absent_logical_binding(self) -> None:
         candidate = self.root / "missing-execution-root-candidate"
         ir = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
         ir["target"]["output_root"] = str(candidate)
@@ -2541,14 +2906,24 @@ class CompilerValidatorTests(unittest.TestCase):
             "candidate_root_access": "READ_ONLY_AFTER_ATOMIC_PUBLICATION"
         }
 
-        with self.assertRaisesRegex(ValueError, "execution_root is required"):
-            compile_candidate(
-                ir,
-                SPEC_ROOT,
-                self.root / "missing-execution-root-staging",
-                candidate,
-                CREATED_AT,
-            )
+        compile_candidate(
+            ir,
+            SPEC_ROOT,
+            self.root / "missing-execution-root-staging",
+            candidate,
+            CREATED_AT,
+        )
+        context = json.loads(
+            (candidate / "START_CONTEXT.json").read_text(encoding="utf-8")
+        )
+        planned_execution = candidate.with_name(
+            ".missing-execution-root-candidate."
+            "hffactory-planned-execution-PROGRAM-REFERENCE-HARNESS"
+        )
+        self.assertEqual(context["candidate_root"], "harness-resource://candidate")
+        self.assertEqual(context["execution_root"], "harness-resource://execution")
+        self.assertFalse(context["candidate_execution_root_overlap"])
+        self.assertFalse(planned_execution.exists())
 
     def test_frozen_provenance_authority_aliases_and_unstructured_negative_cases_compile(self) -> None:
         candidate = self.root / "normalized-frozen-input-candidate"
@@ -2603,12 +2978,15 @@ class CompilerValidatorTests(unittest.TestCase):
         self.assertEqual(validate_candidate(candidate)["status"], "PASS")
 
     def test_structural_hash_repair_preserves_planned_executor_hash_contract(self) -> None:
+        self._make_tree_writable(self.candidate)
         _repair_structural_hashes(self.candidate)
+        _seal_candidate_tree(self.candidate)
 
         self.assertEqual(validate_candidate(self.candidate)["status"], "PASS")
 
     def test_rebuild_at_same_path_has_identical_content_hash(self) -> None:
         first_hash = self.compile_result["content_sha256"]
+        self._make_tree_writable(self.candidate)
         shutil.rmtree(self.candidate)
 
         second = self._compile("staging-rebuild")
@@ -2799,19 +3177,17 @@ class CompilerValidatorTests(unittest.TestCase):
             {item["code"] for item in report["blocking_findings"]},
         )
 
-    def test_materialized_codex_bytes_tamper_fails_with_precise_code(self) -> None:
+    def test_portable_candidate_validator_does_not_claim_receiver_runtime_tamper(self) -> None:
         candidate, _execution, launcher = self._materialized_codex_candidate()
         launcher.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
 
-        codes = {
-            item["code"]
-            for item in validate_candidate(candidate)["blocking_findings"]
-        }
+        report = validate_candidate(candidate)
 
-        self.assertIn("COMMAND_EXECUTABLE_MATERIALIZATION_UNVERIFIED", codes)
-        self.assertNotIn("COMMAND_EXECUTABLE_NOT_ABSOLUTE", codes)
+        self.assertEqual(report["status"], "PASS")
+        self.assertFalse(report["runtime_claims_verified"])
 
     def test_empty_three_project_markdown_is_rejected(self) -> None:
+        self._make_tree_writable(self.candidate)
         for directory in ("external_lab", "linkage_review", "main_build"):
             for name in ("README.md", "PROJECT_CHARTER.md", "BUILD_INSTALL_PLAN.md"):
                 (self.candidate / "project_start_packages" / directory / name).write_text(
@@ -3093,8 +3469,9 @@ class CompilerValidatorTests(unittest.TestCase):
         self.assertEqual(
             registration["pipeline_action_id"], "MAIN_PROGRAM_REGISTRATION"
         )
-        main_repository = str(
-            self.candidate / "project_start_packages/main_build/repository"
+        main_repository = (
+            "harness-resource://execution/"
+            "project_start_packages/main_build/repository"
         )
         for node_id in (
             "MAIN_EXECUTION_PACKAGE_MATERIALIZED",
@@ -3547,6 +3924,7 @@ class CompilerValidatorTests(unittest.TestCase):
         self.assertIn("INVALIDATION_DAG_INCOMPLETE", self._finding_codes())
 
     def test_tampered_ledger_event_hash_is_rejected(self) -> None:
+        self._make_tree_writable(self.candidate)
         path = self.candidate / "PHASE_TRANSITION_LEDGER.jsonl"
         record = json.loads(path.read_text(encoding="utf-8"))
         record["event_hash"] = "0" * 64

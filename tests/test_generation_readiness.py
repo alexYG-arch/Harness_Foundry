@@ -40,6 +40,7 @@ from harness_foundry_factory.validator import (
     _external_authority_requirement_epoch,
     validate_candidate as run_candidate_validation,
 )
+from tests.permissions import make_path_writable, make_tree_writable
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -101,6 +102,7 @@ class GenerationReadinessTests(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls) -> None:
+        make_tree_writable(cls.temporary_root)
         cls.temporary.cleanup()
 
     def _evaluate(
@@ -434,6 +436,7 @@ class GenerationReadinessTests(unittest.TestCase):
         )
 
         outside_fixture_path = candidate / "validation/LIVE_COMMAND_CONTRACT.json"
+        make_path_writable(outside_fixture_path)
         outside_fixture_path.write_text(
             json.dumps(
                 {
@@ -458,6 +461,7 @@ class GenerationReadinessTests(unittest.TestCase):
         outside_fixture_path.unlink()
 
         negative_path = candidate / "validation/NEGATIVE_CASES.json"
+        make_path_writable(negative_path)
         negative = json.loads(negative_path.read_text(encoding="utf-8"))
         write_root_case = next(
             case
@@ -526,6 +530,7 @@ class GenerationReadinessTests(unittest.TestCase):
             )
 
         charter_path = candidate / "PROGRAM_CHARTER.md"
+        make_path_writable(charter_path)
         charter = charter_path.read_text(encoding="utf-8")
         self.assertIn("Implement usable local v2.9 engineering capability first", charter)
         self.assertIn("Package shape profile: `FULL`", charter)

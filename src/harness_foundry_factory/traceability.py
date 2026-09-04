@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import re
 from typing import Any, Mapping
 
 
@@ -49,6 +50,65 @@ PHASE_MARKERS = (
     ("C3", "C3", "MB-P3"),
     ("P4", "P4_BUILD_INPUT", "MB-P4"),
     ("C4", "C4", "MB-RELEASE-CANDIDATE"),
+)
+
+# These role vocabularies are deliberately about the kind of work an Atom
+# creates, not one product's Atom IDs.  They keep implementation work in the
+# build phases and reserve P4/release for packaging and certification.
+DOMAIN_PHASE_TERMS = (
+    (
+        "MB-P1",
+        "P1",
+        (
+            "SKILL LINK",
+            "COMMIT",
+            "FUNCTION",
+            "SCENARIO",
+            "EFFECT",
+            "LIMITATION",
+            "ASSET",
+            "PROVENANCE",
+            "ORIGINAL",
+            "CLAIM",
+        ),
+    ),
+    (
+        "MB-P2",
+        "P2",
+        (
+            "TTS",
+            "NARRATION",
+            "AUDIO",
+            "ALIGN",
+            "MOTION IR",
+            "TIMING",
+            "SYNCHRON",
+            "RESUM",
+            "STATE",
+            "AUTHORIZATION",
+            "GATE",
+        ),
+    ),
+    (
+        "MB-P3",
+        "P3",
+        (
+            "RENDER",
+            "REMOTION",
+            "SHOTCRAFT",
+            "VIDEO",
+            "FRAME",
+            "ANIMATION",
+        ),
+    ),
+)
+
+TERMINAL_MEDIA_PHASE_TERMS = (
+    "LOCAL_RENDER_RECEIPT",
+    "MEDIA_PROBE",
+    "FINAL VIDEO BYTES",
+    "FINAL BYTES",
+    "TECHNICAL ACCEPTANCE",
 )
 
 
@@ -120,34 +180,145 @@ def _derive_edge(atom: Mapping[str, Any]) -> dict[str, Any]:
         )
     ).upper()
     owner = str(atom.get("owner", "")).upper()
+    def contains(term: str) -> bool:
+        return re.search(
+            rf"(?<![A-Z0-9]){re.escape(term)}(?![A-Z0-9])", semantic_text
+        ) is not None
+
+    def edge(
+        workpack_ids: list[str],
+        stage_ids: list[str],
+        release_step_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "atom_id": str(atom["atom_id"]),
+            "workpack_ids": _unique_strings(workpack_ids),
+            "stage_ids": _unique_strings(stage_ids),
+            "release_step_ids": _unique_strings(release_step_ids or []),
+            "owner_project_ids": _unique_strings(
+                [
+                    WORKPACK_PROJECTS[value]
+                    for value in workpack_ids
+                    if value in WORKPACK_PROJECTS
+                ]
+            ),
+            "routing_basis": "DERIVED_FROM_ATOM_OWNER_PHASE_AND_SEMANTICS",
+            "status": "PLANNED_NOT_VERIFIED",
+        }
+
+    if "LINKAGE" in owner or "READ_ONLY_LINKAGE" in semantic_text:
+        if any(contains(term) for term in ("INSTALLED", "HANDSHAKE", "D")):
+            return edge(
+                ["LINK-D"],
+                ["RELEASE_PIPELINE"],
+                ["LINKAGE_D_INSTALLED_HANDSHAKE"],
+            )
+        return edge(
+            ["LINK-PREFLIGHT"],
+            ["RELEASE_PIPELINE"],
+            ["LINKAGE_A_INTERFACE_COMPLETENESS"],
+        )
+    if "LAB" in owner or "CONFORMANCE_LAB" in semantic_text:
+        if (
+            contains("INDEPENDENT_FIXTURE_ACCEPTANCE")
+            or contains("FIXTURE_ACCEPTANCE")
+            or any(contains(term) for term in ("CERT", "INSTALLED", "TAMPER"))
+        ):
+            return edge(
+                ["LAB-CERTIFICATION"],
+                ["RELEASE_PIPELINE", "C4"],
+                ["LAB_INSTALLED_POSITIVE_NEGATIVE_TAMPER_TESTS"],
+            )
+        return edge(["LAB-SELFTEST"], ["G0"])
+
+    authoring_boundary = contains("AUTHORING_BOUNDARY") or contains(
+        "AUTHORING_STOP"
+    )
+    if authoring_boundary:
+        # This Workpack verifies the immutable authoring handoff later.  It
+        # must not ask an executing release Workpack to claim that no Workpack
+        # or Driver has started in its current state.
+        return edge(["MB-G0"], ["G0"])
+
+    # A requirement may provide an explicit semantic phase hint without
+    # exposing a complete coverage edge.  Prefer it over keyword derivation.
+    phase_hint = str(
+        atom.get("implementation_phase")
+        or atom.get("delivery_phase")
+        or ""
+    ).upper()
+    if phase_hint in {"P1", "P2", "P3"}:
+        return edge([f"MB-{phase_hint}"], [phase_hint])
+
+    terminal_media_work = any(
+        contains(term) for term in TERMINAL_MEDIA_PHASE_TERMS
+    )
+    if terminal_media_work:
+        return edge(["MB-P3"], ["P3"])
+
+    # Route a domain delivery Atom to one production phase.  Verification
+    # modes are more specific than overlapping prose (for example Motion IR
+    # legitimately mentions both assets, audio, and animation).
+    domain_routes = (
+        (
+            "MB-P3",
+            "P3",
+            (
+                "LOCAL_RENDER_RECEIPT",
+                "MEDIA_ACCEPTANCE_RECEIPT",
+                "MEDIA_PROBE_AND_DURATION_RECEIPT",
+                "RESUMABLE_STAGE_RECEIPT",
+                "EVENT_CHAIN_AND_RESUME_TEST",
+                "FINAL_VIDEO",
+            ),
+        ),
+        (
+            "MB-P2",
+            "P2",
+            (
+                "LOCAL_TTS_RECEIPT",
+                "AUDIO_ALIGNMENT_RECEIPT",
+                "OBJECT_MOTION_IR",
+                "MOTION_IR",
+                "BEFORE_AFTER_DEMO_CONTRACT",
+                "DEMO_PROVENANCE",
+                "TARGET_SKILL_EXECUTION_GATE_RECEIPT",
+                "TARGET_SKILL_EXECUTION_AUTHORIZATION",
+            ),
+        ),
+        (
+            "MB-P1",
+            "P1",
+            (
+                "SOURCE_FREEZE_RECEIPT",
+                "FUNCTION_SCENARIO_EFFECT_MATRIX",
+                "CLAIM_MATRIX",
+                "ASSET_PLAN",
+                "ONE_SKILL_PER_JOB",
+            ),
+        ),
+    )
+    for workpack_id, stage_id, terms in domain_routes:
+        if any(contains(term) for term in terms):
+            return edge([workpack_id], [stage_id])
+
+    # Prose-only domain Atoms still receive one phase.  First match wins in
+    # dependency order P1 -> P2 -> P3; explicit verification modes above
+    # resolve the intentionally cross-domain cases.
+    for workpack_id, stage_id, terms in DOMAIN_PHASE_TERMS:
+        if any(contains(term) for term in terms):
+            return edge([workpack_id], [stage_id])
+
+    # Structural control Atoms may deliberately name multiple phase markers
+    # (for example a P2 -> P3 -> P4 transition invariant).  Preserve that
+    # multi-stage control coverage; it is not a duplicated domain delivery.
     workpack_ids: list[str] = []
     stage_ids: list[str] = []
     release_step_ids: list[str] = []
-
     for marker, stage_id, workpack_id in PHASE_MARKERS:
-        if marker in semantic_text:
+        if contains(marker):
             stage_ids.append(stage_id)
             workpack_ids.append(workpack_id)
-
-    if "LINKAGE" in owner or "READ_ONLY_LINKAGE" in semantic_text:
-        if any(term in semantic_text for term in ("INSTALLED", "HANDSHAKE", " D ")):
-            workpack_ids.append("LINK-D")
-            release_step_ids.append("LINKAGE_D_INSTALLED_HANDSHAKE")
-            stage_ids.append("RELEASE_PIPELINE")
-        else:
-            workpack_ids.append("LINK-PREFLIGHT")
-            release_step_ids.append("LINKAGE_A_INTERFACE_COMPLETENESS")
-            stage_ids.append("RELEASE_PIPELINE")
-    if "LAB" in owner or "CONFORMANCE_LAB" in semantic_text:
-        if any(term in semantic_text for term in ("CERT", "INSTALLED", "TAMPER")):
-            workpack_ids.append("LAB-CERTIFICATION")
-            release_step_ids.append(
-                "LAB_INSTALLED_POSITIVE_NEGATIVE_TAMPER_TESTS"
-            )
-            stage_ids.extend(("RELEASE_PIPELINE", "C4"))
-        else:
-            workpack_ids.append("LAB-SELFTEST")
-            stage_ids.append("G0")
 
     runtime_terms = (
         "RUNTIME",
@@ -159,31 +330,17 @@ def _derive_edge(atom: Mapping[str, Any]) -> dict[str, Any]:
         "CODEX",
         "RECEIPT",
     )
-    if not workpack_ids and any(term in semantic_text for term in runtime_terms):
+    if not workpack_ids and any(contains(term) for term in runtime_terms):
         workpack_ids.extend(("MB-P4", "MB-RELEASE-CANDIDATE"))
         stage_ids.extend(("P4_BUILD_INPUT", "RELEASE_PIPELINE"))
-        if any(term in semantic_text for term in ("INSTALL", "ENTRYPOINT", "ORIGIN")):
+        if any(contains(term) for term in ("INSTALL", "ENTRYPOINT", "ORIGIN")):
             release_step_ids.append("INSTALLED_TARGET_DESCRIPTOR")
 
     if not workpack_ids:
         workpack_ids.append("MB-G0")
     if not stage_ids:
         stage_ids.append("G0")
-    return {
-        "atom_id": str(atom["atom_id"]),
-        "workpack_ids": _unique_strings(workpack_ids),
-        "stage_ids": _unique_strings(stage_ids),
-        "release_step_ids": _unique_strings(release_step_ids),
-        "owner_project_ids": _unique_strings(
-            [
-                WORKPACK_PROJECTS[value]
-                for value in workpack_ids
-                if value in WORKPACK_PROJECTS
-            ]
-        ),
-        "routing_basis": "DERIVED_FROM_ATOM_OWNER_PHASE_AND_SEMANTICS",
-        "status": "PLANNED_NOT_VERIFIED",
-    }
+    return edge(workpack_ids, stage_ids, release_step_ids)
 
 
 def _unique_strings(values: Any) -> list[str]:

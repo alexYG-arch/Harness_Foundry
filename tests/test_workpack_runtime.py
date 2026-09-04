@@ -31,6 +31,7 @@ from tests import (
     test_program_driver_runtime_verification as verification_test_support,
 )
 from tests.test_generation_readiness import ROOT, _epoch38_fixture, _rehash
+from tests.permissions import make_path_writable, make_tree_writable
 
 
 class ControlledWorkpackRuntimeTests(unittest.TestCase):
@@ -132,10 +133,12 @@ class ControlledWorkpackRuntimeTests(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls) -> None:
+        make_tree_writable(cls.root)
         cls.temporary.cleanup()
 
     @staticmethod
     def _write_json(path: Path, value: dict) -> None:
+        make_path_writable(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
             json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True)
@@ -446,6 +449,7 @@ class ControlledWorkpackRuntimeTests(unittest.TestCase):
         drifted = self.root / "drifted-candidate"
         shutil.copytree(self.candidate, drifted)
         provider = drifted / runtime.PROVIDER_IMPLEMENTATION_REF
+        make_path_writable(provider)
         provider.write_text(
             provider.read_text(encoding="utf-8") + "\n# drift\n",
             encoding="utf-8",
@@ -509,7 +513,9 @@ class ControlledWorkpackRuntimeTests(unittest.TestCase):
     ) -> None:
         missing = self.root / "missing-runtime-candidate"
         shutil.copytree(self.candidate, missing)
-        (missing / runtime.PROVIDER_IMPLEMENTATION_REF).unlink()
+        provider = missing / runtime.PROVIDER_IMPLEMENTATION_REF
+        make_path_writable(provider)
+        provider.unlink()
         with patch(
             "harness_foundry_factory.validator."
             "_factory_required_regression_execution",

@@ -41,8 +41,20 @@ from .constants import (
 from .control_kernel import AUTHORITY_PRECEDENCE
 from .semantic_contracts import (
     ARTIFACT_MANIFEST_REF,
+    CASE_EVIDENCE_WRITER_WORKPACK_ID,
+    CASE_EXECUTION_RESULT_ROOT_REF,
+    ORACLE_EVALUATOR_REGISTRY_REF,
+    PUBLIC_SKILL_JOB_INTERFACE_REF,
     build_artifact_obligation_manifest,
+    compile_declared_production_contracts,
     explicit_production_enabled,
+    negative_case_specs_with_mandatory_controls,
+    oracle_evaluator_registry,
+    public_skill_job_interface,
+    case_result_ref,
+    registry_case_result_ref,
+    required_artifact_kinds_for_case,
+    repository_job_bindings,
     task_bundle_for_workpack,
     validate_explicit_production_contracts,
 )
@@ -433,6 +445,19 @@ def _current_candidate_version(target: Mapping[str, Any]) -> str | None:
         )
     ]
     return max(versions, key=lambda value: int(value.split("_")[-1]), default=None)
+
+
+def _current_package_version(target: Mapping[str, Any]) -> str:
+    """Return a human-facing package version without inferring it from a path."""
+
+    for field in ("package_version", "version"):
+        value = target.get(field)
+        if isinstance(value, str) and re.fullmatch(
+            r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?", value
+        ):
+            return value
+    candidate_version = _current_candidate_version(target)
+    return candidate_version or "UNVERSIONED-CANDIDATE"
 
 
 def _validation_report_external_binding(
@@ -828,6 +853,7 @@ def compile_candidate(
     *,
     authority_provenance: Mapping[str, Any] | None = None,
     generation_readiness: Mapping[str, Any] | None = None,
+    active_requirement_epoch: int | None = None,
 ) -> dict[str, Any]:
     """Compatibility entrypoint consumed by ``FactoryService``."""
 
@@ -840,6 +866,7 @@ def compile_candidate(
         spec_lock=spec_lock,
         authority_provenance=authority_provenance,
         generation_readiness=generation_readiness,
+        active_requirement_epoch=active_requirement_epoch,
     )
 
 
@@ -960,6 +987,9 @@ def compile_requirement_architecture_contract(
                 project_id=WORKPACK_PROJECTS.get(str(workpack_id), "UNASSIGNED"),
                 program_id=program_id,
                 target_id=target_id,
+                structural_contract=PROJECT_WORKPACK_CONTRACTS.get(
+                    str(workpack_id)
+                ),
             )
             if bundle is not None:
                 task_bundles.append(bundle)
@@ -1010,42 +1040,54 @@ def compile_start_package(
     spec_lock: Mapping[str, Any] | None = None,
     authority_provenance: Mapping[str, Any] | None = None,
     generation_readiness: Mapping[str, Any] | None = None,
+    active_requirement_epoch: int | None = None,
 ) -> dict[str, Any]:
     """Compile, fully materialize, and atomically publish one authoring candidate."""
 
-    ir = normalize_ir_coverage(requirement_ir)
+    normalized_ir = normalize_ir_coverage(requirement_ir)
+    source_requirement_ir_sha256 = _json_hash(normalized_ir)
+    ir = compile_declared_production_contracts(normalized_ir)
     target = _validate_ir(ir)
     control_plane_mode = _control_plane_generation_mode(ir)
-    active_requirement_epoch = _current_requirement_epoch(target)
+    factory_epoch_supplied = (
+        isinstance(active_requirement_epoch, int)
+        and not isinstance(active_requirement_epoch, bool)
+        and active_requirement_epoch >= 0
+    )
+    frozen_requirement_epoch = (
+        int(active_requirement_epoch)
+        if factory_epoch_supplied
+        else _current_requirement_epoch(target)
+    )
     if control_plane_mode == EPOCH4_MODE:
         _validate_epoch4_generation_readiness(ir, generation_readiness)
         assert isinstance(generation_readiness, Mapping)
-        active_requirement_epoch = int(generation_readiness["requirement_epoch"])
-    portable_mode = str(target.get("portability_mode") or "LEGACY_ABSOLUTE_PATHS")
+        readiness_epoch = int(generation_readiness["requirement_epoch"])
+        if factory_epoch_supplied and frozen_requirement_epoch != readiness_epoch:
+            raise ValueError("generation readiness and Factory Requirement epochs differ")
+        frozen_requirement_epoch = readiness_epoch
+    portable_mode = str(target.get("portability_mode") or PORTABLE_MODE)
     spec = Path(spec_root or default_spec_root()).expanduser().resolve()
     staging = Path(staging_root).expanduser().resolve()
     candidate = Path(candidate_root).expanduser().resolve()
     program_id = str(ir.get("program_id") or f"PROGRAM-{target['id']}")
     execution_root_value = target.get("execution_root")
-    if control_plane_mode == EPOCH4_MODE and execution_root_value in (None, ""):
+    if execution_root_value in (None, ""):
         execution = candidate.with_name(
             f".{candidate.name}.hffactory-planned-execution-{program_id}"
         )
         if os.path.lexists(execution):
-            raise ValueError("Epoch 4 planned Execution Root identity already exists")
+            raise ValueError("planned Execution Root identity already exists")
     else:
         execution = Path(
             str(execution_root_value or candidate)
         ).expanduser().resolve()
     if (
-        control_plane_mode == EPOCH4_MODE
-        and (
-            candidate == execution
-            or candidate.is_relative_to(execution)
-            or execution.is_relative_to(candidate)
-        )
+        candidate == execution
+        or candidate.is_relative_to(execution)
+        or execution.is_relative_to(candidate)
     ):
-        raise ValueError("Epoch 4 Candidate and Execution Root identities must be disjoint")
+        raise ValueError("Candidate and Execution Root identities must be disjoint")
     if not spec.is_dir():
         raise ValueError(f"v2.8 spec root does not exist: {spec}")
     target_id = str(target["id"])
@@ -1053,7 +1095,8 @@ def compile_start_package(
     target_type = str(target["type"]).upper()
     profile = str(target["profile"]).upper()
     package_id = f"{target_id}-START-PACKAGE"
-    ir_hash = _json_hash(ir)
+    ir_hash = source_requirement_ir_sha256
+    compiled_ir_hash = _json_hash(ir)
     if spec_lock is None:
         from .spec_lock import load_verified_spec_lock
 
@@ -1100,13 +1143,14 @@ def compile_start_package(
         "candidate_root_access": (
             "READ_ONLY_AFTER_ATOMIC_PUBLICATION"
             if execution != candidate
-            else "LEGACY_COMBINED_CANDIDATE_AND_EXECUTION_ROOT"
+            else "INVALID_COMBINED_CANDIDATE_AND_EXECUTION_ROOT"
         ),
         "created_at": created_at,
         "ir_hash": ir_hash,
         "first_workpack_id": first_workpack_id,
         "primary_runtime": str(target["primary_runtime"]),
         "portability_mode": portable_mode,
+        "requirement_epoch": frozen_requirement_epoch,
     }
 
     for directory in (
@@ -1136,7 +1180,9 @@ def compile_start_package(
             "factory_lineage": "V2_8_CODE_BASELINE_WITH_V2_9_CONTROL_AND_PORTABILITY_UPGRADE",
             "program_id": program_id,
             "target_id": target_id,
+            "requirement_epoch": frozen_requirement_epoch,
             "requirement_ir_sha256": ir_hash,
+            "compiled_requirement_ir_sha256": compiled_ir_hash,
             **(
                 {
                     "authority_requirement_ir_sha256": authority_provenance.get(
@@ -1157,6 +1203,7 @@ def compile_start_package(
 
     source_manifest = _source_manifest(ir, context)
     _write_json(staging / "canonical_sources/SOURCE_MANIFEST.json", source_manifest)
+    _write_baseline_migration_contract(staging, ir, context)
     atom_catalog = _atom_catalog(ir, source_manifest, context)
     atom_catalog["source_manifest_sha256"] = _file_hash(
         staging / "canonical_sources/SOURCE_MANIFEST.json"
@@ -1207,7 +1254,12 @@ def compile_start_package(
     _write_json(staging / "canonical_sources/FROZEN_REQUIREMENT_IR.json", ir)
     _write_json(
         staging / "validation/ACCEPTANCE_CASES.json",
-        {"schema_version": "2.8", "target_id": target_id, "cases": ir["acceptance_cases"], "status": "PLANNED_NOT_RUN"},
+        {
+            "schema_version": "2.9",
+            "target_id": target_id,
+            "cases": _compile_acceptance_cases(ir),
+            "status": "PLANNED_NOT_RUN",
+        },
     )
     _write_json(
         staging / "validation/NEGATIVE_CASES.json",
@@ -1264,7 +1316,14 @@ def compile_start_package(
         template = json.loads((template_root / template_name).read_text(encoding="utf-8"))
         documents[destination] = _resolve_value(template, context, destination)
 
-    _patch_critical_documents(documents, ir, context, staging, candidate)
+    _patch_critical_documents(
+        documents,
+        ir,
+        context,
+        staging,
+        candidate,
+        artifact_manifest,
+    )
     for destination, document in documents.items():
         _write_json(staging / destination, document)
     _write_json(
@@ -1296,23 +1355,24 @@ def compile_start_package(
         _write_shared_control_baseline_contract(staging, ir)
         _write_epoch4_runtime_store_dependency_closure(
             staging,
-            include_workpack_runtime=active_requirement_epoch >= 45,
-            include_package_validation_runtime=active_requirement_epoch >= 49,
+            include_workpack_runtime=frozen_requirement_epoch >= 45,
+            include_package_validation_runtime=frozen_requirement_epoch >= 49,
         )
         _write_controlled_workpack_runtime_contract(
             staging,
             context,
-            active_requirement_epoch=active_requirement_epoch,
+            active_requirement_epoch=frozen_requirement_epoch,
         )
         _write_control_plane_registration_contract(staging)
         _write_program_driver_runtime_verification_contract(staging)
         _write_main_execution_package_validation_contract(
             staging,
-            active_requirement_epoch=active_requirement_epoch,
+            active_requirement_epoch=frozen_requirement_epoch,
         )
     else:
         _write_shared_control_baseline_contract(staging, ir)
     _write_validation_report(staging, context)
+    _bind_case_execution_contracts(staging, ir)
 
     if portable_mode == PORTABLE_MODE:
         source_bindings = _write_portable_source_evidence(staging, ir)
@@ -1450,6 +1510,7 @@ def compile_start_package(
 
     candidate.parent.mkdir(parents=True, exist_ok=True)
     os.replace(staging, candidate)
+    _seal_candidate_tree(candidate)
     content_hash, file_count = _tree_hash(candidate)
     return {
         "program_id": program_id,
@@ -1476,9 +1537,7 @@ def _validate_ir(ir: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("target.type must be AGENT, HARNESS, or HYBRID")
     if str(target["profile"]).upper() not in {"FULL", "STANDARD", "LITE"}:
         raise ValueError("target.profile must be FULL, STANDARD, or LITE")
-    portability_mode = str(
-        target.get("portability_mode") or "LEGACY_ABSOLUTE_PATHS"
-    )
+    portability_mode = str(target.get("portability_mode") or PORTABLE_MODE)
     if portability_mode not in {"LEGACY_ABSOLUTE_PATHS", PORTABLE_MODE}:
         raise ValueError(
             "target.portability_mode must be LEGACY_ABSOLUTE_PATHS or "
@@ -1505,13 +1564,9 @@ def _validate_ir(ir: Mapping[str, Any]) -> dict[str, Any]:
             raise ValueError(
                 "target.output_root and target.execution_root must not overlap"
             )
-    immutability = target.get("start_package_immutability_policy") or ir.get(
-        "start_package_immutability_policy"
-    )
-    if isinstance(immutability, Mapping) and execution_root_value in (None, ""):
-        raise ValueError(
-            "target.execution_root is required by start_package_immutability_policy"
-        )
+    # A physical Execution Root is a later runtime binding, not a Candidate
+    # authoring input.  When it is absent the compiler reserves a disjoint,
+    # still-absent identity and exports only the logical execution Resource URI.
     for key in ("sources", "atoms", "acceptance_cases", "negative_cases"):
         if not isinstance(ir.get(key), list) or not ir[key]:
             raise ValueError(f"requirement_ir.{key} must be a non-empty array")
@@ -1661,6 +1716,20 @@ def _write_portable_source_evidence(
         payload_relative: str | None = None
         payload_uri: str | None = None
         payload_embedded = False
+        repository_metadata = {
+            field: deepcopy(source[field])
+            for field in (
+                "repository_url",
+                "revision",
+                "commit_sha",
+                "git_tree_oid",
+                "tree_sha256",
+                "license_spdx",
+                "license_ref",
+                "retrieved_at",
+            )
+            if source.get(field) not in (None, "")
+        }
         snapshot_path = item.get("snapshot_path")
         if (
             source.get("copy_policy") == "COPY_IMMUTABLE_SNAPSHOT"
@@ -1692,6 +1761,7 @@ def _write_portable_source_evidence(
             "source_sha256": source_hash,
             "authority_level": source.get("authority_level"),
             "copy_policy": source.get("copy_policy"),
+            "repository_metadata": repository_metadata or None,
             "origin_locator_sha256": hashlib.sha256(
                 str(item.get("path_or_uri") or item.get("path") or "").encode(
                     "utf-8"
@@ -1726,6 +1796,7 @@ def _write_portable_source_evidence(
                 "source_id": source_id,
                 "source_sha256": source_hash,
                 "copy_policy": source.get("copy_policy"),
+                "repository_metadata": repository_metadata or None,
                 "receipt_ref": receipt_uri,
                 "receipt_sha256": _file_hash(staging / receipt_relative),
                 "payload_ref": payload_uri,
@@ -1757,7 +1828,62 @@ def _write_portable_source_evidence(
 
 
 def _effective_required_tools(value: Any) -> list[dict[str, Any]]:
-    declared = [dict(item) for item in value or [] if isinstance(item, Mapping)]
+    aliases = {
+        "python 3.12": ("python", ">=3.12,<3.13", "python.org or operating-system vendor"),
+        "node.js 22 lts": ("node", ">=22,<23", "nodejs.org or declared package manager"),
+        "remotion": ("remotion", "PIN_EXACT_IN_MAIN_PROJECT_LOCK", "npm registry or declared mirror"),
+        "ffmpeg": ("ffmpeg", "PIN_EXACT_BEFORE_WORKPACK_EXECUTION", "ffmpeg.org or operating-system package manager"),
+        "ffprobe": ("ffprobe", "SAME_DISTRIBUTION_AS_FFMPEG", "ffmpeg.org or operating-system package manager"),
+        "mlx-audio": ("mlx-audio", "PIN_EXACT_IN_MAIN_PROJECT_LOCK", "Python Package Index or declared mirror"),
+        "qwen3-tts 0.6b 8-bit": ("qwen3-tts-model", "0.6B-8BIT-PIN_EXACT_MODEL_HASH", "declared local model registry"),
+        "qwen3 forcedaligner 0.6b 8-bit": ("qwen3-forced-aligner-model", "0.6B-8BIT-PIN_EXACT_MODEL_HASH", "declared local model registry"),
+        "kokoro 82m fallback": ("kokoro-82m-model", "82M-PIN_EXACT_MODEL_HASH", "declared local model registry"),
+        "pinned video-shotcraft": ("video-shotcraft", "PIN_EXACT_FROZEN_SOURCE_COMMIT_BEFORE_EXECUTION", "frozen source repository"),
+    }
+
+    def normalize(item: Any) -> dict[str, Any] | None:
+        if isinstance(item, Mapping):
+            raw = dict(item)
+            if raw.get("tool_id"):
+                return raw
+            label = raw.get("name") or raw.get("requirement_label")
+            if not isinstance(label, str) or not label.strip():
+                return None
+            normalized = normalize(label)
+            if normalized is None:
+                return None
+            normalized.update(raw)
+            normalized.pop("name", None)
+            normalized["requirement_label"] = label
+            return normalized
+        if not isinstance(item, str) or not item.strip():
+            return None
+        label = item.strip()
+        key = re.sub(r"\s+", " ", label).casefold()
+        tool_id, version, installation_source = aliases.get(
+            key,
+            (
+                re.sub(r"[^a-z0-9]+", "-", key).strip("-") or "declared-tool",
+                "PIN_EXACT_BEFORE_WORKPACK_EXECUTION",
+                "human-declared distribution source",
+            ),
+        )
+        return {
+            "tool_id": tool_id,
+            "requirement_label": label,
+            "version_constraint": version,
+            "purpose": f"Frozen target-required tool: {label}",
+            "availability_phase": "TARGET_TOOLCHAIN_MATERIALIZATION",
+            "required_for_self_check": False,
+            "installation_source": installation_source,
+        }
+
+    declared: list[dict[str, Any]] = []
+    raw_values = [value] if isinstance(value, (str, Mapping)) else value or []
+    for item in raw_values:
+        normalized = normalize(item)
+        if normalized is not None:
+            declared.append(normalized)
     defaults = (
         {
             "tool_id": "python",
@@ -2362,10 +2488,47 @@ def _repair_portable_project_bindings(staging: Path) -> None:
 
             commands = json.loads(command_path.read_text(encoding="utf-8"))
             commands["source_project_command_manifest_sha256"] = manifest_sha256
-            commands["commands"] = [
-                deepcopy(commands_by_id[str(command_id)])
-                for command_id in item.get("command_ids", [])
+            required_artifact_refs = list(
+                item.get("required_artifact_refs") or []
+            )
+            artifact_write_roots = list(
+                dict.fromkeys(
+                    artifact_ref.rsplit("/", 1)[0]
+                    for artifact_ref in required_artifact_refs
+                )
+            )
+            auxiliary_write_roots = (
+                [CASE_EXECUTION_RESULT_ROOT_REF]
+                if item.get("workpack_id")
+                == CASE_EVIDENCE_WRITER_WORKPACK_ID
+                else []
+            )
+            artifact_read_roots = [
+                str(root)
+                for scope in item.get("job_artifact_read_scopes", [])
+                if isinstance(scope, Mapping)
+                for root in scope.get("allowed_read_roots", [])
             ]
+            commands["commands"] = (
+                _bind_commands_to_workpack_artifact_roots(
+                    commands_by_id,
+                    [str(value) for value in item.get("command_ids", [])],
+                    list(
+                        dict.fromkeys(
+                            [*artifact_write_roots, *auxiliary_write_roots]
+                        )
+                    ),
+                    artifact_read_roots,
+                    workpack_id=str(item.get("workpack_id") or ""),
+                )
+            )
+            if required_artifact_refs:
+                commands["workpack_artifact_write_roots"] = (
+                    artifact_write_roots
+                )
+            commands["workpack_auxiliary_write_roots"] = (
+                auxiliary_write_roots
+            )
             commands["manifest_sha256"] = _hash_without_field(
                 commands, "manifest_sha256"
             )
@@ -2435,6 +2598,7 @@ def _repair_semantic_production_bindings(staging: Path) -> None:
                 project_id=project_id,
                 program_id=str(frozen_ir.get("program_id")),
                 target_id=str(frozen_ir.get("target", {}).get("id")),
+                structural_contract=PROJECT_WORKPACK_CONTRACTS.get(workpack_id),
             )
             if bundle is None:
                 continue
@@ -2444,6 +2608,31 @@ def _repair_semantic_production_bindings(staging: Path) -> None:
             bundle_hash = _file_hash(bundle_path)
             required_ids = list(bundle["required_artifact_ids"])
             required_refs = list(bundle["required_artifact_refs"])
+            artifact_write_roots = list(
+                dict.fromkeys(
+                    artifact_ref.rsplit("/", 1)[0]
+                    for artifact_ref in required_refs
+                )
+            )
+            auxiliary_write_roots = (
+                [CASE_EXECUTION_RESULT_ROOT_REF]
+                if workpack_id == CASE_EVIDENCE_WRITER_WORKPACK_ID
+                else []
+            )
+            command_write_roots = list(
+                dict.fromkeys(
+                    [*artifact_write_roots, *auxiliary_write_roots]
+                )
+            )
+            artifact_read_roots = _artifact_dependency_read_refs(
+                manifest, required_ids
+            )
+            shared_artifact_read_roots = [
+                root for root in artifact_read_roots if "/jobs/" not in root
+            ]
+            job_artifact_read_scopes = _job_artifact_scopes(
+                artifact_read_roots, roots_field="allowed_read_roots"
+            )
             contract_ids = list(bundle["production_contract_ids"])
             common_binding = {
                 "semantic_hydration_complete": True,
@@ -2466,7 +2655,28 @@ def _repair_semantic_production_bindings(staging: Path) -> None:
                     ],
                     "required_artifact_ids": required_ids,
                     "required_artifact_refs": required_refs,
+                    "workpack_artifact_write_roots": artifact_write_roots,
+                    "workpack_auxiliary_write_roots": auxiliary_write_roots,
+                    "workpack_artifact_read_roots": artifact_read_roots,
+                    "workpack_shared_artifact_read_roots": (
+                        shared_artifact_read_roots
+                    ),
                 }
+            )
+            existing_commands = [
+                command
+                for command in commands.get("commands", [])
+                if isinstance(command, Mapping) and command.get("command_id")
+            ]
+            commands["commands"] = _bind_commands_to_workpack_artifact_roots(
+                {
+                    str(command["command_id"]): command
+                    for command in existing_commands
+                },
+                [str(command["command_id"]) for command in existing_commands],
+                command_write_roots,
+                artifact_read_roots,
+                workpack_id=workpack_id,
             )
             commands["manifest_sha256"] = _hash_without_field(
                 commands, "manifest_sha256"
@@ -2482,6 +2692,17 @@ def _repair_semantic_production_bindings(staging: Path) -> None:
                     "command_manifest_sha256": command_hash,
                     "required_artifact_ids": required_ids,
                     "required_artifact_refs": required_refs,
+                    "job_artifact_read_scopes": job_artifact_read_scopes,
+                    "allowed_read_paths": list(
+                        dict.fromkeys(
+                            [LOGICAL_CANDIDATE_ROOT, *shared_artifact_read_roots]
+                        )
+                    ),
+                    "case_result_write_root": (
+                        auxiliary_write_roots[0]
+                        if auxiliary_write_roots
+                        else None
+                    ),
                 }
             )
             _write_json(capsule_path, capsule)
@@ -2507,6 +2728,12 @@ def _repair_semantic_production_bindings(staging: Path) -> None:
                     "success_rule": bundle["completion_rule"],
                     "required_artifact_ids": required_ids,
                     "required_artifact_refs": required_refs,
+                    "job_artifact_read_scopes": job_artifact_read_scopes,
+                    "allowed_read_paths": list(
+                        dict.fromkeys(
+                            [LOGICAL_CANDIDATE_ROOT, *shared_artifact_read_roots]
+                        )
+                    ),
                     "workpack_sha256": _file_hash(
                         output / str(workpack["workpack_ref"])
                     ),
@@ -3808,17 +4035,55 @@ def contained(value: Any, allowed_root: Any) -> bool:
 
 
 def expected_matrix(dag_path: Path, dag: Mapping[str, Any]) -> dict[str, Any]:
+    root = dag_path.parent
+    workpack_artifact_refs_by_node: dict[str, list[str]] = {}
+    for directory in ("external_lab", "linkage_review", "main_build"):
+        index_path = (
+            root
+            / "project_start_packages"
+            / directory
+            / "WORKPACK_INDEX.json"
+        )
+        try:
+            index = json.loads(index_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            continue
+        for raw_workpack in index.get("workpacks", []):
+            workpack = raw_workpack if isinstance(raw_workpack, Mapping) else {}
+            if workpack.get("program_control_surface") != "ENGINEERING_PROJECT_DAG":
+                continue
+            node_id = str(workpack.get("program_control_node_id") or "")
+            if not node_id:
+                continue
+            refs = workpack_artifact_refs_by_node.setdefault(node_id, [])
+            for artifact_ref in workpack.get("required_artifact_refs", []):
+                if isinstance(artifact_ref, str) and artifact_ref not in refs:
+                    refs.append(artifact_ref)
     rows: list[dict[str, Any]] = []
     for raw_node in dag.get("nodes", []):
         node = raw_node if isinstance(raw_node, Mapping) else {}
+        node_id = str(node.get("node_id") or "")
         allowed = list(node.get("allowed_write_paths") or [])
         outputs = list(node.get("success_output_refs") or [])
+        workpack_artifact_refs = workpack_artifact_refs_by_node.get(
+            node_id, []
+        )
         inside = [
             output
             for output in outputs
             if any(contained(output, root) for root in allowed)
         ]
         outside = [output for output in outputs if output not in inside]
+        inside_workpack_artifact_refs = [
+            artifact_ref
+            for artifact_ref in workpack_artifact_refs
+            if any(contained(artifact_ref, root) for root in allowed)
+        ]
+        outside_workpack_artifact_refs = [
+            artifact_ref
+            for artifact_ref in workpack_artifact_refs
+            if artifact_ref not in inside_workpack_artifact_refs
+        ]
         rows.append(
             {
                 "node_id": node.get("node_id"),
@@ -3826,8 +4091,19 @@ def expected_matrix(dag_path: Path, dag: Mapping[str, Any]) -> dict[str, Any]:
                 "success_output_refs": outputs,
                 "contained_success_output_refs": inside,
                 "outside_success_output_refs": outside,
+                "workpack_artifact_refs": workpack_artifact_refs,
+                "contained_workpack_artifact_refs": (
+                    inside_workpack_artifact_refs
+                ),
+                "outside_workpack_artifact_refs": (
+                    outside_workpack_artifact_refs
+                ),
                 "status": "PASS"
-                if outputs and len(inside) == len(outputs)
+                if (
+                    outputs
+                    and len(inside) == len(outputs)
+                    and not outside_workpack_artifact_refs
+                )
                 else "FAIL",
             }
         )
@@ -3842,6 +4118,9 @@ def expected_matrix(dag_path: Path, dag: Mapping[str, Any]) -> dict[str, Any]:
         ),
         "finding_code": (
             "ENGINEERING_DAG_SUCCESS_OUTPUT_OUTSIDE_ALLOWED_WRITE_PATHS"
+        ),
+        "workpack_artifact_finding_code": (
+            "ENGINEERING_DAG_WORKPACK_ARTIFACT_OUTSIDE_ALLOWED_WRITE_PATHS"
         ),
         "node_count": len(rows),
         "pass_count": pass_count,
@@ -3906,6 +4185,38 @@ def check_project_workpack_write_projection(
                     f"{EXECUTION_URI}/project_start_packages/"
                     f"{directory}/repository"
                 )
+            artifact_refs = item.get("required_artifact_refs", [])
+            artifact_write_roots: list[str] = []
+            artifact_root_binding_valid = isinstance(artifact_refs, list)
+            for artifact_ref in artifact_refs if isinstance(artifact_refs, list) else []:
+                prefix = f"{EXECUTION_URI}/"
+                if (
+                    not isinstance(artifact_ref, str)
+                    or not artifact_ref.startswith(prefix)
+                    or "/" not in artifact_ref[len(prefix) :]
+                    or any(
+                        part in {"", ".", ".."}
+                        for part in artifact_ref[len(prefix) :].split("/")
+                    )
+                ):
+                    artifact_root_binding_valid = False
+                    continue
+                artifact_root = artifact_ref.rsplit("/", 1)[0]
+                if artifact_root not in artifact_write_roots:
+                    artifact_write_roots.append(artifact_root)
+                if artifact_root not in expected:
+                    expected.append(artifact_root)
+            auxiliary_write_roots = (
+                [f"{EXECUTION_URI}/evidence/cases"]
+                if workpack_id == "LAB-CERTIFICATION"
+                else []
+            )
+            for auxiliary_root in auxiliary_write_roots:
+                if auxiliary_root not in expected:
+                    expected.append(auxiliary_root)
+            command_write_roots = list(
+                dict.fromkeys([*artifact_write_roots, *auxiliary_write_roots])
+            )
             capsule_ref = item.get("capsule_ref")
             capsule_write_paths: Any = None
             if (
@@ -3922,8 +4233,86 @@ def check_project_workpack_write_projection(
                     capsule_write_paths = capsule.get("allowed_write_paths")
                 except (OSError, UnicodeError, json.JSONDecodeError):
                     capsule_write_paths = None
+            command_write_binding_valid = True
+            if command_write_roots:
+                command_manifest_ref = item.get("command_manifest_ref")
+                try:
+                    if (
+                        not isinstance(command_manifest_ref, str)
+                        or Path(command_manifest_ref).is_absolute()
+                        or ".." in Path(command_manifest_ref).parts
+                    ):
+                        raise ValueError("invalid command manifest ref")
+                    command_manifest = json.loads(
+                        (index_path.parent / command_manifest_ref).read_text(
+                            encoding="utf-8"
+                        )
+                    )
+                    commands = command_manifest.get("commands")
+                    declared_command_roots: list[str] = []
+                    command_scopes_valid = isinstance(commands, list)
+                    for command in commands if isinstance(commands, list) else []:
+                        if not isinstance(command, Mapping):
+                            command_scopes_valid = False
+                            continue
+                        is_coding = str(command.get("command_id") or "").endswith(
+                            "CODEX-CODING"
+                        )
+                        shared = command.get("shared_artifact_write_roots")
+                        scopes = command.get("job_artifact_write_scopes")
+                        if not isinstance(shared, list) or not isinstance(scopes, list):
+                            command_scopes_valid = False
+                            continue
+                        if not is_coding and scopes:
+                            command_scopes_valid = False
+                        for declared_root in shared:
+                            if declared_root not in declared_command_roots:
+                                declared_command_roots.append(declared_root)
+                        for scope in scopes:
+                            if (
+                                not isinstance(scope, Mapping)
+                                or not isinstance(scope.get("job_id"), str)
+                                or not isinstance(scope.get("allowed_write_roots"), list)
+                                or any(
+                                    f"/jobs/{scope.get('job_id')}/" not in scoped_root
+                                    for scoped_root in scope.get("allowed_write_roots", [])
+                                )
+                            ):
+                                command_scopes_valid = False
+                                continue
+                            for scoped_root in scope["allowed_write_roots"]:
+                                if scoped_root not in declared_command_roots:
+                                    declared_command_roots.append(scoped_root)
+                        if any(
+                            allowed_root in command_write_roots
+                            and "/jobs/" in allowed_root
+                            for allowed_root in command.get("allowed_write_roots", [])
+                        ):
+                            command_scopes_valid = False
+                    command_write_binding_valid = bool(
+                        command_manifest.get("workpack_artifact_write_roots")
+                        == artifact_write_roots
+                        and command_manifest.get("workpack_auxiliary_write_roots")
+                        == auxiliary_write_roots
+                        and isinstance(commands, list)
+                        and commands
+                        and command_scopes_valid
+                        and set(declared_command_roots)
+                        == set(command_write_roots)
+                        and len(declared_command_roots)
+                        == len(command_write_roots)
+                    )
+                except (
+                    OSError,
+                    UnicodeError,
+                    json.JSONDecodeError,
+                    ValueError,
+                ):
+                    command_write_binding_valid = False
             if (
-                item.get("allowed_write_paths") != expected
+                not artifact_root_binding_valid
+                or not command_write_binding_valid
+                or item.get("allowed_write_paths") != expected
                 or capsule_write_paths != expected
             ):
                 findings.append(
@@ -4161,6 +4550,24 @@ def check_source_portable_uri_projection(
             or receipt.get("payload_embedded") is not payload_embedded
             or receipt.get("payload_ref")
             != (payload_uri if payload_embedded else None)
+            or receipt.get("repository_metadata")
+            != (
+                {
+                    field: raw[field]
+                    for field in (
+                        "repository_url",
+                        "revision",
+                        "commit_sha",
+                        "git_tree_oid",
+                        "tree_sha256",
+                        "license_spdx",
+                        "license_ref",
+                        "retrieved_at",
+                    )
+                    if raw.get(field) not in (None, "")
+                }
+                or None
+            )
         ):
             findings.append({
                 "code": "SOURCE_PORTABLE_URI_PROJECTION_INVALID",
@@ -4217,7 +4624,7 @@ def check_portable_source_index(
     entry_fields = {
         "source_id", "source_sha256", "copy_policy", "receipt_ref",
         "receipt_sha256", "payload_ref", "payload_file_sha256",
-        "payload_embedded",
+        "payload_embedded", "repository_metadata",
     }
     manifest_items = source_manifest.get("sources")
     entries = index.get("sources") if isinstance(index, Mapping) else None
@@ -4270,12 +4677,21 @@ def check_portable_source_index(
             f"{source_id}.payload.b64"
         )
         payload_embedded = source.get("payload_embedded") is True
+        repository_metadata = {
+            field: source[field]
+            for field in (
+                "repository_url", "revision", "commit_sha", "git_tree_oid",
+                "tree_sha256", "license_spdx", "license_ref", "retrieved_at",
+            )
+            if source.get(field) not in (None, "")
+        } or None
         receipt_path = (
             root / "canonical_sources/evidence" / f"{source_id}.source_receipt.json"
         )
         if (
             entry.get("source_sha256") != source.get("sha256")
             or entry.get("copy_policy") != source.get("copy_policy")
+            or entry.get("repository_metadata") != repository_metadata
             or entry.get("receipt_ref") != receipt_ref
             or source.get("path_or_uri") != receipt_ref
             or source.get("portable_evidence_ref") != receipt_ref
@@ -4298,6 +4714,7 @@ def check_portable_source_index(
             receipt.get("source_id") != source_id
             or receipt.get("source_sha256") != source.get("sha256")
             or receipt.get("copy_policy") != source.get("copy_policy")
+            or receipt.get("repository_metadata") != repository_metadata
             or receipt.get("payload_embedded") is not payload_embedded
             or receipt.get("payload_ref")
             != (payload_ref if payload_embedded else None)
@@ -8072,6 +8489,16 @@ def main() -> int:
                 "message": "one or more success outputs escape the declared write roots",
             }
         )
+    if any(
+        row["outside_workpack_artifact_refs"]
+        for row in recomputed_matrix["rows"]
+    ):
+        findings.append(
+            {
+                "code": "ENGINEERING_DAG_WORKPACK_ARTIFACT_OUTSIDE_ALLOWED_WRITE_PATHS",
+                "message": "one or more Workpack artifacts escape the declared write roots",
+            }
+        )
     if matrix != recomputed_matrix:
         findings.append(
             {
@@ -8208,17 +8635,56 @@ def _contract_path_is_contained(value: Any, allowed_root: Any) -> bool:
 def _dag_path_containment_matrix(staging: Path) -> dict[str, Any]:
     dag_path = staging / "ENGINEERING_PROJECT_DAG.json"
     dag = json.loads(dag_path.read_text(encoding="utf-8"))
+    workpack_artifact_refs_by_node: dict[str, list[str]] = {}
+    for _project_id, directory in PROJECTS:
+        index_path = (
+            staging
+            / "project_start_packages"
+            / directory
+            / "WORKPACK_INDEX.json"
+        )
+        if not index_path.is_file():
+            continue
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+        for raw_workpack in index.get("workpacks", []):
+            workpack = raw_workpack if isinstance(raw_workpack, Mapping) else {}
+            if workpack.get("program_control_surface") != "ENGINEERING_PROJECT_DAG":
+                continue
+            node_id = str(workpack.get("program_control_node_id") or "")
+            if not node_id:
+                continue
+            refs = workpack_artifact_refs_by_node.setdefault(node_id, [])
+            for artifact_ref in workpack.get("required_artifact_refs", []):
+                if isinstance(artifact_ref, str) and artifact_ref not in refs:
+                    refs.append(artifact_ref)
     rows: list[dict[str, Any]] = []
     for raw_node in dag.get("nodes", []):
         node = raw_node if isinstance(raw_node, Mapping) else {}
+        node_id = str(node.get("node_id") or "")
         allowed = list(node.get("allowed_write_paths") or [])
         outputs = list(node.get("success_output_refs") or [])
+        workpack_artifact_refs = workpack_artifact_refs_by_node.get(
+            node_id, []
+        )
         contained = [
             output
             for output in outputs
             if any(_contract_path_is_contained(output, root) for root in allowed)
         ]
         outside = [output for output in outputs if output not in contained]
+        contained_workpack_artifact_refs = [
+            artifact_ref
+            for artifact_ref in workpack_artifact_refs
+            if any(
+                _contract_path_is_contained(artifact_ref, root)
+                for root in allowed
+            )
+        ]
+        outside_workpack_artifact_refs = [
+            artifact_ref
+            for artifact_ref in workpack_artifact_refs
+            if artifact_ref not in contained_workpack_artifact_refs
+        ]
         rows.append(
             {
                 "node_id": node.get("node_id"),
@@ -8226,8 +8692,19 @@ def _dag_path_containment_matrix(staging: Path) -> dict[str, Any]:
                 "success_output_refs": outputs,
                 "contained_success_output_refs": contained,
                 "outside_success_output_refs": outside,
+                "workpack_artifact_refs": workpack_artifact_refs,
+                "contained_workpack_artifact_refs": (
+                    contained_workpack_artifact_refs
+                ),
+                "outside_workpack_artifact_refs": (
+                    outside_workpack_artifact_refs
+                ),
                 "status": "PASS"
-                if outputs and len(contained) == len(outputs)
+                if (
+                    outputs
+                    and len(contained) == len(outputs)
+                    and not outside_workpack_artifact_refs
+                )
                 else "FAIL",
             }
         )
@@ -8242,6 +8719,9 @@ def _dag_path_containment_matrix(staging: Path) -> dict[str, Any]:
         ),
         "finding_code": (
             "ENGINEERING_DAG_SUCCESS_OUTPUT_OUTSIDE_ALLOWED_WRITE_PATHS"
+        ),
+        "workpack_artifact_finding_code": (
+            "ENGINEERING_DAG_WORKPACK_ARTIFACT_OUTSIDE_ALLOWED_WRITE_PATHS"
         ),
         "node_count": len(rows),
         "pass_count": pass_count,
@@ -14076,6 +14556,18 @@ def _source_manifest(ir: Mapping[str, Any], context: Mapping[str, str]) -> dict[
         }
         if source["authority_level"] != declared_authority:
             source["declared_authority_level"] = declared_authority
+        for field in (
+            "repository_url",
+            "revision",
+            "commit_sha",
+            "git_tree_oid",
+            "tree_sha256",
+            "license_spdx",
+            "license_ref",
+            "retrieved_at",
+        ):
+            if item.get(field) not in (None, ""):
+                source[field] = deepcopy(item[field])
         sources.append(source)
     return {
         "schema_version": "2.8",
@@ -14097,6 +14589,178 @@ def _source_manifest(ir: Mapping[str, Any], context: Mapping[str, str]) -> dict[
             and str(item.get("status", "OPEN")).upper() not in {"RESOLVED", "CLOSED"}
         ],
     }
+
+
+_WORKPACK_DELIVERY_ORDER = {
+    "MB-G0": 0,
+    "MB-P1": 1,
+    "MB-P2": 2,
+    "MB-P3": 3,
+    "MB-P4": 4,
+    "MB-RELEASE-CANDIDATE": 5,
+}
+
+
+def _resolve_baseline_artifact_ids(
+    ir: Mapping[str, Any], declared_ids: list[str]
+) -> list[str]:
+    artifacts: list[tuple[str, str, str, str]] = []
+    atom_ids: list[str] = []
+    target = ir.get("target")
+    schema_catalog = (
+        target.get("artifact_schema_catalog")
+        if isinstance(target, Mapping)
+        else None
+    )
+    primary_kind_by_atom = {
+        str(atom_id): str(entry.get("artifact_kind"))
+        for atom_id, entry in (schema_catalog or {}).items()
+        if isinstance(entry, Mapping) and entry.get("artifact_kind")
+    }
+    for atom in ir.get("atoms", []):
+        if not isinstance(atom, Mapping) or not atom.get("atom_id"):
+            continue
+        atom_id = str(atom["atom_id"])
+        atom_ids.append(atom_id)
+        contract = atom.get("production_contract")
+        if not isinstance(contract, Mapping):
+            continue
+        for obligation in contract.get("workpack_obligations", []):
+            if not isinstance(obligation, Mapping):
+                continue
+            workpack_id = str(obligation.get("workpack_id") or "")
+            for artifact in obligation.get("artifact_obligations", []):
+                if isinstance(artifact, Mapping) and artifact.get("artifact_id"):
+                    artifacts.append(
+                        (
+                            str(artifact["artifact_id"]),
+                            atom_id,
+                            workpack_id,
+                            str(artifact.get("artifact_kind") or ""),
+                        )
+                    )
+    known_ids = {artifact_id for artifact_id, _, _, _ in artifacts}
+    resolved: list[str] = []
+    for declared_id in declared_ids:
+        if declared_id in known_ids:
+            selected = declared_id
+        else:
+            atom_id = next(
+                (
+                    value
+                    for value in sorted(atom_ids, key=len, reverse=True)
+                    if declared_id.startswith(f"ART-{value}-")
+                ),
+                None,
+            )
+            candidates = [
+                item for item in artifacts if atom_id is not None and item[1] == atom_id
+            ]
+            if not candidates:
+                raise ValueError(
+                    f"baseline target artifact is unresolved: {declared_id}"
+                )
+            primary_kind = primary_kind_by_atom.get(str(atom_id))
+            primary_candidates = [
+                item for item in candidates if item[3] == primary_kind
+            ]
+            selected = max(
+                primary_candidates or candidates,
+                key=lambda item: (
+                    _WORKPACK_DELIVERY_ORDER.get(item[2], -1),
+                    item[2],
+                    item[0],
+                ),
+            )[0]
+        if selected not in resolved:
+            resolved.append(selected)
+    return resolved
+
+
+def _write_baseline_migration_contract(
+    staging: Path,
+    ir: Mapping[str, Any],
+    context: Mapping[str, Any],
+) -> None:
+    target = ir.get("target")
+    contract = (
+        target.get("baseline_migration_contract")
+        if isinstance(target, Mapping)
+        else None
+    )
+    if not isinstance(contract, Mapping):
+        return
+    rows = contract.get("disposition_rows")
+    required_row_fields = {
+        "baseline_capability_id",
+        "target_disposition",
+        "target_artifact_ids",
+        "regression_case_ids",
+        "rationale",
+    }
+    if (
+        not contract.get("baseline_source_id")
+        or not contract.get("baseline_version")
+        or not contract.get("target_version")
+        or not isinstance(rows, list)
+        or not rows
+        or any(
+            not isinstance(row, Mapping)
+            or not required_row_fields.issubset(row)
+            or row.get("target_disposition")
+            not in {"RETAIN", "UPGRADE", "REPLACE", "REMOVE"}
+            or not isinstance(row.get("target_artifact_ids"), list)
+            or not row.get("target_artifact_ids")
+            or not isinstance(row.get("regression_case_ids"), list)
+            or not row.get("regression_case_ids")
+            for row in rows
+        )
+    ):
+        raise ValueError("baseline_migration_contract is incomplete")
+    acceptance_case_ids = {
+        str(item.get("case_id"))
+        for item in ir.get("acceptance_cases", [])
+        if isinstance(item, Mapping) and item.get("case_id")
+    }
+    resolved_rows: list[dict[str, Any]] = []
+    for row in rows:
+        regression_case_ids = [str(value) for value in row["regression_case_ids"]]
+        missing_cases = sorted(set(regression_case_ids) - acceptance_case_ids)
+        if missing_cases:
+            raise ValueError(
+                "baseline regression cases are unresolved: "
+                + ",".join(missing_cases)
+            )
+        resolved_row = deepcopy(dict(row))
+        declared_ids = [str(value) for value in row["target_artifact_ids"]]
+        resolved_row["declared_target_artifact_ids"] = declared_ids
+        resolved_row["target_artifact_ids"] = _resolve_baseline_artifact_ids(
+            ir, declared_ids
+        )
+        resolved_rows.append(resolved_row)
+
+    document = {
+        "schema_version": "1.0",
+        "contract_id": f"BASELINE-MIGRATION-{context['target_id']}",
+        "program_id": context["program_id"],
+        "target_id": context["target_id"],
+        "requirement_epoch": int(context["requirement_epoch"]),
+        "baseline_source_id": contract["baseline_source_id"],
+        "baseline_version": contract["baseline_version"],
+        "target_version": contract["target_version"],
+        "disposition_rows": resolved_rows,
+        "completion_rule": (
+            "EVERY_BASELINE_CAPABILITY_HAS_ONE_DISPOSITION_AND_ONE_REGRESSION_ORACLE"
+        ),
+        "status": "FROZEN_NOT_EXECUTED",
+    }
+    document["contract_sha256"] = _hash_without_field(
+        document, "contract_sha256"
+    )
+    _write_json(
+        staging / "canonical_sources/BASELINE_MIGRATION_MATRIX.json",
+        document,
+    )
 
 
 def _atom_catalog(ir: Mapping[str, Any], source_manifest: Mapping[str, Any], context: Mapping[str, str]) -> dict[str, Any]:
@@ -14272,17 +14936,51 @@ def _traceability_graph(
     }
 
 
+def _required_target_authorization_classes(
+    ir: Mapping[str, Any],
+) -> list[str]:
+    """Derive target-side side-effect gates from frozen Requirement Atoms."""
+
+    classes = set(
+        str(value)
+        for value in ir.get("target", {}).get(
+            "target_authorization_classes", []
+        )
+        if isinstance(value, str) and value
+    )
+    atom_ids: set[str] = set()
+    error_codes: set[str] = set()
+    for atom in ir.get("atoms", []):
+        if not isinstance(atom, Mapping):
+            continue
+        atom_ids.add(str(atom.get("atom_id") or ""))
+        error_codes.update(str(value) for value in atom.get("error_semantics", []))
+    if (
+        "ATOM-TARGET-SKILL-EXECUTION-GATE" in atom_ids
+        or "TARGET_SKILL_EXECUTION_AUTHORIZATION_REQUIRED" in error_codes
+    ):
+        classes.add("TARGET_SKILL_EXECUTION_AUTHORIZATION")
+    if (
+        "ATOM-ASSET-ROUTING" in atom_ids
+        or "CODEX_IMAGE_GENERATION_AUTHORIZATION_REQUIRED" in error_codes
+    ):
+        classes.add("CODEX_IMAGE_GENERATION_AUTHORIZATION")
+    return sorted(classes)
+
+
 def _patch_critical_documents(
     docs: dict[str, Any],
     ir: Mapping[str, Any],
     context: Mapping[str, str],
     staging: Path,
     candidate: Path,
+    artifact_manifest: Mapping[str, Any] | None,
 ) -> None:
     target = ir["target"]
     execution = Path(context["execution_root"])
     candidate_version = _current_candidate_version(target)
-    requirement_epoch = _current_requirement_epoch(target)
+    requirement_epoch = int(context["requirement_epoch"])
+    package_version = _current_package_version(target)
     manifest = docs["PACKAGE_MANIFEST.json"]
     manifest.update(
         {
@@ -14290,7 +14988,7 @@ def _patch_critical_documents(
             "target_id": context["target_id"],
             "candidate_version": candidate_version,
             "requirement_epoch": requirement_epoch,
-            "version": "0.1.0-draft",
+            "version": package_version,
             "status": "START_PACKAGE_AUTHORING_CANDIDATE",
         }
     )
@@ -14309,7 +15007,7 @@ def _patch_critical_documents(
         {
             "start_context_id": f"START-CONTEXT-{context['target_id']}",
             "package_id": context["package_id"],
-            "package_version": "0.1.0-draft",
+            "package_version": package_version,
             "candidate_version": candidate_version,
             "requirement_epoch": requirement_epoch,
             "target_id": context["target_id"],
@@ -14357,6 +15055,73 @@ def _patch_critical_documents(
     start["controlled_auto_advance"].update(
         {"enabled": False, "authorization_status": "NOT_GRANTED", "real_target_install_excluded": True}
     )
+
+    authorization_classes = _required_target_authorization_classes(ir)
+    if authorization_classes:
+        policy = docs["AUTHORIZATION_POLICY.json"]
+        policy["authorization_classes"] = list(
+            dict.fromkeys(
+                [*policy.get("authorization_classes", []), *authorization_classes]
+            )
+        )
+        policy["target_subauthorization_rules"] = {
+            value: {
+                "default_disposition": "DENY",
+                "status": "NOT_GRANTED",
+                "separate_exact_authorization_required": True,
+                "may_not_be_included_in_program_execution_authorization": True,
+                "one_time_use_required": True,
+                "exact_target_and_input_hash_binding_required": True,
+                "exact_job_commit_input_environment_and_output_binding_required": True,
+                "environment_manifest_and_receipt_hash_required": True,
+                "output_root_manifest_and_receipt_hash_required": True,
+                "side_effect_preflight_required": True,
+                "receipt_required": True,
+            }
+            for value in authorization_classes
+        }
+        for authorization_class in authorization_classes:
+            docs[f"{authorization_class}.json"] = {
+                "schema_version": "1.0",
+                "authorization_class": authorization_class,
+                "program_id": context["program_id"],
+                "target_id": context["target_id"],
+                "status": "NOT_GRANTED",
+                "authorization_id": None,
+                "issuer_role": None,
+                "issued_at": None,
+                "expires_at": None,
+                "exact_scope": None,
+                "exact_scope_contract": {
+                    "required_fields": [
+                        "target_skill_id",
+                        "job_id",
+                        "commit_sha",
+                        "input_manifest_sha256",
+                        "environment_id",
+                        "environment_manifest_ref",
+                        "environment_manifest_sha256",
+                        "output_root_ref",
+                        "output_manifest_sha256",
+                    ],
+                    "scope_kind": (
+                        "EXACT_JOB_COMMIT_INPUT_ENVIRONMENT_AND_OUTPUT"
+                    ),
+                    "program_wide_scope_forbidden": True,
+                },
+                "input_hashes": [],
+                "environment_receipt_ref": None,
+                "environment_receipt_sha256": None,
+                "output_receipt_ref": None,
+                "output_receipt_sha256": None,
+                "one_time_use": True,
+                "consumed": False,
+                "execution_started": False,
+                "receipt_ref": None,
+            }
+        start["target_subauthorization_refs"] = [
+            f"{value}.json" for value in authorization_classes
+        ]
 
     docs["PROFILE_LOCK.json"].update(
         {
@@ -14458,6 +15223,12 @@ def _patch_critical_documents(
     engineering_nodes = _engineering_nodes(
         context,
         candidate,
+        required_artifact_refs_by_workpack=(
+            _required_artifact_refs_by_workpack(
+                artifact_manifest,
+                context=context,
+            )
+        ),
         profile_hash=profile_hash,
         charter_hash=charter_hash,
     )
@@ -14530,6 +15301,10 @@ def _patch_critical_documents(
             "runtime_verification_ref": None,
             "transaction_contract": {
                 "lease_and_fencing_token_required": True,
+                "job_artifact_root_requires_exactly_one_active_job_lease": True,
+                "job_artifact_lease_must_bind_command_workpack_job_and_scope_hash": True,
+                "workpack_union_paths_are_catalog_only_not_active_grants": True,
+                "stale_expired_or_consumed_job_artifact_lease_rejected": True,
                 "idempotency_key_required": True,
                 "command_completion_and_state_commit_atomic": True,
                 "duplicate_side_effect_command_rejected": True,
@@ -14722,6 +15497,14 @@ def _patch_critical_documents(
     )
     architecture_epoch = target.get("architecture_epoch")
     architecture_control_plane_epoch = target.get("control_plane_epoch")
+    requirement_architecture_epoch = architecture_epoch
+    requirement_architecture_control_plane_epoch = (
+        architecture_control_plane_epoch
+    )
+    unbound_zero_semantics = (
+        architecture_epoch is None
+        and architecture_control_plane_epoch is None
+    )
     if architecture_epoch is None and architecture_control_plane_epoch is None:
         architecture_epoch = 0
         architecture_control_plane_epoch = 0
@@ -14742,6 +15525,16 @@ def _patch_critical_documents(
             "legacy_control_plane_epoch_alias": (
                 "execution_control_plane_epoch"
             ),
+            "requirement_architecture_epoch": requirement_architecture_epoch,
+            "requirement_architecture_control_plane_epoch": (
+                requirement_architecture_control_plane_epoch
+            ),
+            "projection_rule": (
+                "NULL_REQUIREMENT_EPOCHS_TO_EXPLICIT_UNBOUND_ZERO_SENTINEL"
+                if unbound_zero_semantics
+                else "IDENTITY_REQUIREMENT_EPOCH_PROJECTION"
+            ),
+            "unbound_zero_semantics": unbound_zero_semantics,
         }
     binding = {
         "program_id": context["program_id"],
@@ -14913,12 +15706,284 @@ def _runtime_ownership(
     }
 
 
+def _required_artifact_refs_by_workpack(
+    artifact_manifest: Mapping[str, Any] | None,
+    *,
+    context: Mapping[str, str],
+) -> dict[str, list[str]]:
+    refs: dict[str, list[str]] = {}
+    if not isinstance(artifact_manifest, Mapping):
+        return refs
+    for workpack_id, structural_contract in PROJECT_WORKPACK_CONTRACTS.items():
+        project_id = str(structural_contract.get("project_id") or "")
+        bundle = task_bundle_for_workpack(
+            artifact_manifest,
+            workpack_id=workpack_id,
+            project_id=project_id,
+            program_id=str(context["program_id"]),
+            target_id=str(context["target_id"]),
+            structural_contract=structural_contract,
+        )
+        if bundle is not None:
+            refs[workpack_id] = list(bundle["required_artifact_refs"])
+    return refs
+
+
+def _artifact_write_paths(
+    execution: Path, required_artifact_refs: Sequence[str]
+) -> list[str]:
+    prefix = f"{LOGICAL_EXECUTION_ROOT}/"
+    roots: list[str] = []
+    for artifact_ref in required_artifact_refs:
+        if not artifact_ref.startswith(prefix) or "/" not in artifact_ref:
+            raise ValueError(
+                "required artifact ref must be below the logical Execution Root: "
+                f"{artifact_ref}"
+            )
+        relative_parent = artifact_ref[len(prefix) :].rsplit("/", 1)[0]
+        root = str(execution / relative_parent)
+        if root not in roots:
+            roots.append(root)
+    return roots
+
+
+def _artifact_dependency_read_refs(
+    artifact_manifest: Mapping[str, Any] | None,
+    required_artifact_ids: Sequence[str],
+) -> list[str]:
+    """Return logical roots containing the full prerequisite closure."""
+
+    if not isinstance(artifact_manifest, Mapping):
+        return []
+    artifact_index = artifact_manifest.get("artifact_index")
+    if not isinstance(artifact_index, Mapping):
+        return []
+    queue = [str(artifact_id) for artifact_id in required_artifact_ids]
+    visited: set[str] = set()
+    dependency_refs: list[str] = []
+    evidence_refs: list[str] = []
+    while queue:
+        artifact_id = queue.pop(0)
+        if artifact_id in visited:
+            continue
+        visited.add(artifact_id)
+        artifact = artifact_index.get(artifact_id)
+        if not isinstance(artifact, Mapping):
+            continue
+        for evidence_ref in artifact.get("depends_on_evidence_refs", []):
+            value = str(evidence_ref or "")
+            if value and value not in evidence_refs:
+                evidence_refs.append(value)
+        for dependency_id in artifact.get("depends_on_artifact_ids", []):
+            dependency_key = str(dependency_id)
+            dependency = artifact_index.get(dependency_key)
+            if not isinstance(dependency, Mapping):
+                continue
+            dependency_ref = str(dependency.get("artifact_ref") or "")
+            if dependency_ref and dependency_ref not in dependency_refs:
+                dependency_refs.append(dependency_ref)
+            if dependency_key not in visited:
+                queue.append(dependency_key)
+    return list(
+        dict.fromkeys(
+            value.rsplit("/", 1)[0]
+            for value in [*dependency_refs, *evidence_refs]
+            if value
+        )
+    )
+
+
+def _artifact_dependency_read_paths(
+    execution: Path,
+    artifact_manifest: Mapping[str, Any] | None,
+    required_artifact_ids: Sequence[str],
+) -> list[str]:
+    """Return physical execution roots containing the full prerequisites."""
+
+    logical_roots = _artifact_dependency_read_refs(
+        artifact_manifest, required_artifact_ids
+    )
+    return _artifact_write_paths(
+        execution, [f"{root}/dependency.json" for root in logical_roots]
+    )
+
+
+def _job_artifact_scopes(
+    artifact_roots: Sequence[str], *, roots_field: str
+) -> list[dict[str, Any]]:
+    scopes: dict[str, list[str]] = {}
+    for artifact_root in artifact_roots:
+        marker = "/jobs/"
+        if marker not in artifact_root:
+            continue
+        suffix = artifact_root.split(marker, 1)[1]
+        job_id = suffix.split("/", 1)[0]
+        if job_id and artifact_root not in scopes.setdefault(job_id, []):
+            scopes[job_id].append(artifact_root)
+    return [
+        {"job_id": job_id, roots_field: scopes[job_id]}
+        for job_id in sorted(scopes)
+    ]
+
+
+def _job_artifact_lease_contract(
+    *,
+    command_id: str,
+    workpack_id: str,
+    read_scopes: Sequence[Mapping[str, Any]],
+    write_scopes: Sequence[Mapping[str, Any]],
+    selection_cardinality: str = "EXACTLY_ONE_ACTIVE_JOB_LEASE_PER_INVOCATION",
+) -> dict[str, Any] | None:
+    """Describe the one-Job runtime lease without granting one in authoring."""
+
+    reads = {
+        str(scope.get("job_id")): sorted(
+            str(value) for value in scope.get("allowed_read_roots", [])
+        )
+        for scope in read_scopes
+        if isinstance(scope, Mapping) and scope.get("job_id")
+    }
+    writes = {
+        str(scope.get("job_id")): sorted(
+            str(value) for value in scope.get("allowed_write_roots", [])
+        )
+        for scope in write_scopes
+        if isinstance(scope, Mapping) and scope.get("job_id")
+    }
+    job_ids = sorted(set(reads) | set(writes))
+    if not job_ids:
+        return None
+    bindings = []
+    for job_id in job_ids:
+        read_roots = reads.get(job_id, [])
+        write_roots = writes.get(job_id, [])
+        scope_document = {
+            "job_id": job_id,
+            "allowed_read_roots": read_roots,
+            "allowed_write_roots": write_roots,
+        }
+        bindings.append(
+            {
+                **scope_document,
+                "allowed_read_roots_sha256": _json_hash(read_roots),
+                "allowed_write_roots_sha256": _json_hash(write_roots),
+                "scope_sha256": _json_hash(scope_document),
+                "lease_receipt_ref": (
+                    f"{LOGICAL_EXECUTION_ROOT}/evidence/job_artifact_leases/"
+                    f"{workpack_id}/{command_id}/{job_id}.lease.json"
+                ),
+            }
+        )
+    root_array = {
+        "type": "array",
+        "uniqueItems": True,
+        "items": {"type": "string", "minLength": 1},
+    }
+    hash_field = {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+    return {
+        "schema_version": "1.0",
+        "contract_id": f"JOB-ARTIFACT-LEASE-{workpack_id}-{command_id}",
+        "selection_cardinality": selection_cardinality,
+        "job_scope_bindings": bindings,
+        "receipt_schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": [
+                "lease_id",
+                "program_id",
+                "project_id",
+                "workpack_id",
+                "command_id",
+                "job_id",
+                "lease_receipt_ref",
+                "allowed_read_roots",
+                "allowed_read_roots_sha256",
+                "allowed_write_roots",
+                "allowed_write_roots_sha256",
+                "scope_sha256",
+                "holder_id",
+                "fencing_token",
+                "issued_at",
+                "expires_at",
+                "lease_state_sha256",
+                "consumed",
+                "status",
+            ],
+            "properties": {
+                "lease_id": {"type": "string", "minLength": 1},
+                "program_id": {"type": "string", "minLength": 1},
+                "project_id": {"type": "string", "minLength": 1},
+                "workpack_id": {"const": workpack_id},
+                "command_id": {"const": command_id},
+                "job_id": {"enum": job_ids},
+                "lease_receipt_ref": {
+                    "enum": [item["lease_receipt_ref"] for item in bindings]
+                },
+                "allowed_read_roots": deepcopy(root_array),
+                "allowed_read_roots_sha256": deepcopy(hash_field),
+                "allowed_write_roots": deepcopy(root_array),
+                "allowed_write_roots_sha256": deepcopy(hash_field),
+                "scope_sha256": deepcopy(hash_field),
+                "holder_id": {"type": "string", "minLength": 1},
+                "fencing_token": {"type": "integer", "minimum": 1},
+                "issued_at": {"type": "string", "format": "date-time"},
+                "expires_at": {"type": "string", "format": "date-time"},
+                "lease_state_sha256": deepcopy(hash_field),
+                "consumed": {"const": False},
+                "status": {"const": "ACTIVE"},
+            },
+            "oneOf": [
+                {
+                    "properties": {
+                        "job_id": {"const": item["job_id"]},
+                        "lease_receipt_ref": {
+                            "const": item["lease_receipt_ref"]
+                        },
+                        "allowed_read_roots": {
+                            "const": item["allowed_read_roots"]
+                        },
+                        "allowed_read_roots_sha256": {
+                            "const": item["allowed_read_roots_sha256"]
+                        },
+                        "allowed_write_roots": {
+                            "const": item["allowed_write_roots"]
+                        },
+                        "allowed_write_roots_sha256": {
+                            "const": item["allowed_write_roots_sha256"]
+                        },
+                        "scope_sha256": {"const": item["scope_sha256"]},
+                    }
+                }
+                for item in bindings
+            ],
+            "x-invariants": [
+                "LEASE_PROGRAM_PROJECT_WORKPACK_AND_COMMAND_MATCH_INVOCATION",
+                "LEASE_JOB_ID_SELECTS_EXACTLY_ONE_DECLARED_SCOPE_BINDING",
+                "LEASE_RECEIPT_REF_MATCHES_SELECTED_JOB_BINDING",
+                "LEASE_READ_AND_WRITE_ROOTS_EQUAL_SELECTED_JOB_SCOPE",
+                "LEASE_ROOT_AND_SCOPE_SHA256S_RECOMPUTE_FROM_CANONICAL_ARRAYS",
+                "LEASE_FENCING_TOKEN_IS_CURRENT_AND_SINGLE_USE",
+                "LEASE_ISSUED_AT_PRECEDES_EXPIRES_AT_AND_IS_NOT_EXPIRED",
+            ],
+        },
+        "failure_codes": [
+            "JOB_ARTIFACT_LEASE_MISSING",
+            "JOB_ARTIFACT_LEASE_CARDINALITY_INVALID",
+            "JOB_ARTIFACT_LEASE_SCOPE_MISMATCH",
+            "JOB_ARTIFACT_LEASE_FENCING_TOKEN_INVALID",
+            "JOB_ARTIFACT_LEASE_EXPIRED",
+            "JOB_ARTIFACT_LEASE_REPLAYED",
+        ],
+    }
+
+
 def _project_workpack_allowed_write_paths(
     execution: Path,
     *,
     project_id: str,
     directory: str,
     workpack_id: str,
+    required_artifact_refs: Sequence[str] = (),
 ) -> list[str]:
     """Return the exact write roots declared by a project Workpack contract."""
 
@@ -14933,17 +15998,188 @@ def _project_workpack_allowed_write_paths(
         allowed_write_paths.append(
             str(execution / "project_start_packages" / directory / "repository")
         )
+    for artifact_root in _artifact_write_paths(
+        execution, required_artifact_refs
+    ):
+        if artifact_root not in allowed_write_paths:
+            allowed_write_paths.append(artifact_root)
+    if workpack_id == CASE_EVIDENCE_WRITER_WORKPACK_ID:
+        case_root = str(execution / "evidence/cases")
+        if case_root not in allowed_write_paths:
+            allowed_write_paths.append(case_root)
     return allowed_write_paths
+
+
+def _workpack_auxiliary_write_roots(
+    execution: Path, workpack_id: str
+) -> list[str]:
+    if workpack_id == CASE_EVIDENCE_WRITER_WORKPACK_ID:
+        return [str(execution / "evidence/cases")]
+    return []
+
+
+def _bind_commands_to_workpack_artifact_roots(
+    commands_by_id: Mapping[str, Mapping[str, Any]],
+    command_ids: Sequence[str],
+    artifact_write_roots: Sequence[str],
+    artifact_read_roots: Sequence[str] = (),
+    *,
+    workpack_id: str,
+) -> list[dict[str, Any]]:
+    """Declare semantic roots without granting one command every Job root."""
+
+    job_scopes: dict[str, list[str]] = {}
+    shared_roots: list[str] = []
+    for artifact_root in artifact_write_roots:
+        marker = "/jobs/"
+        if marker in artifact_root:
+            suffix = artifact_root.split(marker, 1)[1]
+            job_id = suffix.split("/", 1)[0]
+            if job_id:
+                job_scopes.setdefault(job_id, []).append(artifact_root)
+                continue
+        shared_roots.append(artifact_root)
+    shared_read_roots = [
+        root for root in artifact_read_roots if "/jobs/" not in root
+    ]
+
+    commands: list[dict[str, Any]] = []
+    for command_id in command_ids:
+        command = deepcopy(dict(commands_by_id[command_id]))
+        command.pop("workpack_artifact_write_roots", None)
+        command.pop("shared_artifact_write_roots", None)
+        command.pop("job_artifact_write_scopes", None)
+        command.pop("job_artifact_read_scopes", None)
+        command.pop("job_artifact_lease_contract", None)
+        command.pop("shared_artifact_read_roots", None)
+        roots = [
+            root
+            for root in command.get("allowed_write_roots") or []
+            if root not in artifact_write_roots
+        ]
+        is_coding_command = command_id.endswith("CODEX-CODING")
+        for artifact_root in shared_roots:
+            if artifact_root not in roots:
+                roots.append(artifact_root)
+        command["allowed_write_roots"] = roots
+        read_roots = [
+            root
+            for root in command.get("allowed_read_roots") or []
+            if root not in artifact_read_roots
+        ]
+        for artifact_root in shared_read_roots:
+            if artifact_root not in read_roots:
+                read_roots.append(artifact_root)
+        command["allowed_read_roots"] = read_roots
+        command["shared_artifact_read_roots"] = list(shared_read_roots)
+        command["shared_artifact_write_roots"] = list(shared_roots)
+        command["job_artifact_write_scopes"] = (
+            [
+                {"job_id": job_id, "allowed_write_roots": job_scopes[job_id]}
+                for job_id in sorted(job_scopes)
+            ]
+            if is_coding_command
+            else []
+        )
+        is_case_runner = command_id in {
+            "LAB-RUN-ACCEPTANCE-CASE",
+            "LAB-RUN-NEGATIVE-CASE",
+            "LAB-RUN-REGISTRY-CASE",
+        }
+        lease_eligible = is_coding_command or (
+            workpack_id == CASE_EVIDENCE_WRITER_WORKPACK_ID
+            and is_case_runner
+        )
+        command["job_artifact_read_scopes"] = (
+            _job_artifact_scopes(
+                artifact_read_roots, roots_field="allowed_read_roots"
+            )
+            if lease_eligible
+            else []
+        )
+        command["artifact_read_scope_mode"] = (
+            "ONE_JOB_LEASE_REQUIRED"
+            if lease_eligible and command["job_artifact_read_scopes"]
+            else "SHARED_ONLY"
+            if shared_read_roots
+            else "NONE"
+        )
+        command["artifact_write_scope_mode"] = (
+            "ONE_JOB_LEASE_REQUIRED"
+            if is_coding_command and job_scopes
+            else "SHARED_ONLY"
+            if shared_roots
+            else "NONE"
+        )
+        lease_contract = (
+            _job_artifact_lease_contract(
+                command_id=command_id,
+                workpack_id=workpack_id,
+                read_scopes=command["job_artifact_read_scopes"],
+                write_scopes=command["job_artifact_write_scopes"],
+                selection_cardinality=(
+                    "EXACTLY_ONE_ACTIVE_JOB_LEASE_PER_CASE_PARTITION"
+                    if is_case_runner
+                    else "EXACTLY_ONE_ACTIVE_JOB_LEASE_PER_INVOCATION"
+                ),
+            )
+            if lease_eligible
+            else None
+        )
+        command["job_artifact_lease_required"] = lease_contract is not None
+        command["job_artifact_lease_contract"] = lease_contract
+        command["active_job_artifact_lease_ref"] = None
+        command["job_artifact_scope_activation_policy"] = (
+            "NO_JOB_ARTIFACT_ROOT_IS_ACTIVE_WITHOUT_EXACTLY_ONE_CURRENT_LEASE"
+            if lease_contract is not None
+            else "NO_JOB_ARTIFACT_SCOPE"
+        )
+        if command_id == "MB-TEST":
+            executable = str(
+                command.get("executable_abs") or command.get("executable") or ""
+            )
+            execution_root = executable.split("/project_start_packages/", 1)[0]
+            test_temp_root = (
+                f"{execution_root}/evidence/project_workpacks/"
+                f"MAIN_HARNESS_BUILD/{workpack_id}/pytest-tmp"
+            )
+            command["argv"] = [
+                executable,
+                "-B",
+                "-m",
+                "pytest",
+                "-p",
+                "no:cacheprovider",
+                "--basetemp",
+                test_temp_root,
+                "tests",
+            ]
+            command["environment"] = {
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+                "PYTHONHASHSEED": "0",
+            }
+            command["allowed_write_roots"] = [test_temp_root]
+            command["test_repository_write_policy"] = (
+                "FORBIDDEN_VERIFY_SNAPSHOT_BEFORE_AFTER"
+            )
+        command["command_sha256"] = _hash_without_field(
+            command, "command_sha256"
+        )
+        commands.append(command)
+    return commands
 
 
 def _engineering_nodes(
     context: Mapping[str, str],
     candidate: Path,
     *,
+    required_artifact_refs_by_workpack: Mapping[str, Sequence[str]] | None = None,
     profile_hash: str,
     charter_hash: str,
 ) -> list[dict[str, Any]]:
     execution = Path(context["execution_root"])
+    artifact_refs_by_workpack = required_artifact_refs_by_workpack or {}
     project_for_node = {
         "LAB_": "EXTERNAL_CONFORMANCE_LAB",
         "LINKAGE_": "CONFORMANCE_LINKAGE_REVIEW",
@@ -15083,6 +16319,9 @@ def _engineering_nodes(
                 project_id=project_id,
                 directory=str(project_dir),
                 workpack_id=bound_id,
+                required_artifact_refs=artifact_refs_by_workpack.get(
+                    bound_id, ()
+                ),
             ):
                 if allowed_root not in write_paths:
                     write_paths.append(allowed_root)
@@ -15093,6 +16332,9 @@ def _engineering_nodes(
                     project_id=project_id,
                     directory=str(project_dir),
                     workpack_id="MB-P3",
+                    required_artifact_refs=artifact_refs_by_workpack.get(
+                        "MB-P3", ()
+                    ),
                 )
             )
         workpack_requires = list(
@@ -15463,59 +16705,1883 @@ def _release_pipeline_steps(
     return steps
 
 
+def _repository_fixture_jobs(ir: Mapping[str, Any]) -> list[dict[str, Any]]:
+    def artifact_ref(kind: str, job_id: str) -> str | None:
+        for atom in ir.get("atoms", []):
+            contract = atom.get("production_contract") if isinstance(atom, Mapping) else None
+            if not isinstance(contract, Mapping):
+                continue
+            for obligation in contract.get("workpack_obligations", []):
+                if not isinstance(obligation, Mapping):
+                    continue
+                for artifact in obligation.get("artifact_obligations", []):
+                    if (
+                        isinstance(artifact, Mapping)
+                        and artifact.get("artifact_kind") == kind
+                        and artifact.get("job_id") == job_id
+                    ):
+                        return str(artifact.get("artifact_ref") or "")
+        return None
+
+    jobs: list[dict[str, Any]] = []
+    for raw_job in repository_job_bindings(ir):
+        job = dict(raw_job)
+        job_id = job["job_id"]
+        claim_ref = artifact_ref("FUNCTION_SCENARIO_EFFECT_MATRIX", job_id) or (
+            f"{LOGICAL_EXECUTION_ROOT}/jobs/{job_id}/"
+            "semantic_expectations/function_scenario_effect_matrix.json"
+        )
+        demo_ref = artifact_ref("BEFORE_AFTER_DEMO_CONTRACT", job_id) or (
+            f"{LOGICAL_EXECUTION_ROOT}/jobs/{job_id}/"
+            "semantic_expectations/before_after_demo_contract.json"
+        )
+        job.update(
+            {
+                "input_skill_count": 1,
+                "expected_output_count": 1,
+                "expected_function": f"{claim_ref}#/claims/*/function",
+                "expected_scenario": f"{claim_ref}#/claims/*/trigger_scenario",
+                "expected_effect": f"{claim_ref}#/claims/*/effect",
+                "demo_contract_ref": demo_ref,
+            }
+        )
+        jobs.append(job)
+    return jobs
+
+
+def _case_artifact_expectations(
+    ir: Mapping[str, Any], atom_ids: list[str],
+    required_artifact_kinds: Sequence[str] = (),
+) -> list[dict[str, Any]]:
+    rank = _WORKPACK_DELIVERY_ORDER
+    expectations: list[dict[str, Any]] = []
+    required_kinds = {
+        str(value) for value in required_artifact_kinds if str(value)
+    }
+    seen_artifact_ids: set[str] = set()
+    for atom in ir.get("atoms", []):
+        if not isinstance(atom, Mapping):
+            continue
+        contract = atom.get("production_contract")
+        if not isinstance(contract, Mapping):
+            continue
+        obligations = [
+            item
+            for item in contract.get("workpack_obligations", [])
+            if isinstance(item, Mapping)
+        ]
+        if not obligations:
+            continue
+        selected_artifacts: list[Mapping[str, Any]] = []
+        if str(atom.get("atom_id")) in atom_ids:
+            terminal = max(
+                obligations,
+                key=lambda item: (
+                    rank.get(str(item.get("workpack_id") or ""), -1),
+                    str(item.get("workpack_id") or ""),
+                ),
+            )
+            selected_artifacts.extend(
+                artifact
+                for artifact in terminal.get("artifact_obligations", [])
+                if isinstance(artifact, Mapping)
+            )
+        if required_kinds:
+            selected_artifacts.extend(
+                artifact
+                for obligation in obligations
+                for artifact in obligation.get("artifact_obligations", [])
+                if isinstance(artifact, Mapping)
+                and str(artifact.get("artifact_kind") or "") in required_kinds
+            )
+        for artifact in selected_artifacts:
+            if not isinstance(artifact, Mapping):
+                continue
+            artifact_id = str(artifact.get("artifact_id") or "")
+            if not artifact_id or artifact_id in seen_artifact_ids:
+                continue
+            seen_artifact_ids.add(artifact_id)
+            schema = artifact.get("schema")
+            expectations.append(
+                {
+                    "artifact_id": artifact_id,
+                    "job_id": artifact.get("job_id"),
+                    "source_id": artifact.get("source_id"),
+                    "artifact_kind": str(artifact.get("artifact_kind") or ""),
+                    "artifact_ref": str(artifact.get("artifact_ref") or ""),
+                    "schema_sha256": _json_hash(schema) if isinstance(schema, Mapping) else None,
+                    "depends_on_artifact_ids": list(
+                        artifact.get("depends_on_artifact_ids") or []
+                    ),
+                }
+            )
+    return expectations
+
+
+_NEGATIVE_MUTATION_ARTIFACT_TARGETS: dict[
+    str, tuple[str, tuple[str, ...]]
+] = {
+    "video.duration_seconds": (
+        "MEDIA_ACCEPTANCE_RECEIPT",
+        ("/duration_seconds",),
+    ),
+    "video.format": (
+        "MEDIA_ACCEPTANCE_RECEIPT",
+        ("/width", "/height", "/fps"),
+    ),
+    "narration.playback_speed": (
+        "NARRATION_SCRIPT",
+        ("/playback_speed",),
+    ),
+    "tts.execution_mode": ("LOCAL_TTS_RECEIPT", ("/execution_mode",)),
+    "alignment.max_anchor_error_seconds": (
+        "AUDIO_ALIGNMENT_RECEIPT",
+        ("/max_anchor_error_seconds",),
+    ),
+    "alignment.word_anchors": (
+        "AUDIO_ALIGNMENT_RECEIPT",
+        ("/word_anchors",),
+    ),
+    "motion.binding_granularity": (
+        "OBJECT_MOTION_IR",
+        ("/shots/0/objects/0/audio_anchor_id",),
+    ),
+    "motion.objects": ("OBJECT_MOTION_IR", ("/shots/0/objects",)),
+    "asset.materialization_state": (
+        "ASSET_PLAN",
+        ("/assets/0/materialization_state",),
+    ),
+    "asset.provenance_refs": (
+        "ASSET_PLAN",
+        ("/assets/0/provenance_refs",),
+    ),
+    "asset_plan.materialization_state": (
+        "ASSET_PLAN",
+        ("/assets/0/materialization_state",),
+    ),
+    "before_after_demo.actual_skill_output": (
+        "BEFORE_AFTER_DEMO_CONTRACT",
+        ("/actual_skill_output",),
+    ),
+    "before_after_demo.target_skill_execution_receipt_ref": (
+        "BEFORE_AFTER_DEMO_CONTRACT",
+        ("/target_skill_execution_receipt_ref",),
+    ),
+    "claim.source_refs": (
+        "FUNCTION_SCENARIO_EFFECT_MATRIX",
+        ("/claims/0/source_refs",),
+    ),
+    "target_skill_gate.side_effects_started": (
+        "TARGET_SKILL_EXECUTION_GATE_RECEIPT",
+        ("/side_effects_started",),
+    ),
+    "target_skill_gate.authorization_scope": (
+        "TARGET_SKILL_EXECUTION_GATE_RECEIPT",
+        ("/authorization_scope",),
+    ),
+    "target_skill_gate.current_input_manifest_sha256": (
+        "TARGET_SKILL_EXECUTION_GATE_RECEIPT",
+        ("/current_input_manifest_sha256",),
+    ),
+    "target_skill_gate.authorization_consumed": (
+        "TARGET_SKILL_EXECUTION_GATE_RECEIPT",
+        ("/authorization_consumed",),
+    ),
+    "render.animation_engine": (
+        "LOCAL_RENDER_RECEIPT",
+        ("/external_text_to_video_used",),
+    ),
+    "render.renderer_commit_sha": (
+        "LOCAL_RENDER_RECEIPT",
+        ("/renderer_commit_sha",),
+    ),
+    "stage_receipt.predecessor_sha256": (
+        "RESUMABLE_STAGE_RECEIPT",
+        ("/previous_event_hash",),
+    ),
+    "resume.pending_action": (
+        "RESUMABLE_STAGE_RECEIPT",
+        ("/attempted_idempotency_keys",),
+    ),
+    "authoring_handoff.workpack_started": (
+        "AUTHORING_STOP_RECEIPT",
+        ("/authoring_workpack_started",),
+    ),
+    "authoring.workpack_started": (
+        "AUTHORING_STOP_RECEIPT",
+        ("/authoring_workpack_started",),
+    ),
+    "authoring.driver_started": (
+        "AUTHORING_STOP_RECEIPT",
+        ("/authoring_driver_started",),
+    ),
+    "authoring.media_render": (
+        "AUTHORING_STOP_RECEIPT",
+        ("/authoring_media_rendered",),
+    ),
+    "authoring.model_download": (
+        "AUTHORING_STOP_RECEIPT",
+        ("/authoring_model_downloaded",),
+    ),
+}
+
+
+def _negative_fixture_ref(case_id: str) -> str:
+    return (
+        f"{LOGICAL_CANDIDATE_ROOT}/validation/case_fixtures/"
+        f"negative-{_slug(case_id).lower()}.fixture.json"
+    )
+
+
+def _external_mutation_pointer(target_ref: str) -> str:
+    _, separator, tail = target_ref.partition(".")
+    path = tail if separator else target_ref
+    tokens = [
+        token.replace("~", "~0").replace("/", "~1")
+        for token in path.split(".")
+        if token
+    ]
+    return "/" + "/".join(tokens or ["value"])
+
+
+def _bind_negative_mutation_targets(
+    fixture: dict[str, Any],
+    ir: Mapping[str, Any],
+    case_id: str,
+) -> None:
+    """Bind every conceptual mutation target to an exact future input."""
+
+    all_atom_ids = [
+        str(atom.get("atom_id"))
+        for atom in ir.get("atoms", [])
+        if isinstance(atom, Mapping) and atom.get("atom_id")
+    ]
+    all_artifacts = _case_artifact_expectations(ir, all_atom_ids)
+    fixture_jobs = [
+        item
+        for item in fixture.get("fixture_jobs", [])
+        if isinstance(item, Mapping) and item.get("job_id")
+    ]
+    fixture_ref = _negative_fixture_ref(case_id)
+
+    def bind(mutation: dict[str, Any]) -> None:
+        target_ref = str(mutation.get("target_ref") or "")
+        artifact_target = _NEGATIVE_MUTATION_ARTIFACT_TARGETS.get(
+            target_ref
+        )
+        if artifact_target is not None:
+            artifact_kind, json_pointers = artifact_target
+            matches = sorted(
+                (
+                    item
+                    for item in all_artifacts
+                    if item.get("artifact_kind") == artifact_kind
+                ),
+                key=lambda item: str(item.get("artifact_id") or ""),
+            )
+            if matches:
+                mutation["target_binding"] = {
+                    "resolver": "ARTIFACT_MANIFEST_SCHEMA_POINTER_V1",
+                    "resource_kind": "DECLARED_ARTIFACT_SET",
+                    "artifact_kind": artifact_kind,
+                    "artifact_ids": [
+                        str(item["artifact_id"]) for item in matches
+                    ],
+                    "artifact_refs": [
+                        str(item["artifact_ref"]) for item in matches
+                    ],
+                    "job_ids": sorted(
+                        {
+                            str(item["job_id"])
+                            for item in matches
+                            if item.get("job_id")
+                        }
+                    ),
+                    "json_pointers": list(json_pointers),
+                    "application_cardinality": "EVERY_MATCHED_ARTIFACT",
+                }
+                return
+        root, _, _ = target_ref.partition(".")
+        if root == "job" and fixture_jobs:
+            mutation["target_binding"] = {
+                "resolver": "FIXTURE_INPUT_JSON_POINTER_V1",
+                "resource_kind": "FIXTURE_JOB_SET",
+                "base_input_ref": f"{fixture_ref}#/input/fixture_jobs",
+                "instance_selector": {
+                    "match_field": "job_id",
+                    "match_values": sorted(
+                        str(item["job_id"]) for item in fixture_jobs
+                    ),
+                    "cardinality": "EXACT_DECLARED_JOB_SET",
+                },
+                "json_pointers": [_external_mutation_pointer(target_ref)],
+            }
+            return
+        mutation["target_binding"] = {
+            "resolver": "EXECUTION_INPUT_JSON_POINTER_V1",
+            "resource_kind": "DECLARED_EXECUTION_VALIDATION_INPUT",
+            "base_input_ref": (
+                f"{LOGICAL_EXECUTION_ROOT}/validation-inputs/"
+                f"{_slug(root or 'fixture').lower()}.json"
+            ),
+            "json_pointers": [_external_mutation_pointer(target_ref)],
+            "materialization_requirement": (
+                "MUST_EXIST_BEFORE_MUTATION_APPLICATION"
+            ),
+        }
+
+    primary = fixture.get("mutation")
+    if isinstance(primary, dict):
+        bind(primary)
+    for variant in fixture.get("mutation_variants", []):
+        mutation = variant.get("mutation") if isinstance(variant, Mapping) else None
+        if isinstance(mutation, dict):
+            bind(mutation)
+    variants = [
+        {
+            "variant_id": item["variant_id"],
+            "mutation": deepcopy(item["mutation"]),
+        }
+        for item in fixture.get("mutation_variants", [])
+        if isinstance(item, Mapping)
+        and item.get("variant_id")
+        and isinstance(item.get("mutation"), Mapping)
+    ]
+    fixture["mutation_manifest"] = variants
+    fixture["mutation_manifest_sha256"] = _json_hash(variants)
+
+
+def _acceptance_fixture_input(
+    ir: Mapping[str, Any], case: Mapping[str, Any]
+) -> dict[str, Any]:
+    atom_ids = [str(value) for value in case.get("atom_ids", [])]
+    required_artifact_kinds = required_artifact_kinds_for_case(case)
+    artifact_expectations = _case_artifact_expectations(
+        ir,
+        atom_ids,
+        required_artifact_kinds,
+    )
+    if not required_artifact_kinds and artifact_expectations:
+        required_artifact_kinds = sorted(
+            {
+                str(expectation["artifact_kind"])
+                for expectation in artifact_expectations
+                if expectation.get("artifact_kind")
+            }
+        )
+    evidence_closure_policy = case.get("evidence_closure_policy")
+    if evidence_closure_policy in (None, "") and required_artifact_kinds:
+        evidence_closure_policy = "ALL_CASE_BOUND_ARTIFACT_KINDS_REQUIRED"
+    return {
+        "declared_inputs": deepcopy(list(case.get("inputs") or [])),
+        "fixture_jobs": _repository_fixture_jobs(ir),
+        "artifact_expectations": artifact_expectations,
+        "artifact_dependency_mode": (
+            "DECLARED_PRODUCTION_ARTIFACTS"
+            if artifact_expectations
+            else "NO_DECLARED_PRODUCTION_ARTIFACTS"
+        ),
+        "evidence_type": str(
+            case.get("evidence_type") or "DECLARED_ACCEPTANCE_EVIDENCE"
+        ),
+        "one_skill_per_job": True,
+        "required_artifact_kinds": required_artifact_kinds,
+        "evidence_closure_policy": evidence_closure_policy,
+    }
+
+
+def _structured_negative_input(case: Mapping[str, Any]) -> dict[str, Any]:
+    case_id = str(case.get("case_id") or "NEG-UNNAMED")
+    expected_failure = str(case.get("expected_failure") or "EXPECTED_REJECTION")
+    fixture = deepcopy(dict(case.get("input_fixture") or {}))
+    fixture.setdefault("fixture_id", f"FIXTURE-{case_id}")
+    fixture.setdefault("atom_ids", list(case.get("atom_ids") or []))
+    mutation = fixture.get("mutation")
+    provided_mutation = (
+        deepcopy(dict(mutation))
+        if (
+        isinstance(mutation, Mapping)
+        and mutation.get("operation") != "INJECT_DECLARED_VIOLATION"
+        and not str(mutation.get("target_ref") or "").startswith(
+            "validation-input://"
+        )
+        and isinstance(mutation.get("violated_constraint"), Mapping)
+        and bool(mutation.get("violated_constraint"))
+        )
+        else None
+    )
+    mutations: dict[str, dict[str, Any]] = {
+        "VIDEO_CONTRACT_REJECTED": {
+            "operation": "SET_FIELD",
+            "target_ref": "job.input_skill_count",
+            "invalid_value": 2,
+            "violated_constraint": {"const": 1},
+        },
+        "CONTENT_EVIDENCE_MISMATCH": {
+            "operation": "REMOVE_CONDITIONALLY_REQUIRED_FIELD",
+            "target_ref": (
+                "before_after_demo.target_skill_execution_receipt_ref"
+            ),
+            "invalid_value": None,
+            "violated_constraint": {
+                "when": {
+                    "provenance_state": "AUTHORIZED_TARGET_SKILL_RUN"
+                },
+                "required": "target_skill_execution_receipt_ref",
+            },
+        },
+        "MOTION_SYNC_TOLERANCE_EXCEEDED": {
+            "operation": "SET_OUT_OF_RANGE_VALUE",
+            "target_ref": "alignment.max_anchor_error_seconds",
+            "invalid_value": 0.101,
+            "violated_constraint": {"maximum": 0.1},
+        },
+        "ASSET_OR_RENDER_AUTHORITY_REJECTED": {
+            "operation": "SET_FIELD",
+            "target_ref": "asset_plan.materialization_state",
+            "invalid_value": "CODEX_IMAGEGEN_AUTHORIZED_MATERIALIZED",
+            "violated_constraint": {
+                "requires_non_null": [
+                    "generation_authorization_ref",
+                    "generation_receipt_ref",
+                    "asset_sha256",
+                ],
+                "provided": None,
+            },
+        },
+        "TARGET_SKILL_EXECUTION_DISABLED": {
+            "operation": "SET_FIELD",
+            "target_ref": "target_skill_gate.side_effects_started",
+            "invalid_value": True,
+            "violated_constraint": {
+                "when_status": "DENIED_NO_SIDE_EFFECT",
+                "const": False,
+            },
+        },
+        "AUTHORING_STOP": {
+            "operation": "SET_FIELD",
+            "target_ref": "authoring_handoff.workpack_started",
+            "invalid_value": True,
+            "violated_constraint": {"const": False},
+        },
+        "INVOCATION_UNVERIFIED": {
+            "operation": "SET_FIELD",
+            "target_ref": "runtime_receipt.invocation_verified",
+            "invalid_value": False,
+            "violated_constraint": {"const": True},
+        },
+        "ATTESTATION_REPLAY_REJECTED": {
+            "operation": "REPLAY_ATTESTATION",
+            "target_ref": "runtime_attestation.challenge_nonce",
+            "invalid_value": "previously_consumed_nonce",
+            "violated_constraint": {"fresh_and_single_use": True},
+        },
+        "OUTPUT_SUBSTITUTION_DETECTED": {
+            "operation": "SUBSTITUTE_OUTPUT",
+            "target_ref": "runtime_receipt.output_sha256",
+            "invalid_value": "1" * 64,
+            "violated_constraint": {"expected_sha256": "2" * 64},
+        },
+        "EXECUTOR_IDENTITY_UNTRUSTED": {
+            "operation": "REPLACE_EXECUTOR",
+            "target_ref": "runtime_receipt.executor_identity",
+            "invalid_value": "STUB_EXECUTOR",
+            "violated_constraint": {"allowed": ["PINNED_CODEX_RUNTIME"]},
+        },
+        "ILLEGAL_PHASE_TRANSITION": {
+            "operation": "SET_ORDER",
+            "target_ref": "phase_transition",
+            "invalid_value": ["P2", "P4"],
+            "violated_constraint": {"required_predecessor": "P3"},
+        },
+        "STALE_PREDECESSOR_HASH": {
+            "operation": "REPLACE_HASH",
+            "target_ref": "stage_receipt.predecessor_sha256",
+            "invalid_value": "0" * 64,
+            "violated_constraint": {"must_equal_current_predecessor": True},
+        },
+        "STAGE_RECEIPT_MISSING": {
+            "operation": "OMIT_STAGE_RECEIPT",
+            "target_ref": "release.required_stage_receipts.P2",
+            "invalid_value": None,
+            "violated_constraint": {"required": "P2"},
+        },
+        "RUNTIME_ENTRYPOINT_FALLBACK_REJECTED": {
+            "operation": "SET_FIELD",
+            "target_ref": "runtime.entrypoint_class",
+            "invalid_value": "BUILD_PROGRAM_DRIVER",
+            "violated_constraint": {"const": "INSTALLED_HARNESS_RUNTIME"},
+        },
+        "CERTIFICATE_INVALIDATED": {
+            "operation": "REPLACE_HASH",
+            "target_ref": "certificate.candidate_sha256",
+            "invalid_value": "3" * 64,
+            "violated_constraint": {"current_candidate_sha256": "4" * 64},
+        },
+        "AUTHORIZATION_INVALID": {
+            "operation": "REMOVE_AUTHORIZATION",
+            "target_ref": "action.authorization_ref",
+            "invalid_value": None,
+            "violated_constraint": {"authorization_status": "GRANTED_CURRENT"},
+        },
+        "STATE_CONFLICT": {
+            "operation": "ADD_ACTIVE_LEASE",
+            "target_ref": "control_state.active_next_actions",
+            "invalid_value": ["ACTION-A", "ACTION-B"],
+            "violated_constraint": {"maxItems": 1},
+        },
+        "RELEASE_PREDECESSOR_MISSING": {
+            "operation": "SET_ORDER",
+            "target_ref": "release.completed_steps",
+            "invalid_value": ["A", "C4"],
+            "violated_constraint": {
+                "required_order": ["A", "B0", "C", "B1", "D", "C4"]
+            },
+        },
+        "LOOP_ESCALATION_REQUIRED": {
+            "operation": "SET_OUT_OF_RANGE_VALUE",
+            "target_ref": "repair_loop.no_progress_count",
+            "invalid_value": 4,
+            "violated_constraint": {"maximum_before_escalation": 3},
+        },
+        "DUPLICATE_SIDE_EFFECT_REJECTED": {
+            "operation": "DUPLICATE_SIDE_EFFECT",
+            "target_ref": "resume.pending_action",
+            "invalid_value": "REEXECUTE_ALREADY_COMMITTED_SIDE_EFFECT",
+            "violated_constraint": {"at_most_once": True},
+        },
+        "DEPENDENT_STATE_INVALIDATED": {
+            "operation": "INVALIDATE_UPSTREAM",
+            "target_ref": "dependency.upstream_sha256",
+            "invalid_value": "5" * 64,
+            "violated_constraint": {"dependent_status_after_change": "INVALID"},
+        },
+        "REAL_TARGET_INSTALL_AUTHORIZATION_REQUIRED": {
+            "operation": "REQUEST_FORBIDDEN_ACTION",
+            "target_ref": "install.real_target",
+            "invalid_value": {"requested": True, "authorization_ref": None},
+            "violated_constraint": {
+                "requires": "REAL_TARGET_INSTALL_AUTHORIZATION"
+            },
+        },
+        "ENGINEERING_PREDECESSOR_MISSING": {
+            "operation": "SET_ORDER",
+            "target_ref": "engineering_projects.release_order",
+            "invalid_value": ["MAIN", "LINKAGE", "LAB"],
+            "violated_constraint": {
+                "required_order": ["LAB", "LINKAGE", "MAIN"]
+            },
+        },
+        "STATE_CONFLICT_HARD_STOP": {
+            "operation": "ADD_ACTIVE_LEASE",
+            "target_ref": "program.active_workpacks",
+            "invalid_value": ["LAB-CERTIFICATION", "MB-P3"],
+            "violated_constraint": {"maxItems": 1},
+        },
+        "CANDIDATE_HASH_MISMATCH": {
+            "operation": "REPLACE_HASH",
+            "target_ref": "lab.candidate_sha256",
+            "invalid_value": "6" * 64,
+            "violated_constraint": {"p4_candidate_sha256": "7" * 64},
+        },
+        "TOOL_DISTRIBUTION_HASH_CHANGED": {
+            "operation": "CHANGE_LOCKED_HASH",
+            "target_ref": "lab.tool_distribution_sha256",
+            "invalid_value": "8" * 64,
+            "violated_constraint": {"attempt_locked_sha256": "9" * 64},
+        },
+        "AUTHORITY_MISMATCH": {
+            "operation": "REQUEST_FORBIDDEN_ACTION",
+            "target_ref": "linkage.requested_authority",
+            "invalid_value": ["MODIFY_REVIEWED_ASSET", "ISSUE_CERTIFICATE"],
+            "violated_constraint": {"allowed": ["READ_ONLY_LINKAGE_REVIEW"]},
+        },
+    }
+    selected = deepcopy(
+        mutations.get(
+            expected_failure,
+            {
+                "operation": "SET_FIELD",
+                "target_ref": "fixture.declared_validity",
+                "invalid_value": False,
+                "violated_constraint": {"const": True},
+            },
+        )
+    )
+    if provided_mutation is not None:
+        selected = provided_mutation
+    selected["expected_failure"] = expected_failure
+    fixture["mutation"] = selected
+    def variant(
+        variant_id: str,
+        operation: str,
+        target_ref: str,
+        invalid_value: Any,
+        violated_constraint: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            "variant_id": variant_id,
+            "mutation": {
+                "operation": operation,
+                "target_ref": target_ref,
+                "invalid_value": deepcopy(invalid_value),
+                "violated_constraint": deepcopy(dict(violated_constraint)),
+                "expected_failure": expected_failure,
+            },
+        }
+
+    case_variants: dict[str, list[dict[str, Any]]] = {
+        "NEG-MULTI-SKILL-OR-DURATION-DRIFT": [
+            variant("MULTI-SKILL", "SET_FIELD", "job.input_skill_count", 2, {"const": 1}),
+            variant("DURATION-DRIFT", "SET_OUT_OF_RANGE_VALUE", "video.duration_seconds", 186, {"minimum": 175, "maximum": 185}),
+            variant("WRONG-CANVAS-OR-FPS", "SET_FIELD", "video.format", {"width": 1280, "height": 720, "fps": 24}, {"const": {"width": 1920, "height": 1080, "fps": 30}}),
+            variant("FORCED-NARRATION-SPEED", "SET_FIELD", "narration.playback_speed", 1.5, {"const": 1.0}),
+        ],
+        "NEG-UNSUPPORTED-EFFECT-OR-FAKE-DEMO": [
+            variant("UNSUPPORTED-EFFECT", "SET_FIELD", "claim.source_refs", [], {"minItems": 1}),
+            variant("ILLUSTRATION-LABELED-ACTUAL", "SET_FIELD", "before_after_demo.actual_skill_output", True, {"when": {"provenance_state": "CLEARLY_LABELED_ILLUSTRATION"}, "const": False}),
+        ],
+        "NEG-CLOUD-TTS-OR-APPROXIMATE-SYNC": [
+            variant("CLOUD-TTS", "SET_FIELD", "tts.execution_mode", "CLOUD", {"const": "LOCAL_OFFLINE"}),
+            variant("MISSING-FORCED-ALIGNMENT", "SET_FIELD", "alignment.word_anchors", [], {"minItems": 1}),
+            variant("SCENE-ONLY-APPROXIMATE-TIMING", "REMOVE_REQUIRED_FIELD", "motion.binding_granularity", None, {"required": "shots[].objects[].audio_anchor_id"}),
+            variant("INCOMPLETE-OBJECT-SET", "SET_FIELD", "motion.objects", [], {"minItems": 1}),
+            variant("TIMING-TOLERANCE-EXCEEDED", "SET_OUT_OF_RANGE_VALUE", "alignment.max_anchor_error_seconds", 0.101, {"maximum": 0.1}),
+        ],
+        "NEG-UNROUTED-ASSET-OR-EXTERNAL-ANIMATION": [
+            variant("OBJECT-WITHOUT-PROVENANCE", "SET_FIELD", "asset.provenance_refs", [], {"minItems": 1}),
+            variant("UNAUTHORIZED-CODEX-IMAGEGEN", "SET_FIELD", "asset.materialization_state", "CODEX_IMAGEGEN_AUTHORIZED_MATERIALIZED", {"requires_non_null": ["generation_authorization_ref", "generation_receipt_ref", "generation_receipt_sha256", "asset_ref", "asset_sha256"]}),
+            variant("EXTERNAL-TEXT-TO-VIDEO", "SET_FIELD", "render.animation_engine", True, {"field": "external_text_to_video_used", "const": False}),
+            variant("UNPINNED-SHOTCRAFT", "REMOVE_REQUIRED_FIELD", "render.renderer_commit_sha", None, {"required": "renderer_commit_sha"}),
+        ],
+        "NEG-UNAUTHORIZED-TARGET-EXECUTION-OR-FALSE-RESUME": [
+            variant("DENIED-GATE-SIDE-EFFECT", "SET_FIELD", "target_skill_gate.side_effects_started", True, {"when_status": "DENIED_NO_SIDE_EFFECT", "const": False}),
+            variant("PROGRAM-WIDE-AUTHORIZATION-SUBSTITUTION", "SET_FIELD", "target_skill_gate.authorization_scope", "PROGRAM_WIDE", {"const": "EXACT_JOB_COMMIT_AND_INPUT_MANIFEST"}),
+            variant("STALE-AUTHORIZATION-OR-INPUT-HASH", "REPLACE_HASH", "target_skill_gate.current_input_manifest_sha256", "a" * 64, {"must_equal": "target_skill_gate.authorized_input_manifest_sha256", "authorization_freshness": "CURRENT"}),
+            variant("CONSUMED-AUTHORIZATION-REPLAY", "REPLAY_ATTESTATION", "target_skill_gate.authorization_consumed", True, {"single_use": True}),
+            variant("FALSE-RESUME-SIDE-EFFECT-REPLAY", "DUPLICATE_SIDE_EFFECT", "resume.pending_action", "REEXECUTE_ALREADY_COMMITTED_SIDE_EFFECT", {"at_most_once": True}),
+        ],
+        "NEG-FIXTURE-NARRATIVE-PASS-OR-AUTHORING-EXECUTION": [
+            variant("MISSING-FIXTURE-EVIDENCE", "REMOVE_REQUIRED_FIELD", "fixture.evidence_refs", None, {"required": "evidence_refs"}),
+            variant("NARRATIVE-PASS", "SET_FIELD", "fixture.result_basis", "NARRATIVE_SELF_REPORT", {"allowed": ["HASH_BOUND_EXECUTION_EVIDENCE"]}),
+            variant("DEPENDENCY-INSTALL", "REQUEST_FORBIDDEN_ACTION", "authoring.dependency_install", True, {"const": False}),
+            variant("MODEL-DOWNLOAD", "REQUEST_FORBIDDEN_ACTION", "authoring.model_download", True, {"const": False}),
+            variant("MEDIA-RENDER", "REQUEST_FORBIDDEN_ACTION", "authoring.media_render", True, {"const": False}),
+            variant("WORKPACK-START", "REQUEST_FORBIDDEN_ACTION", "authoring.workpack_started", True, {"const": False}),
+            variant("DRIVER-START", "REQUEST_FORBIDDEN_ACTION", "authoring.driver_started", True, {"const": False}),
+            variant("EXECUTION-ROOT-CREATE", "REQUEST_FORBIDDEN_ACTION", "authoring.execution_root_created", True, {"const": False}),
+        ],
+        "NEG-HF28-B0-B1-ORDER": [
+            variant(
+                "B0-PREFILLED-ARTIFACT-HASH",
+                "SET_FIELD",
+                "release.steps.LINKAGE_B0_NORMATIVE_BINDING.artifact_sha256",
+                "0" * 64,
+                {
+                    "must_be_absent_before": "IMMUTABLE_ARTIFACT_BUILD",
+                    "bound_by": "LINKAGE_B1_ARTIFACT_BINDING",
+                },
+            ),
+            variant(
+                "B1-BEFORE-IMMUTABLE-ARTIFACT-BUILD",
+                "SET_ORDER",
+                "release.completed_steps",
+                [
+                    "P4_BUILD_INPUT_LOCK",
+                    "PACK_DRAFT",
+                    "LINKAGE_A_INTERFACE_COMPLETENESS",
+                    "LINKAGE_B0_NORMATIVE_BINDING",
+                    "LINKAGE_C_EVIDENCE_COMPATIBILITY",
+                    "LINKAGE_B1_ARTIFACT_BINDING",
+                    "IMMUTABLE_ARTIFACT_BUILD",
+                ],
+                {
+                    "required_order": [
+                        "P4_BUILD_INPUT_LOCK",
+                        "PACK_DRAFT",
+                        "LINKAGE_A_INTERFACE_COMPLETENESS",
+                        "LINKAGE_B0_NORMATIVE_BINDING",
+                        "LINKAGE_C_EVIDENCE_COMPATIBILITY",
+                        "IMMUTABLE_ARTIFACT_BUILD",
+                        "LINKAGE_B1_ARTIFACT_BINDING",
+                    ]
+                },
+            ),
+        ],
+    }
+    variants = case_variants.get(
+        case_id,
+        [
+            {
+                "variant_id": f"{case_id}-PRIMARY-MUTATION",
+                "mutation": deepcopy(selected),
+            }
+        ],
+    )
+    fixture["mutation_variants"] = variants
+    mutation_manifest = [
+        {
+            "variant_id": item["variant_id"],
+            "mutation": deepcopy(item["mutation"]),
+        }
+        for item in variants
+    ]
+    fixture["mutation_manifest"] = mutation_manifest
+    fixture["mutation_manifest_sha256"] = _json_hash(mutation_manifest)
+    return fixture
+
+
+def _case_oracle_bindings(
+    fixture_input: Mapping[str, Any], assertions: list[Mapping[str, Any]]
+) -> dict[str, Any]:
+    assertion_manifest = [
+        {
+            "assertion_id": str(item.get("assertion_id") or ""),
+            "operator": str(item.get("operator") or ""),
+            "expected": deepcopy(item.get("expected")),
+        }
+        for item in assertions
+    ]
+    artifact_manifest = deepcopy(
+        list(fixture_input.get("artifact_expectations") or [])
+    )
+    source_job_manifest = [
+        {
+            field: item[field]
+            for field in ("job_id", "source_id", "repository_url", "commit_sha")
+        }
+        for item in fixture_input.get("fixture_jobs", [])
+        if isinstance(item, Mapping)
+        and all(
+            field in item
+            for field in ("job_id", "source_id", "repository_url", "commit_sha")
+        )
+    ]
+    mutation_manifest = deepcopy(
+        list(fixture_input.get("mutation_manifest") or [])
+    )
+    return {
+        "evaluator_id": "EXACT_CASE_SET_ORACLE_V1",
+        "evaluator_registry_ref": ORACLE_EVALUATOR_REGISTRY_REF,
+        "assertion_manifest": assertion_manifest,
+        "assertion_manifest_sha256": _json_hash(assertion_manifest),
+        "artifact_manifest": artifact_manifest,
+        "artifact_manifest_sha256": _json_hash(artifact_manifest),
+        "source_job_manifest": source_job_manifest,
+        "source_job_manifest_sha256": _json_hash(source_job_manifest),
+        "mutation_manifest": mutation_manifest,
+        "mutation_manifest_sha256": _json_hash(mutation_manifest),
+        "set_equality_required": True,
+    }
+
+
+def _specialize_case_result_schema(
+    base_schema: Mapping[str, Any],
+    *,
+    schema_id: str,
+    case_id: str,
+    case_kind: str,
+    fixture_sha256: str,
+    oracle_bindings: Mapping[str, Any],
+    expected_failure: str | None,
+) -> dict[str, Any]:
+    schema = deepcopy(dict(base_schema))
+    schema["$id"] = schema_id
+    properties = schema["properties"]
+    properties["case_id"] = {"const": case_id}
+    properties["case_kind"] = {"const": case_kind}
+    properties["fixture_sha256"] = {"const": fixture_sha256}
+    properties["assertion_manifest_sha256"] = {
+        "const": oracle_bindings["assertion_manifest_sha256"]
+    }
+    assertion_manifest = list(oracle_bindings["assertion_manifest"])
+    assertion_results = properties["assertion_results"]
+    assertion_results.update(
+        {
+            "minItems": len(assertion_manifest),
+            "maxItems": len(assertion_manifest),
+            "uniqueItems": True,
+            "allOf": [
+                {
+                    "contains": {
+                        "type": "object",
+                        "properties": {
+                            "assertion_id": {"const": item["assertion_id"]},
+                            "operator": {"const": item["operator"]},
+                            "expected": {"const": item["expected"]},
+                        },
+                        "required": ["assertion_id", "operator", "expected"],
+                    },
+                    "minContains": 1,
+                    "maxContains": 1,
+                }
+                for item in assertion_manifest
+            ],
+        }
+    )
+    if case_kind == "ACCEPTANCE":
+        for field in (
+            "artifact_checks",
+            "artifact_manifest_sha256",
+            "source_job_bindings",
+            "source_job_manifest_sha256",
+        ):
+            if field not in schema["required"]:
+                schema["required"].append(field)
+        artifact_manifest = list(oracle_bindings["artifact_manifest"])
+        properties["artifact_manifest_sha256"] = {
+            "const": oracle_bindings["artifact_manifest_sha256"]
+        }
+        artifact_checks = properties["artifact_checks"]
+        artifact_checks.update(
+            {
+                "minItems": len(artifact_manifest),
+                "maxItems": len(artifact_manifest),
+                "uniqueItems": True,
+                "allOf": [
+                    {
+                        "contains": {
+                            "type": "object",
+                            "properties": {
+                                "artifact_id": {"const": item["artifact_id"]},
+                                "job_id": {"const": item.get("job_id")},
+                                "source_id": {"const": item.get("source_id")},
+                                "artifact_ref": {"const": item["artifact_ref"]},
+                                "schema_sha256": {
+                                    "const": item["schema_sha256"]
+                                },
+                            },
+                            "required": [
+                                "artifact_id",
+                                "job_id",
+                                "source_id",
+                                "artifact_ref",
+                                "schema_sha256",
+                            ],
+                        },
+                        "minContains": 1,
+                        "maxContains": 1,
+                    }
+                    for item in artifact_manifest
+                ],
+            }
+        )
+        source_manifest = list(oracle_bindings["source_job_manifest"])
+        properties["source_job_manifest_sha256"] = {
+            "const": oracle_bindings["source_job_manifest_sha256"]
+        }
+        source_jobs = properties["source_job_bindings"]
+        source_jobs.update(
+            {
+                "minItems": len(source_manifest),
+                "maxItems": len(source_manifest),
+                "uniqueItems": True,
+                "allOf": [
+                    {
+                        "contains": {
+                            "type": "object",
+                            "properties": {
+                                field: {"const": item[field]}
+                                for field in (
+                                    "job_id",
+                                    "source_id",
+                                    "repository_url",
+                                    "commit_sha",
+                                )
+                            },
+                            "required": [
+                                "job_id",
+                                "source_id",
+                                "repository_url",
+                                "commit_sha",
+                            ],
+                        },
+                        "minContains": 1,
+                        "maxContains": 1,
+                    }
+                    for item in source_manifest
+                ],
+            }
+        )
+    else:
+        for field in (
+            "observed_failure_code",
+            "expected_failure_observed",
+            "artifact_manifest_sha256",
+            "source_job_manifest_sha256",
+            "mutation_manifest_sha256",
+            "mutation_variant_results",
+            "side_effect_receipt_ref",
+            "side_effect_receipt_sha256",
+            "side_effects_started",
+        ):
+            if field not in schema["required"]:
+                schema["required"].append(field)
+        properties["observed_failure_code"] = {
+            "const": str(expected_failure or "EXPECTED_REJECTION")
+        }
+        properties["expected_failure_observed"] = {"const": True}
+        properties["side_effects_started"] = {"const": False}
+        properties["artifact_manifest_sha256"] = {
+            "const": oracle_bindings["artifact_manifest_sha256"]
+        }
+        properties["source_job_manifest_sha256"] = {
+            "const": oracle_bindings["source_job_manifest_sha256"]
+        }
+        properties["mutation_manifest_sha256"] = {
+            "const": oracle_bindings["mutation_manifest_sha256"]
+        }
+        mutation_manifest = list(oracle_bindings["mutation_manifest"])
+        variant_results = properties["mutation_variant_results"]
+        variant_results.update(
+            {
+                "minItems": len(mutation_manifest),
+                "maxItems": len(mutation_manifest),
+                "allOf": [
+                    {
+                        "contains": {
+                            "type": "object",
+                            "properties": {
+                                "variant_id": {"const": item["variant_id"]},
+                                "observed_failure_code": {
+                                    "const": str(
+                                        expected_failure or "EXPECTED_REJECTION"
+                                    )
+                                },
+                            },
+                            "required": [
+                                "variant_id",
+                                "observed_failure_code",
+                            ],
+                        },
+                        "minContains": 1,
+                        "maxContains": 1,
+                    }
+                    for item in mutation_manifest
+                ],
+            }
+        )
+    return schema
+
+
 def _mandatory_negative_cases(ir: Mapping[str, Any]) -> list[dict[str, Any]]:
     atom_ids = [
         str(item.get("atom_id"))
         for item in ir.get("atoms", [])
         if isinstance(item, Mapping) and item.get("atom_id")
     ]
-    mandatory = (
-        ("NEG-HF28-CODEX-SELF-REPORT", "Python or Harness self-reported Codex receipt must not prove invocation.", "INVOCATION_UNVERIFIED"),
-        ("NEG-HF28-ATTESTATION-REPLAY", "Replayed runtime attestation challenge or receipt must fail.", "ATTESTATION_REPLAY_REJECTED"),
-        ("NEG-HF28-OUTPUT-SUBSTITUTION", "Output substituted after runtime invocation must fail Hash binding.", "OUTPUT_SUBSTITUTION_DETECTED"),
-        ("NEG-HF28-STUB-EXECUTOR", "Stub or fake executor identity must not satisfy runtime provenance.", "EXECUTOR_IDENTITY_UNTRUSTED"),
-        ("NEG-HF28-P3-SKIP", "P1 P2 P4 progression without P3 lock and C3 must fail.", "ILLEGAL_PHASE_TRANSITION"),
-        ("NEG-HF28-STALE-HASH", "Stale or forged predecessor Lock Hash must fail.", "STALE_PREDECESSOR_HASH"),
-        ("NEG-HF28-MISSING-STAGE-RECEIPT", "Final artifact without every required intermediate Stage receipt must fail.", "STAGE_RECEIPT_MISSING"),
-        ("NEG-HF28-SOURCE-DRIVER-FALLBACK", "Launching final runtime from source tree or Build Program Driver must fail.", "RUNTIME_ENTRYPOINT_FALLBACK_REJECTED"),
-        ("NEG-HF28-CERTIFICATE-REUSE", "Certificate reuse after checker or scenario Hash changes must fail.", "CERTIFICATE_INVALIDATED"),
-        ("NEG-HF28-AUTH-SCOPE", "Missing expired or scope-mismatched authorization must fail.", "AUTHORIZATION_INVALID"),
-        ("NEG-HF28-MULTIPLE-NEXT-LEASE", "Multiple next actions active Workpacks or lease conflict must block.", "STATE_CONFLICT"),
-        ("NEG-HF28-RELEASE-SKIP", "Skipping A B0 C B1 or D and jumping to C4 must fail.", "RELEASE_PREDECESSOR_MISSING"),
-        ("NEG-HF28-LOOP-OSCILLATION", "Repeated Finding no-progress or A-B oscillation must stop and escalate.", "LOOP_ESCALATION_REQUIRED"),
-        ("NEG-HF28-CRASH-DUPLICATE", "Crash after side effect before state commit must not repeat the command.", "DUPLICATE_SIDE_EFFECT_REJECTED"),
-        ("NEG-HF28-UPSTREAM-INVALIDATION", "Upstream Hash change must invalidate affected project and release states.", "DEPENDENT_STATE_INVALIDATED"),
-        ("NEG-HF28-AUTO-REAL-INSTALL", "Any automatic REAL_TARGET_INSTALL attempt must be rejected.", "REAL_TARGET_INSTALL_AUTHORIZATION_REQUIRED"),
-        ("NEG-HF28-THREE-PROJECT-ORDER", "Lab must release before Linkage and Linkage must release before Main registration.", "ENGINEERING_PREDECESSOR_MISSING"),
-        ("NEG-HF28-DUAL-ACTIVE-WORKPACK", "Two active Workpacks across the three projects must hard-stop.", "STATE_CONFLICT_HARD_STOP"),
-        ("NEG-HF28-CANDIDATE-ENV-MISMATCH", "P4 installability certification and Lab using different Candidate Hashes must fail.", "CANDIDATE_HASH_MISMATCH"),
-        ("NEG-HF28-TOOL-DISTRIBUTION-DRIFT", "Changing Lab or Linkage tool distribution mid-attempt must invalidate results.", "TOOL_DISTRIBUTION_HASH_CHANGED"),
-        ("NEG-HF28-B0-B1-ORDER", "B0 cannot prefill Artifact Hash and B1 cannot precede immutable Artifact build.", "RELEASE_PREDECESSOR_MISSING"),
-        ("NEG-HF28-LINKAGE-AUTHORITY", "Linkage must not modify reviewed assets or issue a Certificate.", "AUTHORITY_MISMATCH"),
-    )
-    cases = [
-        deepcopy(dict(item))
-        for item in ir.get("negative_cases", [])
-        if isinstance(item, Mapping)
-    ]
+    cases = negative_case_specs_with_mandatory_controls(ir)
     for case in cases:
-        if not case.get("expected_failure"):
-            case["expected_failure"] = "EXPECTED_REJECTION"
-        if not case.get("origin"):
-            case["origin"] = "FROZEN_REQUIREMENT_IR"
-    existing = {str(item.get("case_id")) for item in cases}
-    for case_id, description, expected_failure in mandatory:
-        if case_id not in existing:
-            cases.append(
+        case_id = str(case.get("case_id") or "NEG-UNNAMED")
+        atom_ids_for_case = list(case.get("atom_ids") or atom_ids)
+        case.setdefault("fixture_kind", "NON_EXECUTABLE_JSON")
+        case.setdefault("atom_ids", atom_ids_for_case)
+        fixture = _structured_negative_input(case)
+        fixture["artifact_expectations"] = _case_artifact_expectations(
+            ir, [str(value) for value in case.get("atom_ids", [])]
+        )
+        fixture["artifact_dependency_mode"] = (
+            "DECLARED_PRODUCTION_ARTIFACTS"
+            if fixture["artifact_expectations"]
+            else "NO_DECLARED_PRODUCTION_ARTIFACTS"
+        )
+        fixture["fixture_jobs"] = _repository_fixture_jobs(ir)
+        _bind_negative_mutation_targets(fixture, ir, case_id)
+        case["input_fixture"] = fixture
+        case.setdefault(
+            "preconditions",
+            [
+                "Candidate hashes and frozen Requirement bindings are current",
+                "No execution authorization is granted by this fixture",
+            ],
+        )
+        case.setdefault(
+            "steps",
+            [
                 {
-                    "case_id": case_id,
-                    "atom_ids": atom_ids,
-                    "description": description,
-                    "expected_failure": expected_failure,
-                    "origin": "HF28_LOCKED_CONTROL_CONTRACT",
+                    "step_id": f"{case_id}-S1",
+                    "action": "SUBMIT_NONEXECUTABLE_FIXTURE_TO_DECLARED_VALIDATOR",
+                },
+                {
+                    "step_id": f"{case_id}-S2",
+                    "action": "COMPARE_REJECTION_CODE_AND_SIDE_EFFECT_RECEIPT",
+                },
+            ],
+        )
+        case.setdefault(
+            "assertions",
+            [
+                {
+                    "assertion_id": f"ASSERT-{case_id}-REJECTED",
+                    "operator": "EQUALS",
+                    "actual_ref": "validator.finding.code",
+                    "expected": case["expected_failure"],
+                },
+                {
+                    "assertion_id": f"ASSERT-{case_id}-NO-SIDE-EFFECT",
+                    "operator": "EQUALS",
+                    "actual_ref": "receipt.side_effects_started",
+                    "expected": False,
+                },
+            ],
+        )
+        case.setdefault(
+            "oracle_contract",
+            {
+                "oracle_id": f"ORACLE-{case_id}",
+                "owner": "INDEPENDENT_VALIDATOR",
+                "decision_rule": (
+                    "PASS_ONLY_WHEN_EXPECTED_REJECTION_AND_ZERO_SIDE_EFFECTS_ARE_OBSERVED"
+                ),
+                "evidence_required": [
+                    "BASE_AND_MUTATED_INPUT_HASHES",
+                    "MUTATION_RECEIPT",
+                    "COMMAND_RECEIPT",
+                    "VALIDATOR_FINDING",
+                    "SIDE_EFFECT_BOUNDARY_RECEIPT",
+                ],
+                "common_mode_exclusions": [
+                    "TARGET_SELF_REPORT_IS_NOT_ORACLE_EVIDENCE",
+                    "FIXTURE_DESCRIPTION_IS_NOT_EXECUTION_EVIDENCE",
+                ],
+            },
+        )
+    return cases
+
+
+def _compile_acceptance_cases(ir: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Compile prose acceptance rows into reviewable executable contracts."""
+
+    cases: list[dict[str, Any]] = []
+    for index, raw in enumerate(ir.get("acceptance_cases", []), 1):
+        if not isinstance(raw, Mapping):
+            continue
+        case = deepcopy(dict(raw))
+        case_id = str(case.get("case_id") or f"AC-{index:03d}")
+        atom_ids = list(case.get("atom_ids") or [])
+        evidence_type = str(
+            case.get("evidence_type") or "DECLARED_ACCEPTANCE_EVIDENCE"
+        )
+        case.update(
+            {
+                "case_id": case_id,
+                "inputs": case.get("inputs")
+                or [
+                    {
+                        "input_id": f"INPUT-{case_id}-FROZEN-ATOMS",
+                        "kind": "FROZEN_REQUIREMENT_ATOM_SET",
+                        "atom_ids": atom_ids,
+                    }
+                ],
+                "preconditions": case.get("preconditions")
+                or [
+                    "Exact source and Requirement hashes are current",
+                    "Required runtime authorization is supplied only at execution time",
+                    "Candidate authoring itself starts no command",
+                ],
+                "steps": case.get("steps")
+                or [
+                    {
+                        "step_id": f"{case_id}-S1",
+                        "action": "MATERIALIZE_DECLARED_INPUT_FIXTURE_IN_EXECUTION_ROOT",
+                    },
+                    {
+                        "step_id": f"{case_id}-S2",
+                        "action": "RUN_HASH_BOUND_TARGET_VALIDATION_INTERFACE",
+                    },
+                    {
+                        "step_id": f"{case_id}-S3",
+                        "action": "COLLECT_AND_PROBE_REQUIRED_EVIDENCE",
+                    },
+                ],
+                "assertions": case.get("assertions")
+                or [
+                    {
+                        "assertion_id": f"ASSERT-{case_id}-EVIDENCE",
+                        "operator": "VALIDATED_RECEIPT_EXISTS",
+                        "actual_ref": f"evidence/{case_id}.result.json",
+                        "expected": evidence_type,
+                    },
+                    {
+                        "assertion_id": f"ASSERT-{case_id}-ATOM-COVERAGE",
+                        "operator": "SET_EQUALS",
+                        "actual_ref": "receipt.verified_atom_ids",
+                        "expected": atom_ids,
+                    },
+                ],
+                "oracle_contract": case.get("oracle_contract")
+                or {
+                    "oracle_id": f"ORACLE-{case_id}",
+                    "owner": "INDEPENDENT_VALIDATOR",
+                    "decision_rule": (
+                        "PASS_ONLY_WHEN_EVERY_ASSERTION_PASSES_AND_EVIDENCE_HASHES_MATCH"
+                    ),
+                    "evidence_required": [evidence_type],
+                    "common_mode_exclusions": [
+                        "TARGET_SELF_REPORT_IS_NOT_ORACLE_EVIDENCE",
+                        "SCHEMA_VALIDITY_ALONE_IS_NOT_BEHAVIORAL_PROOF",
+                    ],
+                },
+                "status": "PLANNED_NOT_RUN",
+            }
+        )
+        cases.append(case)
+    return cases
+
+
+def _external_lab_case_command_contracts(
+    *,
+    executable: str,
+    repository_root: str,
+    candidate_root: str,
+    execution_root: str,
+) -> list[dict[str, Any]]:
+    """Return the owned parameterized interfaces for every Lab Case lane."""
+
+    result_root = f"{execution_root}/evidence/cases"
+    contracts: list[dict[str, Any]] = []
+    for command_id, subcommand, case_kinds in (
+        ("LAB-RUN-ACCEPTANCE-CASE", "run-acceptance-case", ["ACCEPTANCE"]),
+        ("LAB-RUN-NEGATIVE-CASE", "run-negative-case", ["NEGATIVE"]),
+        (
+            "LAB-RUN-REGISTRY-CASE",
+            "run-registry-case",
+            ["INVARIANT", "SCHEMA_NATIVE"],
+        ),
+        (
+            "LAB-EVALUATE-CASE-ORACLE",
+            "evaluate-case-oracle",
+            ["ACCEPTANCE", "NEGATIVE", "INVARIANT", "SCHEMA_NATIVE"],
+        ),
+    ):
+        command = {
+            "command_id": command_id,
+            "command_kind": "PARAMETERIZED_CASE_EXECUTION_INTERFACE",
+            "executor_role": "EXTERNAL_CONFORMANCE_LAB_CASE_RUNNER",
+            "owner_workpack_id": CASE_EVIDENCE_WRITER_WORKPACK_ID,
+            "executable": executable,
+            "executable_abs": executable,
+            "executable_status": "PLANNED_NOT_INSTALLED",
+            "argv": [executable, "-m", "external_lab", subcommand],
+            "parameter_contract": {
+                "required_flags": ["--fixture-ref", "--result-ref"],
+                "fixture_ref_contract": {
+                    "scheme": "harness-resource",
+                    "authority": "candidate",
+                    "path_prefix": "validation/",
+                },
+                "result_ref_root": result_root,
+                "case_kinds": case_kinds,
+                "undeclared_parameters_forbidden": True,
+            },
+            "result_writer_contract": {
+                "writer_workpack_id": CASE_EVIDENCE_WRITER_WORKPACK_ID,
+                "writer_cardinality": "EXACTLY_ONE_WORKPACK",
+                "result_root_ref": result_root,
+                "atomic_write_required": True,
+            },
+            "invocation_contract_status": (
+                "REQUIRES_EXTERNAL_LAB_CLI_SCHEMA_PREFLIGHT_AND_EXECUTION_"
+                "AUTHORIZATION"
+            ),
+            "unverified_cli_flags_forbidden": True,
+            "cwd_absolute": repository_root,
+            "authorization_ref": None,
+            "preflight_gate": (
+                "LAB_SELFTEST_P4_RELEASE_LINKAGE_AND_INSTALL_GATES_VALID"
+            ),
+            "allowed_modes": ["LAB_CERTIFICATION"],
+            "expected_exit_codes": [0, 2],
+            "stdout_stderr_evidence_required": True,
+            "allowed_read_roots": [candidate_root, result_root],
+            "allowed_write_roots": [result_root],
+            "auto_execute": False,
+            "shell": False,
+        }
+        command["command_sha256"] = _hash_without_field(
+            command, "command_sha256"
+        )
+        contracts.append(command)
+    return contracts
+
+
+def _bind_case_execution_contracts(
+    staging: Path, ir: Mapping[str, Any]
+) -> None:
+    """Materialize machine-resolvable case fixtures and planned Lab commands."""
+
+    artifact_contracts = [
+        artifact
+        for atom in ir.get("atoms", [])
+        if isinstance(atom, Mapping)
+        for obligation in (
+            atom.get("production_contract", {}).get("workpack_obligations", [])
+            if isinstance(atom.get("production_contract"), Mapping)
+            else []
+        )
+        if isinstance(obligation, Mapping)
+        for artifact in obligation.get("artifact_obligations", [])
+        if isinstance(artifact, Mapping) and artifact.get("artifact_kind")
+    ]
+    artifact_kinds = {
+        str(artifact.get("artifact_kind")) for artifact in artifact_contracts
+    }
+    registry = oracle_evaluator_registry(artifact_kinds, artifact_contracts)
+    _write_json(staging / "validation/ORACLE_EVALUATOR_REGISTRY.json", registry)
+    registry_sha256 = _file_hash(
+        staging / "validation/ORACLE_EVALUATOR_REGISTRY.json"
+    )
+    public_job_interface = public_skill_job_interface(ir)
+    public_job_interface_path = (
+        staging / "validation/PUBLIC_SKILL_JOB_INTERFACE.json"
+    )
+    _write_json(public_job_interface_path, public_job_interface)
+    public_job_interface_sha256 = _file_hash(public_job_interface_path)
+    manifest_ref = (
+        f"{LOGICAL_CANDIDATE_ROOT}/validation/CASE_EXECUTION_MANIFEST.json"
+    )
+    schema_ref = f"{LOGICAL_CANDIDATE_ROOT}/validation/schemas/CASE_RESULT.schema.json"
+    planned_python = (
+        f"{LOGICAL_EXECUTION_ROOT}/project_start_packages/external_lab/"
+        ".venv/bin/python"
+    )
+    commands = _external_lab_case_command_contracts(
+        executable=planned_python,
+        repository_root=(
+            f"{LOGICAL_EXECUTION_ROOT}/project_start_packages/"
+            "external_lab/repository"
+        ),
+        candidate_root=LOGICAL_CANDIDATE_ROOT,
+        execution_root=LOGICAL_EXECUTION_ROOT,
+    )
+    materialized_case_ids: dict[str, list[str]] = {}
+    for case_kind, relative in (
+        ("ACCEPTANCE", "validation/ACCEPTANCE_CASES.json"),
+        ("NEGATIVE", "validation/NEGATIVE_CASES.json"),
+    ):
+        document = json.loads((staging / relative).read_text(encoding="utf-8"))
+        materialized_case_ids[case_kind] = [
+            str(case["case_id"])
+            for case in document.get("cases", [])
+            if isinstance(case, Mapping) and case.get("case_id")
+        ]
+    registry_case_invocations: list[dict[str, Any]] = []
+    seen_registry_result_refs: set[str] = set()
+    for matrix_field, case_kind in (
+        ("invariant_negative_case_matrix", "INVARIANT"),
+        ("schema_native_negative_case_matrix", "SCHEMA_NATIVE"),
+    ):
+        for case_index, case in enumerate(registry.get(matrix_field, [])):
+            if not isinstance(case, Mapping) or not case.get("case_id"):
+                continue
+            for schema_sha256 in case.get("applicable_schema_sha256s", []):
+                fixture_ref = (
+                    f"{ORACLE_EVALUATOR_REGISTRY_REF}#/"
+                    f"{matrix_field}/{case_index}"
+                )
+                result_ref = registry_case_result_ref(
+                    case_kind,
+                    str(case["case_id"]),
+                    str(schema_sha256),
+                )
+                if result_ref in seen_registry_result_refs:
+                    continue
+                seen_registry_result_refs.add(result_ref)
+                registry_case_invocations.append(
+                    {
+                        "case_id": str(case["case_id"]),
+                        "case_kind": case_kind,
+                        "schema_sha256": str(schema_sha256),
+                        "owner_workpack_id": CASE_EVIDENCE_WRITER_WORKPACK_ID,
+                        "executor_command_id": "LAB-RUN-REGISTRY-CASE",
+                        "fixture_ref": fixture_ref,
+                        "result_ref": result_ref,
+                        "executor_argv": [
+                            planned_python,
+                            "-m",
+                            "external_lab",
+                            "run-registry-case",
+                            "--fixture-ref",
+                            fixture_ref,
+                            "--result-ref",
+                            result_ref,
+                        ],
+                    }
+                )
+    manifest = {
+        "schema_version": "1.0",
+        "status": "DECLARE_ONLY",
+        "execution_started": False,
+        "authorization_ref": None,
+        "owner_project_id": "EXTERNAL_CONFORMANCE_LAB",
+        "owner_workpack_id": CASE_EVIDENCE_WRITER_WORKPACK_ID,
+        "result_root_ref": CASE_EXECUTION_RESULT_ROOT_REF,
+        "result_writer_cardinality": "EXACTLY_ONE_WORKPACK",
+        "job_read_partition_policy": (
+            "EXACTLY_ONE_ACTIVE_JOB_LEASE_PER_CASE_PARTITION_THEN_"
+            "HASH_BOUND_CASE_AGGREGATION"
+        ),
+        "expected_case_result_refs": sorted(
+            [
+                *[
+                    case_result_ref("ACCEPTANCE", case_id)
+                    for case_id in materialized_case_ids["ACCEPTANCE"]
+                ],
+                *[
+                    case_result_ref("NEGATIVE", case_id)
+                    for case_id in materialized_case_ids["NEGATIVE"]
+                ],
+                *[
+                    str(item["result_ref"])
+                    for item in registry_case_invocations
+                ],
+            ]
+        ),
+        "registry_case_invocations": registry_case_invocations,
+        "oracle_evaluator_registry_ref": ORACLE_EVALUATOR_REGISTRY_REF,
+        "oracle_evaluator_registry_sha256": registry_sha256,
+        "public_skill_job_interface_ref": PUBLIC_SKILL_JOB_INTERFACE_REF,
+        "public_skill_job_interface_sha256": public_job_interface_sha256,
+        "assertion_operators": [
+            "VALIDATED_RECEIPT_EXISTS",
+            "SET_EQUALS",
+            "ALL_ARTIFACTS_SCHEMA_HASH_AND_ORACLE_PASS",
+            "EXACT_SOURCE_JOBS_MATCH",
+            "EQUALS",
+        ],
+        "commands": commands,
+    }
+    manifest["manifest_sha256"] = _hash_without_field(
+        manifest, "manifest_sha256"
+    )
+    _write_json(staging / "validation/CASE_EXECUTION_MANIFEST.json", manifest)
+    result_schema = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": schema_ref,
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "case_id",
+            "case_kind",
+            "fixture_sha256",
+            "assertion_manifest_sha256",
+            "command_receipt_ref",
+            "command_receipt_sha256",
+            "assertion_results",
+            "oracle_decision",
+            "status",
+        ],
+        "properties": {
+            "case_id": {"type": "string", "minLength": 1},
+            "case_kind": {"enum": ["ACCEPTANCE", "NEGATIVE"]},
+            "fixture_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "assertion_manifest_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$",
+            },
+            "artifact_manifest_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$",
+            },
+            "source_job_manifest_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$",
+            },
+            "command_receipt_ref": {"type": "string", "minLength": 1},
+            "command_receipt_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$",
+            },
+            "assertion_results": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": True,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": [
+                        "assertion_id",
+                        "operator",
+                        "passed",
+                        "actual",
+                        "expected",
+                        "evidence_refs",
+                    ],
+                    "properties": {
+                        "assertion_id": {"type": "string", "minLength": 1},
+                        "operator": {
+                            "enum": [
+                                "VALIDATED_RECEIPT_EXISTS",
+                                "SET_EQUALS",
+                                "ALL_ARTIFACTS_SCHEMA_HASH_AND_ORACLE_PASS",
+                                "EXACT_SOURCE_JOBS_MATCH",
+                                "EQUALS",
+                            ]
+                        },
+                        "passed": {"type": "boolean"},
+                        "actual": {},
+                        "expected": {},
+                        "evidence_refs": {
+                            "type": "array",
+                            "minItems": 1,
+                            "items": {"type": "string", "minLength": 1},
+                        },
+                    },
+                },
+            },
+            "artifact_checks": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": True,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": [
+                        "artifact_id",
+                        "job_id",
+                        "source_id",
+                        "artifact_ref",
+                        "schema_sha256",
+                        "oracle_pass",
+                        "evidence_refs",
+                    ],
+                    "properties": {
+                        "artifact_id": {"type": "string", "minLength": 1},
+                        "job_id": {"type": ["string", "null"]},
+                        "source_id": {"type": ["string", "null"]},
+                        "artifact_ref": {"type": "string", "minLength": 1},
+                        "schema_sha256": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{64}$",
+                        },
+                        "oracle_pass": {"const": True},
+                        "evidence_refs": {
+                            "type": "array",
+                            "minItems": 1,
+                            "items": {"type": "string", "minLength": 1},
+                        },
+                    },
+                },
+            },
+            "source_job_bindings": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": True,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": [
+                        "job_id",
+                        "source_id",
+                        "repository_url",
+                        "commit_sha",
+                    ],
+                    "properties": {
+                        "job_id": {"type": "string", "minLength": 1},
+                        "source_id": {"type": "string", "minLength": 1},
+                        "repository_url": {"type": "string", "minLength": 1},
+                        "commit_sha": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{40}$",
+                        },
+                    },
+                },
+            },
+            "observed_failure_code": {"type": "string", "minLength": 1},
+            "expected_failure_observed": {"const": True},
+            "mutation_manifest_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$",
+            },
+            "mutation_variant_results": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": True,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": [
+                        "variant_id",
+                        "base_input_ref",
+                        "base_input_sha256",
+                        "mutated_input_ref",
+                        "mutated_input_sha256",
+                        "mutation_receipt_ref",
+                        "mutation_receipt_sha256",
+                        "command_receipt_ref",
+                        "command_receipt_sha256",
+                        "validator_finding_ref",
+                        "validator_finding_sha256",
+                        "side_effect_receipt_ref",
+                        "side_effect_receipt_sha256",
+                        "observed_failure_code",
+                        "expected_failure_observed",
+                        "side_effects_started",
+                        "status",
+                    ],
+                    "properties": {
+                        "variant_id": {"type": "string", "minLength": 1},
+                        "base_input_ref": {"type": "string", "minLength": 1},
+                        "base_input_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                        "mutated_input_ref": {"type": "string", "minLength": 1},
+                        "mutated_input_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                        "mutation_receipt_ref": {"type": "string", "minLength": 1},
+                        "mutation_receipt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                        "command_receipt_ref": {"type": "string", "minLength": 1},
+                        "command_receipt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                        "validator_finding_ref": {"type": "string", "minLength": 1},
+                        "validator_finding_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                        "side_effect_receipt_ref": {"type": "string", "minLength": 1},
+                        "side_effect_receipt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                        "observed_failure_code": {"type": "string", "minLength": 1},
+                        "expected_failure_observed": {"const": True},
+                        "side_effects_started": {"const": False},
+                        "status": {"const": "PASS"},
+                    },
+                },
+            },
+            "side_effect_receipt_ref": {"type": "string", "minLength": 1},
+            "side_effect_receipt_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$",
+            },
+            "side_effects_started": {"const": False},
+            "oracle_decision": {"enum": ["PASS", "FAIL"]},
+            "status": {"enum": ["PASS", "FAIL"]},
+        },
+        "allOf": [
+            {
+                "if": {
+                    "properties": {"status": {"const": "PASS"}},
+                    "required": ["status"],
+                },
+                "then": {
+                    "properties": {
+                        "oracle_decision": {"const": "PASS"},
+                        "assertion_results": {
+                            "not": {
+                                "contains": {
+                                    "type": "object",
+                                    "properties": {"passed": {"const": False}},
+                                    "required": ["passed"],
+                                }
+                            }
+                        },
+                    }
+                },
+            },
+            {
+                "if": {
+                    "properties": {"oracle_decision": {"const": "PASS"}},
+                    "required": ["oracle_decision"],
+                },
+                "then": {
+                    "properties": {
+                        "status": {"const": "PASS"},
+                        "assertion_results": {
+                            "not": {
+                                "contains": {
+                                    "type": "object",
+                                    "properties": {"passed": {"const": False}},
+                                    "required": ["passed"],
+                                }
+                            }
+                        },
+                    }
+                },
+            },
+            {
+                "if": {
+                    "properties": {"case_kind": {"const": "ACCEPTANCE"}},
+                    "required": ["case_kind"],
+                },
+                "then": {
+                    "required": [
+                        "artifact_checks",
+                        "artifact_manifest_sha256",
+                        "source_job_bindings",
+                        "source_job_manifest_sha256",
+                    ]
+                },
+            },
+            {
+                "if": {
+                    "properties": {"case_kind": {"const": "NEGATIVE"}},
+                    "required": ["case_kind"],
+                },
+                "then": {
+                    "required": [
+                        "observed_failure_code",
+                        "expected_failure_observed",
+                        "artifact_manifest_sha256",
+                        "source_job_manifest_sha256",
+                        "mutation_manifest_sha256",
+                        "mutation_variant_results",
+                        "side_effect_receipt_ref",
+                        "side_effect_receipt_sha256",
+                        "side_effects_started",
+                    ]
+                },
+            },
+        ],
+    }
+    _write_json(staging / "validation/schemas/CASE_RESULT.schema.json", result_schema)
+    schema_sha256 = _file_hash(
+        staging / "validation/schemas/CASE_RESULT.schema.json"
+    )
+
+    atom_ids = [
+        str(item.get("atom_id"))
+        for item in ir.get("atoms", [])
+        if isinstance(item, Mapping) and item.get("atom_id")
+    ]
+    documents = (
+        (
+            "validation/ACCEPTANCE_CASES.json",
+            "ACCEPTANCE",
+            "LAB-RUN-ACCEPTANCE-CASE",
+        ),
+        (
+            "validation/NEGATIVE_CASES.json",
+            "NEGATIVE",
+            "LAB-RUN-NEGATIVE-CASE",
+        ),
+    )
+    for relative, case_kind, command_id in documents:
+        path = staging / relative
+        document = json.loads(path.read_text(encoding="utf-8"))
+        raw_cases = [
+            dict(item)
+            for item in document.get("cases", [])
+            if isinstance(item, Mapping)
+        ]
+        if case_kind == "ACCEPTANCE":
+            cases = _compile_acceptance_cases({"acceptance_cases": raw_cases})
+        else:
+            cases = _mandatory_negative_cases(
+                {"negative_cases": raw_cases, "atoms": ir.get("atoms", [])}
+            )
+        for case in cases:
+            case_id = str(case["case_id"])
+            fixture_relative = (
+                "validation/case_fixtures/"
+                f"{case_kind.lower()}-{_slug(case_id).lower()}.fixture.json"
+            )
+            fixture_ref = f"{LOGICAL_CANDIDATE_ROOT}/{fixture_relative}"
+            result_ref = case_result_ref(case_kind, case_id)
+            for assertion in case.get("assertions", []):
+                if (
+                    isinstance(assertion, dict)
+                    and assertion.get("operator") == "VALIDATED_RECEIPT_EXISTS"
+                ):
+                    assertion["actual_ref"] = result_ref
+            if case_kind == "ACCEPTANCE":
+                fixture_input = _acceptance_fixture_input(ir, case)
+                if not any(
+                    isinstance(assertion, Mapping)
+                    and assertion.get("operator")
+                    == "ALL_ARTIFACTS_SCHEMA_HASH_AND_ORACLE_PASS"
+                    for assertion in case.get("assertions", [])
+                ):
+                    case.setdefault("assertions", []).append(
+                        {
+                            "assertion_id": f"ASSERT-{case_id}-ARTIFACTS",
+                            "operator": "ALL_ARTIFACTS_SCHEMA_HASH_AND_ORACLE_PASS",
+                            "actual_ref": "result.artifact_checks",
+                            "expected": True,
+                        }
+                    )
+                if fixture_input["fixture_jobs"]:
+                    case["assertions"].append(
+                        {
+                            "assertion_id": f"ASSERT-{case_id}-SOURCE-JOBS",
+                            "operator": "EXACT_SOURCE_JOBS_MATCH",
+                            "actual_ref": "result.source_job_bindings",
+                            "expected": [
+                                {
+                                    "job_id": item["job_id"],
+                                    "source_id": item["source_id"],
+                                    "repository_url": item["repository_url"],
+                                    "commit_sha": item["commit_sha"],
+                                }
+                                for item in fixture_input["fixture_jobs"]
+                            ],
+                        }
+                    )
+            else:
+                fixture_input = deepcopy(case.get("input_fixture"))
+                if isinstance(fixture_input, dict):
+                    fixture_input["artifact_expectations"] = (
+                        _case_artifact_expectations(
+                            ir, [str(value) for value in case.get("atom_ids", [])]
+                        )
+                    )
+                    fixture_input["artifact_dependency_mode"] = (
+                        "DECLARED_PRODUCTION_ARTIFACTS"
+                        if fixture_input["artifact_expectations"]
+                        else "NO_DECLARED_PRODUCTION_ARTIFACTS"
+                    )
+                    fixture_input["fixture_jobs"] = _repository_fixture_jobs(ir)
+                    _bind_negative_mutation_targets(
+                        fixture_input,
+                        ir,
+                        case_id,
+                    )
+                    case["input_fixture"] = deepcopy(fixture_input)
+            oracle_bindings = _case_oracle_bindings(
+                fixture_input if isinstance(fixture_input, Mapping) else {},
+                [
+                    item
+                    for item in case.get("assertions", [])
+                    if isinstance(item, Mapping)
+                ],
+            )
+            fixture = {
+                "schema_version": "1.0",
+                "case_id": case_id,
+                "case_kind": case_kind,
+                "atom_ids": list(case.get("atom_ids") or atom_ids),
+                "input": fixture_input,
+                "preconditions": deepcopy(case.get("preconditions")),
+                "assertions": deepcopy(case.get("assertions")),
+                "oracle_bindings": oracle_bindings,
+                "expected_failure": case.get("expected_failure"),
+                "execution_authorized": False,
+            }
+            _write_json(staging / fixture_relative, fixture)
+            fixture_sha256 = _file_hash(staging / fixture_relative)
+            result_schema_relative = (
+                "validation/schemas/cases/"
+                f"{case_kind.lower()}-{_slug(case_id).lower()}.result.schema.json"
+            )
+            result_schema_ref = (
+                f"{LOGICAL_CANDIDATE_ROOT}/{result_schema_relative}"
+            )
+            specialized_result_schema = _specialize_case_result_schema(
+                result_schema,
+                schema_id=result_schema_ref,
+                case_id=case_id,
+                case_kind=case_kind,
+                fixture_sha256=fixture_sha256,
+                oracle_bindings=oracle_bindings,
+                expected_failure=(
+                    str(case.get("expected_failure") or "EXPECTED_REJECTION")
+                    if case_kind == "NEGATIVE"
+                    else None
+                ),
+            )
+            _write_json(
+                staging / result_schema_relative,
+                specialized_result_schema,
+            )
+            result_schema_sha256 = _file_hash(staging / result_schema_relative)
+            executor_argv = [
+                planned_python,
+                "-m",
+                "external_lab",
+                (
+                    "run-acceptance-case"
+                    if case_kind == "ACCEPTANCE"
+                    else "run-negative-case"
+                ),
+                "--fixture-ref",
+                fixture_ref,
+                "--result-ref",
+                result_ref,
+            ]
+            partition_job_ids = sorted(
+                {
+                    str(expectation["job_id"])
+                    for expectation in (
+                        fixture_input.get("artifact_expectations", [])
+                        if isinstance(fixture_input, Mapping)
+                        else []
+                    )
+                    if isinstance(expectation, Mapping)
+                    and expectation.get("job_id")
                 }
             )
-    return cases
+            job_read_partitions = [
+                {
+                    "job_id": job_id,
+                    "lease_receipt_ref": (
+                        f"{LOGICAL_EXECUTION_ROOT}/evidence/"
+                        "job_artifact_leases/LAB-CERTIFICATION/"
+                        f"{command_id}/{job_id}.lease.json"
+                    ),
+                    "result_fragment_ref": (
+                        f"{CASE_EXECUTION_RESULT_ROOT_REF}/fragments/"
+                        f"{case_kind.lower()}-{_slug(case_id).lower()}/"
+                        f"{_slug(job_id).lower()}.result.json"
+                    ),
+                }
+                for job_id in partition_job_ids
+            ]
+            for step in case.get("steps", []):
+                if isinstance(step, dict):
+                    step.setdefault("command_id", command_id)
+                    step.setdefault("fixture_ref", fixture_ref)
+                    step.setdefault("result_ref", result_ref)
+            case.update(
+                {
+                    "fixture_ref": fixture_ref,
+                    "fixture_sha256": fixture_sha256,
+                    "executor_command_manifest_ref": manifest_ref,
+                    "executor_command_id": command_id,
+                    "executor_argv": executor_argv,
+                    "job_read_partition_policy": (
+                        "EXACTLY_ONE_ACTIVE_JOB_LEASE_PER_CASE_PARTITION_"
+                        "THEN_HASH_BOUND_CASE_AGGREGATION"
+                    ),
+                    "job_read_partitions": job_read_partitions,
+                    "result_ref": result_ref,
+                    "result_schema_ref": result_schema_ref,
+                    "result_schema_sha256": result_schema_sha256,
+                }
+            )
+            if case_kind == "NEGATIVE":
+                case["mutation_manifest_ref"] = (
+                    f"{fixture_ref}#/input/mutation_manifest"
+                )
+                case["mutation_manifest_sha256"] = oracle_bindings[
+                    "mutation_manifest_sha256"
+                ]
+            oracle = dict(case["oracle_contract"])
+            oracle.update(
+                {
+                    "executor_command_manifest_ref": manifest_ref,
+                    "executor_command_id": "LAB-EVALUATE-CASE-ORACLE",
+                    "executor_argv": [
+                        planned_python,
+                        "-m",
+                        "external_lab",
+                        "evaluate-case-oracle",
+                        "--fixture-ref",
+                        fixture_ref,
+                        "--result-ref",
+                        result_ref,
+                    ],
+                    "result_schema_ref": result_schema_ref,
+                    "result_schema_sha256": result_schema_sha256,
+                    "evaluator_id": "EXACT_CASE_SET_ORACLE_V1",
+                    "evaluator_registry_ref": ORACLE_EVALUATOR_REGISTRY_REF,
+                    "assertion_manifest_sha256": oracle_bindings[
+                        "assertion_manifest_sha256"
+                    ],
+                    "artifact_manifest_sha256": oracle_bindings[
+                        "artifact_manifest_sha256"
+                    ],
+                    "source_job_manifest_sha256": oracle_bindings[
+                        "source_job_manifest_sha256"
+                    ],
+                    "mutation_manifest_sha256": oracle_bindings[
+                        "mutation_manifest_sha256"
+                    ],
+                }
+            )
+            case["oracle_contract"] = oracle
+        document["cases"] = cases
+        _write_json(path, document)
 
 
 def _materialize_workpack_files(staging: Path, ir: Mapping[str, Any], context: Mapping[str, str], docs: Mapping[str, Any]) -> None:
@@ -15640,6 +18706,19 @@ def _project_planned_interface_commands(
             "shell": False,
         }
     ]
+    if directory == "external_lab":
+        lab_python = str(
+            execution_root
+            / "project_start_packages/external_lab/.venv/bin/python"
+        )
+        commands.extend(
+            _external_lab_case_command_contracts(
+                executable=lab_python,
+                repository_root=str(repository),
+                candidate_root=str(candidate),
+                execution_root=str(execution_root),
+            )
+        )
     if directory == "linkage_review":
         linkage_cli = (
             execution_root
@@ -15713,6 +18792,27 @@ def _semantic_workpack_markdown(task_bundle: Mapping[str, Any] | None) -> str:
         "- Runtime binding: not complete",
         f"- Required Artifact IDs: {', '.join(task_bundle['required_artifact_ids'])}",
     ]
+    lab_contract = task_bundle.get("lab_case_execution_contract")
+    if isinstance(lab_contract, Mapping):
+        sections.extend(
+            [
+                "",
+                "### External Lab case execution contract",
+                "",
+                f"- Contract: `{lab_contract['contract_id']}`",
+                "- Required command IDs: "
+                + ", ".join(lab_contract["required_command_ids"]),
+                "- Assertion operators: "
+                + ", ".join(lab_contract["assertion_operators"]),
+                "- Required interfaces:",
+                *[f"  - `{item}`" for item in lab_contract["required_refs"]],
+                "- Implementation obligations:",
+                *[
+                    f"  - {item}"
+                    for item in lab_contract["implementation_obligations"]
+                ],
+            ]
+        )
     for contract in task_bundle["task_contracts"]:
         sections.extend(
             [
@@ -15746,6 +18846,9 @@ def _semantic_workpack_markdown(task_bundle: Mapping[str, Any] | None) -> str:
             ]
         )
         for artifact in contract["artifact_obligations"]:
+            failure_routes = artifact.get("failure_returns") or [
+                artifact["failure_return"]
+            ]
             sections.extend(
                 [
                     f"- `{artifact['artifact_id']}` → `{artifact['artifact_ref']}`",
@@ -15753,7 +18856,11 @@ def _semantic_workpack_markdown(task_bundle: Mapping[str, Any] | None) -> str:
                     f"  - Production rule: {artifact['production_rule']}",
                     f"  - Validation rule: {artifact['validation_rule']['decision_rule']}",
                     f"  - Oracle: {artifact['oracle']['oracle_id']} / {artifact['oracle']['independence_level']}",
-                    f"  - Failure return: {artifact['failure_return']['error_code']} → {artifact['failure_return']['control_node_id']}",
+                    "  - Failure returns: "
+                    + ", ".join(
+                        f"{route['error_code']} → {route['control_node_id']}"
+                        for route in failure_routes
+                    ),
                 ]
             )
     return "\n".join(sections)
@@ -15798,12 +18905,6 @@ def _materialize_project_workpack_contracts(
                 f"project Workpack {workpack_id} has missing command contracts: "
                 f"{missing_commands}"
             )
-        allowed_write_paths = _project_workpack_allowed_write_paths(
-            execution,
-            project_id=project_id,
-            directory=directory,
-            workpack_id=workpack_id,
-        )
         workpack_ref = f"workpacks/{workpack_id}.md"
         command_ref = f"commands/{workpack_id}.commands.json"
         capsule_ref = f"capsules/{workpack_id}.capsule.json"
@@ -15815,6 +18916,28 @@ def _materialize_project_workpack_contracts(
             project_id=project_id,
             program_id=str(context["program_id"]),
             target_id=str(context["target_id"]),
+            structural_contract=PROJECT_WORKPACK_CONTRACTS.get(workpack_id),
+        )
+        required_artifact_refs = (
+            list(task_bundle["required_artifact_refs"])
+            if task_bundle is not None
+            else []
+        )
+        artifact_write_roots = _artifact_write_paths(
+            execution, required_artifact_refs
+        )
+        auxiliary_write_roots = _workpack_auxiliary_write_roots(
+            execution, workpack_id
+        )
+        command_write_roots = list(
+            dict.fromkeys([*artifact_write_roots, *auxiliary_write_roots])
+        )
+        allowed_write_paths = _project_workpack_allowed_write_paths(
+            execution,
+            project_id=project_id,
+            directory=directory,
+            workpack_id=workpack_id,
+            required_artifact_refs=required_artifact_refs,
         )
         task_bundle_ref = (
             f"task_bundles/{workpack_id}.task_bundle.json"
@@ -15828,10 +18951,25 @@ def _materialize_project_workpack_contracts(
             if task_bundle is not None
             else []
         )
-        required_artifact_refs = (
-            list(task_bundle["required_artifact_refs"])
-            if task_bundle is not None
-            else []
+        artifact_read_roots = _artifact_dependency_read_paths(
+            execution, artifact_manifest, required_artifact_ids
+        )
+        shared_artifact_read_roots = [
+            root for root in artifact_read_roots if "/jobs/" not in root
+        ]
+        allowed_read_paths = list(
+            dict.fromkeys([str(candidate), *shared_artifact_read_roots])
+        )
+        job_artifact_read_scopes = _job_artifact_scopes(
+            artifact_read_roots, roots_field="allowed_read_roots"
+        )
+        job_artifact_write_scopes = _job_artifact_scopes(
+            artifact_write_roots, roots_field="allowed_write_roots"
+        )
+        job_scope_activation_policy = (
+            "NO_JOB_ARTIFACT_ROOT_IS_ACTIVE_WITHOUT_EXACTLY_ONE_CURRENT_LEASE"
+            if job_artifact_read_scopes or job_artifact_write_scopes
+            else "NO_JOB_ARTIFACT_SCOPE"
         )
         success_rule = (
             task_bundle["completion_rule"]
@@ -15852,8 +18990,12 @@ def _materialize_project_workpack_contracts(
                 "capsule_ref": capsule_ref,
                 "result_ref": result_ref,
                 "loop_state_ref": loop_ref,
-                "allowed_read_paths": [str(candidate)],
+                "allowed_read_paths": allowed_read_paths,
+                "job_artifact_read_scopes": job_artifact_read_scopes,
+                "job_artifact_write_scopes": job_artifact_write_scopes,
                 "allowed_write_paths": allowed_write_paths,
+                "job_artifact_scope_activation_policy": job_scope_activation_policy,
+                "active_job_artifact_lease_ref": None,
                 "execution_authorization_ref": None,
                 "auto_start": False,
                 "success_rule": success_rule,
@@ -15902,7 +19044,7 @@ Status: `PLANNED_NOT_ACTIVE`
 
 - Command IDs in order: {', '.join(command_ids)}
 - Intent Atom IDs: {', '.join(intent_atom_ids) if intent_atom_ids else 'none explicitly routed'}
-- Allowed read root: `{candidate}`
+- Allowed read roots: {', '.join(f'`{value}`' for value in allowed_read_paths)}
 - Allowed write roots: {', '.join(f'`{value}`' for value in allowed_write_paths)}
 - Execution authorization: not granted
 
@@ -15926,7 +19068,21 @@ This Workpack is declarative. Its semantic task contract may be frozen, but runt
             "source_project_command_manifest_sha256": global_command_sha256,
             "command_ids": command_ids,
             "intent_atom_ids": intent_atom_ids,
-            "commands": [deepcopy(commands_by_id[value]) for value in command_ids],
+            "required_artifact_ids": required_artifact_ids,
+            "required_artifact_refs": required_artifact_refs,
+            "workpack_artifact_write_roots": artifact_write_roots,
+            "workpack_auxiliary_write_roots": auxiliary_write_roots,
+            "workpack_artifact_read_roots": artifact_read_roots,
+            "workpack_shared_artifact_read_roots": (
+                shared_artifact_read_roots
+            ),
+            "commands": _bind_commands_to_workpack_artifact_roots(
+                commands_by_id,
+                command_ids,
+                command_write_roots,
+                artifact_read_roots,
+                workpack_id=workpack_id,
+            ),
         }
         if task_bundle is not None and task_bundle_ref is not None:
             per_workpack_commands.update(
@@ -15939,8 +19095,6 @@ This Workpack is declarative. Its semantic task contract may be frozen, but runt
                     "artifact_obligation_manifest_sha256": artifact_manifest[
                         "manifest_sha256"
                     ],
-                    "required_artifact_ids": required_artifact_ids,
-                    "required_artifact_refs": required_artifact_refs,
                 }
             )
         per_workpack_commands["manifest_sha256"] = _hash_without_field(
@@ -15964,8 +19118,15 @@ This Workpack is declarative. Its semantic task contract may be frozen, but runt
             "intent_atom_ids": intent_atom_ids,
             "command_manifest_ref": command_ref,
             "command_manifest_sha256": command_sha256,
-            "allowed_read_paths": [str(candidate)],
+            "allowed_read_paths": allowed_read_paths,
+            "job_artifact_read_scopes": job_artifact_read_scopes,
+            "job_artifact_write_scopes": job_artifact_write_scopes,
             "allowed_write_paths": allowed_write_paths,
+            "job_artifact_scope_activation_policy": job_scope_activation_policy,
+            "active_job_artifact_lease_ref": None,
+            "case_result_write_root": (
+                auxiliary_write_roots[0] if auxiliary_write_roots else None
+            ),
             "repository_root_abs": str(repository),
             "repository_status": "PLANNED_NOT_CREATED",
             "execution_authorization_ref": None,
@@ -16553,9 +19714,28 @@ def _write_validation_report(
         checks = [
             {
                 "check_id": item.get("check_id"),
-                "status": item.get("status"),
+                "status": (
+                    "DEFERRED_NOT_OBSERVED"
+                    if item.get("check_id")
+                    == "PHYSICAL_CANDIDATE_READ_ONLY"
+                    and item.get("validation_basis")
+                    == "PREPUBLICATION_STAGING_NOT_YET_SEALED"
+                    else item.get("status")
+                ),
                 "finding_count": len(item.get("findings", [])),
                 "evidence_refs": evidence_refs,
+                **(
+                    {
+                        "observation_status": (
+                            "NOT_OBSERVED_PREPUBLICATION"
+                        )
+                    }
+                    if item.get("check_id")
+                    == "PHYSICAL_CANDIDATE_READ_ONLY"
+                    and item.get("validation_basis")
+                    == "PREPUBLICATION_STAGING_NOT_YET_SEALED"
+                    else {}
+                ),
                 **(
                     {"authority_input": item.get("authority_input")}
                     if "authority_input" in item
@@ -17003,6 +20183,26 @@ def _tree_hash(root: Path) -> tuple[str, int]:
         digest.update(b"\n")
         count += 1
     return digest.hexdigest(), count
+
+
+def _seal_candidate_tree(root: Path) -> None:
+    """Physically enforce the post-publication read-only Candidate contract."""
+
+    for path in sorted(root.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+        if path.is_symlink():
+            raise ValueError(f"candidate publication cannot seal symlink: {path}")
+        path.chmod(path.stat().st_mode & ~0o222)
+    root.chmod(root.stat().st_mode & ~0o222)
+    writable = [
+        path.relative_to(root).as_posix() if path != root else "."
+        for path in (root, *sorted(root.rglob("*")))
+        if path.lstat().st_mode & 0o222
+    ]
+    if writable:
+        raise ValueError(
+            "candidate publication could not enforce physical read-only state: "
+            f"{writable}"
+        )
 
 
 def _slug(value: str) -> str:

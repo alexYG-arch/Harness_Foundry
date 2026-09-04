@@ -14,6 +14,7 @@ from harness_foundry_factory.constants import (
     ROOT_MATERIALIZATION_PRODUCES,
 )
 from harness_foundry_factory.validator import validate_candidate
+from tests.permissions import make_path_writable, make_tree_writable
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -38,6 +39,7 @@ class WorkpackLayeringTests(unittest.TestCase):
         )
 
     def tearDown(self) -> None:
+        make_tree_writable(self.root)
         self.temporary.cleanup()
 
     def _read_json(self, relative: str) -> dict:
@@ -46,7 +48,9 @@ class WorkpackLayeringTests(unittest.TestCase):
         )
 
     def _write_json(self, relative: str, value: dict) -> None:
-        (self.candidate / relative).write_text(
+        path = self.candidate / relative
+        make_path_writable(path)
+        path.write_text(
             json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True)
             + "\n",
             encoding="utf-8",

@@ -10,8 +10,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from harness_foundry_factory.models import SpecVerificationError
-from harness_foundry_factory.service import FactoryService
+from harness_foundry_factory.models import RequestValidationError, SpecVerificationError
+from harness_foundry_factory.service import FactoryService, _path_hash
 from harness_foundry_factory.spec_lock import (
     SpecLockError,
     build_spec_lock,
@@ -140,6 +140,47 @@ class SpecAndSourceTests(unittest.TestCase):
             snapshot = Path(local["snapshot_path"])
             self.assertTrue(snapshot.is_file())
             self.assertEqual(hashlib.sha256(snapshot.read_bytes()).hexdigest(), local["sha256"])
+
+    def test_repository_source_requires_and_preserves_structured_pin_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "repository"
+            source.mkdir()
+            (source / "SKILL.md").write_text("fixture")
+            tree_sha256, _ = _path_hash(source)
+            service = self._fake_service(root)
+            declaration = {
+                "path": str(source),
+                "scope": "Reference repository https://github.com/example/skill",
+                "repository_url": "https://github.com/example/skill",
+                "revision": "main",
+                "commit_sha": "1" * 40,
+                "git_tree_oid": "2" * 40,
+                "tree_sha256": tree_sha256,
+                "license_spdx": "MIT",
+            }
+            service.handle_chat_turn(
+                self._create_request("PROGRAM-STRUCTURED-PIN", declaration)
+            )
+            record = service.store.get_program("PROGRAM-STRUCTURED-PIN")
+            registered = next(
+                item
+                for item in record.snapshot["source_registry"]
+                if item.get("repository_url")
+            )
+            self.assertEqual(registered["commit_sha"], "1" * 40)
+            self.assertEqual(registered["git_tree_oid"], "2" * 40)
+            self.assertEqual(registered["tree_sha256"], registered["sha256"])
+
+            incomplete = {**declaration}
+            incomplete.pop("git_tree_oid")
+            incomplete_request = self._create_request(
+                "PROGRAM-INCOMPLETE-PIN", incomplete
+            )
+            incomplete_request["request_id"] = "REQ-2"
+            incomplete_request["idempotency_key"] = "IDEM-2"
+            with self.assertRaises(RequestValidationError):
+                service.handle_chat_turn(incomplete_request)
 
 
 if __name__ == "__main__":

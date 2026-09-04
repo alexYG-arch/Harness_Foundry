@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import base64
+from copy import deepcopy
 import hashlib
 import json
 import os
@@ -44,12 +45,28 @@ from .constants import (
 )
 from .semantic_contracts import (
     ARTIFACT_MANIFEST_REF,
+    CASE_EVIDENCE_WRITER_WORKPACK_ID,
+    CASE_EXECUTION_RESULT_ROOT_REF,
+    ORACLE_EVALUATOR_REGISTRY_REF,
+    PUBLIC_SKILL_JOB_INTERFACE_REF,
     build_artifact_obligation_manifest,
     explicit_production_enabled,
+    oracle_evaluator_registry,
+    public_skill_job_interface,
+    case_result_ref,
+    registry_case_result_ref,
+    required_artifact_kinds_for_case,
+    repository_job_bindings,
+    schema_invariant_contracts_are_complete,
     task_bundle_for_workpack,
+    validate_composite_dependency_graph,
     validate_explicit_production_contracts,
 )
-from .traceability import WORKPACK_PROJECTS, WORKPACK_STAGE_COMPATIBILITY
+from .traceability import (
+    WORKPACK_PROJECTS,
+    WORKPACK_STAGE_COMPATIBILITY,
+    normalize_ir_coverage,
+)
 
 
 PLACEHOLDER_RE = re.compile(r"<(?!\d)[^<>]+>")
@@ -68,6 +85,13 @@ LOCAL_PATH_RE = re.compile(
     r"/(?:opt|usr/local)/[^/\s]+|"
     r"[A-Za-z]:\\\\Users\\\\[^\\\s]+|file://)"
 )
+
+
+def _slug(value: str) -> str:
+    result = re.sub(r"[^A-Z0-9]+", "-", value.upper()).strip("-")
+    return result or "VALUE"
+
+
 PORTABLE_TEXT_SUFFIXES = {
     ".json",
     ".jsonl",
@@ -162,6 +186,10 @@ CHECKS: tuple[tuple[str, CheckFunction], ...] = (
     ("NO_UNRESOLVED_TEMPLATES", lambda root: _check_placeholders(root)),
     ("IDENTITY_REFERENCES_AND_HASHES", lambda root: _check_identity_and_refs(root)),
     (
+        "PACKAGE_LIFECYCLE_IDENTITY",
+        lambda root: _check_package_lifecycle_identity(root),
+    ),
+    (
         "CANDIDATE_IMMUTABILITY_AND_EXECUTION_ROOT",
         lambda root: _check_candidate_execution_separation(root),
     ),
@@ -169,8 +197,16 @@ CHECKS: tuple[tuple[str, CheckFunction], ...] = (
         "NONEXECUTABLE_NEGATIVE_FIXTURE_SCHEMA",
         lambda root: _check_nonexecutable_negative_fixture_schema(root),
     ),
+    (
+        "EXECUTABLE_ACCEPTANCE_AND_ORACLE_CONTRACTS",
+        lambda root: _check_executable_acceptance_and_oracles(root),
+    ),
     ("WORKPACK_ARTIFACT_HASH_BINDINGS", lambda root: _check_artifact_hashes(root)),
     ("SOURCE_ATOM_AND_COVERAGE", lambda root: _check_sources_atoms_coverage(root)),
+    (
+        "BASELINE_MIGRATION_CONTRACT",
+        lambda root: _check_baseline_migration_contract(root),
+    ),
     (
         "SEMANTIC_PRODUCTION_CONTRACTS",
         lambda root: _check_semantic_production_contracts(root),
@@ -178,6 +214,10 @@ CHECKS: tuple[tuple[str, CheckFunction], ...] = (
     ("PHASE_P3_AND_RELEASE_ORDER", lambda root: _check_phase_and_release(root)),
     ("THREE_PROJECT_DAG_AND_PACKAGES", lambda root: _check_three_projects(root)),
     ("AUTHORING_DEFAULTS_AND_AUTHORIZATION", lambda root: _check_authoring_boundary(root)),
+    (
+        "TARGET_SIDE_EFFECT_SUBAUTHORIZATION_GATES",
+        lambda root: _check_target_subauthorization_gates(root),
+    ),
     ("CONTROL_PLANE_HASH_AND_EPOCH_BINDINGS", lambda root: _check_control_bindings(root)),
     ("LOOP_REPAIR_INVALIDATION_AND_RECOVERY", lambda root: _check_control_contracts(root)),
     ("CODEX_FALSE_SUCCESS_AND_INSTALL_BOUNDARY", lambda root: _check_negative_contracts(root)),
@@ -381,6 +421,557 @@ def _contract_serialized_path(root: Path, relative: str) -> str:
     return str(root / relative)
 
 
+def _artifact_write_roots_from_refs(
+    execution_root: Path, artifact_refs: Sequence[str]
+) -> list[str] | None:
+    prefix = f"{LOGICAL_EXECUTION_ROOT}/"
+    roots: list[str] = []
+    for artifact_ref in artifact_refs:
+        if not isinstance(artifact_ref, str) or not artifact_ref.startswith(
+            prefix
+        ):
+            return None
+        relative = artifact_ref[len(prefix) :]
+        if "/" not in relative or any(
+            part in {"", ".", ".."} for part in relative.split("/")
+        ):
+            return None
+        root = _contract_serialized_path(
+            execution_root, relative.rsplit("/", 1)[0]
+        )
+        if root not in roots:
+            roots.append(root)
+    return roots
+
+
+def _artifact_dependency_read_roots_from_manifest(
+    execution_root: Path,
+    artifact_manifest: Mapping[str, Any],
+    required_artifact_ids: Sequence[str],
+) -> list[str] | None:
+    artifact_index = artifact_manifest.get("artifact_index")
+    if artifact_index is None and "artifact_index" not in artifact_manifest:
+        return []
+    if not isinstance(artifact_index, Mapping):
+        return None
+    artifact_refs: list[str] = []
+    evidence_refs: list[str] = []
+    queue = [str(artifact_id) for artifact_id in required_artifact_ids]
+    visited: set[str] = set()
+    while queue:
+        artifact_id = queue.pop(0)
+        if artifact_id in visited:
+            continue
+        visited.add(artifact_id)
+        artifact = artifact_index.get(artifact_id)
+        if artifact is None:
+            continue
+        if not isinstance(artifact, Mapping):
+            return None
+        for evidence_ref in artifact.get("depends_on_evidence_refs", []):
+            if not isinstance(evidence_ref, str) or not evidence_ref:
+                return None
+            if evidence_ref not in evidence_refs:
+                evidence_refs.append(evidence_ref)
+        for dependency_id in artifact.get("depends_on_artifact_ids", []):
+            dependency_key = str(dependency_id)
+            dependency = artifact_index.get(dependency_key)
+            if not isinstance(dependency, Mapping):
+                return None
+            dependency_ref = str(dependency.get("artifact_ref") or "")
+            if dependency_ref and dependency_ref not in artifact_refs:
+                artifact_refs.append(dependency_ref)
+            if dependency_key not in visited:
+                queue.append(dependency_key)
+    return _artifact_write_roots_from_refs(
+        execution_root, [*artifact_refs, *evidence_refs]
+    )
+
+
+def _job_artifact_scopes(
+    artifact_roots: Sequence[str], *, roots_field: str
+) -> list[dict[str, Any]]:
+    scopes: dict[str, list[str]] = {}
+    for artifact_root in artifact_roots:
+        marker = "/jobs/"
+        if marker not in artifact_root:
+            continue
+        suffix = artifact_root.split(marker, 1)[1]
+        job_id = suffix.split("/", 1)[0]
+        if job_id and artifact_root not in scopes.setdefault(job_id, []):
+            scopes[job_id].append(artifact_root)
+    return [
+        {"job_id": job_id, roots_field: scopes[job_id]}
+        for job_id in sorted(scopes)
+    ]
+
+
+def _expected_job_artifact_lease_contract(
+    *,
+    command_id: str,
+    workpack_id: str,
+    read_scopes: Sequence[Mapping[str, Any]],
+    write_scopes: Sequence[Mapping[str, Any]],
+    selection_cardinality: str = "EXACTLY_ONE_ACTIVE_JOB_LEASE_PER_INVOCATION",
+) -> dict[str, Any] | None:
+    reads = {
+        str(scope.get("job_id")): sorted(
+            str(value) for value in scope.get("allowed_read_roots", [])
+        )
+        for scope in read_scopes
+        if isinstance(scope, Mapping) and scope.get("job_id")
+    }
+    writes = {
+        str(scope.get("job_id")): sorted(
+            str(value) for value in scope.get("allowed_write_roots", [])
+        )
+        for scope in write_scopes
+        if isinstance(scope, Mapping) and scope.get("job_id")
+    }
+    job_ids = sorted(set(reads) | set(writes))
+    if not job_ids:
+        return None
+    bindings = []
+    for job_id in job_ids:
+        read_roots = reads.get(job_id, [])
+        write_roots = writes.get(job_id, [])
+        scope_document = {
+            "job_id": job_id,
+            "allowed_read_roots": read_roots,
+            "allowed_write_roots": write_roots,
+        }
+        bindings.append(
+            {
+                **scope_document,
+                "allowed_read_roots_sha256": _json_hash(read_roots),
+                "allowed_write_roots_sha256": _json_hash(write_roots),
+                "scope_sha256": _json_hash(scope_document),
+                "lease_receipt_ref": (
+                    f"{LOGICAL_EXECUTION_ROOT}/evidence/job_artifact_leases/"
+                    f"{workpack_id}/{command_id}/{job_id}.lease.json"
+                ),
+            }
+        )
+    root_array = {
+        "type": "array",
+        "uniqueItems": True,
+        "items": {"type": "string", "minLength": 1},
+    }
+    hash_field = {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+    return {
+        "schema_version": "1.0",
+        "contract_id": f"JOB-ARTIFACT-LEASE-{workpack_id}-{command_id}",
+        "selection_cardinality": selection_cardinality,
+        "job_scope_bindings": bindings,
+        "receipt_schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": [
+                "lease_id",
+                "program_id",
+                "project_id",
+                "workpack_id",
+                "command_id",
+                "job_id",
+                "lease_receipt_ref",
+                "allowed_read_roots",
+                "allowed_read_roots_sha256",
+                "allowed_write_roots",
+                "allowed_write_roots_sha256",
+                "scope_sha256",
+                "holder_id",
+                "fencing_token",
+                "issued_at",
+                "expires_at",
+                "lease_state_sha256",
+                "consumed",
+                "status",
+            ],
+            "properties": {
+                "lease_id": {"type": "string", "minLength": 1},
+                "program_id": {"type": "string", "minLength": 1},
+                "project_id": {"type": "string", "minLength": 1},
+                "workpack_id": {"const": workpack_id},
+                "command_id": {"const": command_id},
+                "job_id": {"enum": job_ids},
+                "lease_receipt_ref": {
+                    "enum": [item["lease_receipt_ref"] for item in bindings]
+                },
+                "allowed_read_roots": deepcopy(root_array),
+                "allowed_read_roots_sha256": deepcopy(hash_field),
+                "allowed_write_roots": deepcopy(root_array),
+                "allowed_write_roots_sha256": deepcopy(hash_field),
+                "scope_sha256": deepcopy(hash_field),
+                "holder_id": {"type": "string", "minLength": 1},
+                "fencing_token": {"type": "integer", "minimum": 1},
+                "issued_at": {"type": "string", "format": "date-time"},
+                "expires_at": {"type": "string", "format": "date-time"},
+                "lease_state_sha256": deepcopy(hash_field),
+                "consumed": {"const": False},
+                "status": {"const": "ACTIVE"},
+            },
+            "oneOf": [
+                {
+                    "properties": {
+                        "job_id": {"const": item["job_id"]},
+                        "lease_receipt_ref": {
+                            "const": item["lease_receipt_ref"]
+                        },
+                        "allowed_read_roots": {
+                            "const": item["allowed_read_roots"]
+                        },
+                        "allowed_read_roots_sha256": {
+                            "const": item["allowed_read_roots_sha256"]
+                        },
+                        "allowed_write_roots": {
+                            "const": item["allowed_write_roots"]
+                        },
+                        "allowed_write_roots_sha256": {
+                            "const": item["allowed_write_roots_sha256"]
+                        },
+                        "scope_sha256": {"const": item["scope_sha256"]},
+                    }
+                }
+                for item in bindings
+            ],
+            "x-invariants": [
+                "LEASE_PROGRAM_PROJECT_WORKPACK_AND_COMMAND_MATCH_INVOCATION",
+                "LEASE_JOB_ID_SELECTS_EXACTLY_ONE_DECLARED_SCOPE_BINDING",
+                "LEASE_RECEIPT_REF_MATCHES_SELECTED_JOB_BINDING",
+                "LEASE_READ_AND_WRITE_ROOTS_EQUAL_SELECTED_JOB_SCOPE",
+                "LEASE_ROOT_AND_SCOPE_SHA256S_RECOMPUTE_FROM_CANONICAL_ARRAYS",
+                "LEASE_FENCING_TOKEN_IS_CURRENT_AND_SINGLE_USE",
+                "LEASE_ISSUED_AT_PRECEDES_EXPIRES_AT_AND_IS_NOT_EXPIRED",
+            ],
+        },
+        "failure_codes": [
+            "JOB_ARTIFACT_LEASE_MISSING",
+            "JOB_ARTIFACT_LEASE_CARDINALITY_INVALID",
+            "JOB_ARTIFACT_LEASE_SCOPE_MISMATCH",
+            "JOB_ARTIFACT_LEASE_FENCING_TOKEN_INVALID",
+            "JOB_ARTIFACT_LEASE_EXPIRED",
+            "JOB_ARTIFACT_LEASE_REPLAYED",
+        ],
+    }
+
+
+def _expected_workpack_commands(
+    commands_by_id: Mapping[str, Mapping[str, Any]],
+    command_ids: Sequence[str],
+    artifact_write_roots: Sequence[str],
+    artifact_read_roots: Sequence[str] = (),
+    *,
+    workpack_id: str,
+) -> list[dict[str, Any]] | None:
+    job_scopes: dict[str, list[str]] = {}
+    shared_roots: list[str] = []
+    for artifact_root in artifact_write_roots:
+        marker = "/jobs/"
+        if marker in artifact_root:
+            suffix = artifact_root.split(marker, 1)[1]
+            job_id = suffix.split("/", 1)[0]
+            if job_id:
+                job_scopes.setdefault(job_id, []).append(artifact_root)
+                continue
+        shared_roots.append(artifact_root)
+    shared_read_roots = [
+        root for root in artifact_read_roots if "/jobs/" not in root
+    ]
+
+    commands: list[dict[str, Any]] = []
+    for command_id in command_ids:
+        source = commands_by_id.get(command_id)
+        if not isinstance(source, Mapping):
+            return None
+        command = deepcopy(dict(source))
+        command.pop("workpack_artifact_write_roots", None)
+        command.pop("shared_artifact_write_roots", None)
+        command.pop("job_artifact_write_scopes", None)
+        command.pop("job_artifact_read_scopes", None)
+        command.pop("job_artifact_lease_contract", None)
+        command.pop("shared_artifact_read_roots", None)
+        roots = [
+            root
+            for root in command.get("allowed_write_roots") or []
+            if root not in artifact_write_roots
+        ]
+        is_coding_command = command_id.endswith("CODEX-CODING")
+        for artifact_root in shared_roots:
+            if artifact_root not in roots:
+                roots.append(artifact_root)
+        command["allowed_write_roots"] = roots
+        read_roots = [
+            root
+            for root in command.get("allowed_read_roots") or []
+            if root not in artifact_read_roots
+        ]
+        for artifact_root in shared_read_roots:
+            if artifact_root not in read_roots:
+                read_roots.append(artifact_root)
+        command["allowed_read_roots"] = read_roots
+        command["shared_artifact_read_roots"] = list(shared_read_roots)
+        command["shared_artifact_write_roots"] = list(shared_roots)
+        command["job_artifact_write_scopes"] = (
+            [
+                {"job_id": job_id, "allowed_write_roots": job_scopes[job_id]}
+                for job_id in sorted(job_scopes)
+            ]
+            if is_coding_command
+            else []
+        )
+        command["artifact_write_scope_mode"] = (
+            "ONE_JOB_LEASE_REQUIRED"
+            if is_coding_command and job_scopes
+            else "SHARED_ONLY"
+            if shared_roots
+            else "NONE"
+        )
+        is_case_runner = command_id in {
+            "LAB-RUN-ACCEPTANCE-CASE",
+            "LAB-RUN-NEGATIVE-CASE",
+            "LAB-RUN-REGISTRY-CASE",
+        }
+        lease_eligible = is_coding_command or (
+            workpack_id == CASE_EVIDENCE_WRITER_WORKPACK_ID
+            and is_case_runner
+        )
+        command["job_artifact_read_scopes"] = (
+            _job_artifact_scopes(
+                artifact_read_roots, roots_field="allowed_read_roots"
+            )
+            if lease_eligible
+            else []
+        )
+        command["artifact_read_scope_mode"] = (
+            "ONE_JOB_LEASE_REQUIRED"
+            if lease_eligible and command["job_artifact_read_scopes"]
+            else "SHARED_ONLY"
+            if shared_read_roots
+            else "NONE"
+        )
+        lease_contract = (
+            _expected_job_artifact_lease_contract(
+                command_id=command_id,
+                workpack_id=workpack_id,
+                read_scopes=command["job_artifact_read_scopes"],
+                write_scopes=command["job_artifact_write_scopes"],
+                selection_cardinality=(
+                    "EXACTLY_ONE_ACTIVE_JOB_LEASE_PER_CASE_PARTITION"
+                    if is_case_runner
+                    else "EXACTLY_ONE_ACTIVE_JOB_LEASE_PER_INVOCATION"
+                ),
+            )
+            if lease_eligible
+            else None
+        )
+        command["job_artifact_lease_required"] = lease_contract is not None
+        command["job_artifact_lease_contract"] = lease_contract
+        command["active_job_artifact_lease_ref"] = None
+        command["job_artifact_scope_activation_policy"] = (
+            "NO_JOB_ARTIFACT_ROOT_IS_ACTIVE_WITHOUT_EXACTLY_ONE_CURRENT_LEASE"
+            if lease_contract is not None
+            else "NO_JOB_ARTIFACT_SCOPE"
+        )
+        if command_id == "MB-TEST":
+            executable = str(
+                command.get("executable_abs") or command.get("executable") or ""
+            )
+            execution_root = executable.split("/project_start_packages/", 1)[0]
+            test_temp_root = (
+                f"{execution_root}/evidence/project_workpacks/"
+                f"MAIN_HARNESS_BUILD/{workpack_id}/pytest-tmp"
+            )
+            command["argv"] = [
+                executable,
+                "-B",
+                "-m",
+                "pytest",
+                "-p",
+                "no:cacheprovider",
+                "--basetemp",
+                test_temp_root,
+                "tests",
+            ]
+            command["environment"] = {
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+                "PYTHONHASHSEED": "0",
+            }
+            command["allowed_write_roots"] = [test_temp_root]
+            command["test_repository_write_policy"] = (
+                "FORBIDDEN_VERIFY_SNAPSHOT_BEFORE_AFTER"
+            )
+        command["command_sha256"] = _hash_without_field(
+            command, "command_sha256"
+        )
+        commands.append(command)
+    return commands
+
+
+def _job_artifact_lease_contract_is_valid(
+    command: Mapping[str, Any], *, workpack_id: str
+) -> bool:
+    read_scopes = command.get("job_artifact_read_scopes")
+    write_scopes = command.get("job_artifact_write_scopes")
+    if not isinstance(read_scopes, list) or not isinstance(write_scopes, list):
+        return False
+    job_ids = sorted(
+        {
+            str(scope.get("job_id"))
+            for scope in [*read_scopes, *write_scopes]
+            if isinstance(scope, Mapping) and scope.get("job_id")
+        }
+    )
+    is_coding = str(command.get("command_id") or "").endswith("CODEX-CODING")
+    is_lab_case_runner = (
+        workpack_id == CASE_EVIDENCE_WRITER_WORKPACK_ID
+        and str(command.get("command_id") or "")
+        in {
+            "LAB-RUN-ACCEPTANCE-CASE",
+            "LAB-RUN-NEGATIVE-CASE",
+            "LAB-RUN-REGISTRY-CASE",
+        }
+    )
+    required = (is_coding or is_lab_case_runner) and bool(job_ids)
+    if command.get("job_artifact_lease_required") is not required:
+        return False
+    if command.get("active_job_artifact_lease_ref") is not None:
+        return False
+    expected_policy = (
+        "NO_JOB_ARTIFACT_ROOT_IS_ACTIVE_WITHOUT_EXACTLY_ONE_CURRENT_LEASE"
+        if required
+        else "NO_JOB_ARTIFACT_SCOPE"
+    )
+    if command.get("job_artifact_scope_activation_policy") != expected_policy:
+        return False
+    contract = command.get("job_artifact_lease_contract")
+    if not required:
+        return contract is None
+    if not isinstance(contract, Mapping):
+        return False
+    bindings = contract.get("job_scope_bindings")
+    receipt_schema = contract.get("receipt_schema")
+    expected_selection_cardinality = (
+        "EXACTLY_ONE_ACTIVE_JOB_LEASE_PER_CASE_PARTITION"
+        if is_lab_case_runner
+        else "EXACTLY_ONE_ACTIVE_JOB_LEASE_PER_INVOCATION"
+    )
+    if (
+        contract.get("selection_cardinality")
+        != expected_selection_cardinality
+        or not isinstance(bindings, list)
+        or len(bindings) != len(job_ids)
+        or not isinstance(receipt_schema, Mapping)
+    ):
+        return False
+    read_by_job = {
+        str(scope["job_id"]): sorted(scope.get("allowed_read_roots", []))
+        for scope in read_scopes
+        if isinstance(scope, Mapping) and scope.get("job_id")
+    }
+    write_by_job = {
+        str(scope["job_id"]): sorted(scope.get("allowed_write_roots", []))
+        for scope in write_scopes
+        if isinstance(scope, Mapping) and scope.get("job_id")
+    }
+    binding_ids: list[str] = []
+    for binding in bindings:
+        if not isinstance(binding, Mapping) or not binding.get("job_id"):
+            return False
+        job_id = str(binding["job_id"])
+        binding_ids.append(job_id)
+        read_roots = read_by_job.get(job_id, [])
+        write_roots = write_by_job.get(job_id, [])
+        scope_document = {
+            "job_id": job_id,
+            "allowed_read_roots": read_roots,
+            "allowed_write_roots": write_roots,
+        }
+        if (
+            binding.get("allowed_read_roots") != read_roots
+            or binding.get("allowed_write_roots") != write_roots
+            or binding.get("allowed_read_roots_sha256") != _json_hash(read_roots)
+            or binding.get("allowed_write_roots_sha256") != _json_hash(write_roots)
+            or binding.get("scope_sha256") != _json_hash(scope_document)
+            or binding.get("lease_receipt_ref")
+            != (
+                f"{LOGICAL_EXECUTION_ROOT}/evidence/job_artifact_leases/"
+                f"{workpack_id}/{command.get('command_id')}/{job_id}.lease.json"
+            )
+        ):
+            return False
+    required_receipt_fields = {
+        "lease_id",
+        "program_id",
+        "project_id",
+        "workpack_id",
+        "command_id",
+        "job_id",
+        "lease_receipt_ref",
+        "allowed_read_roots",
+        "allowed_read_roots_sha256",
+        "allowed_write_roots",
+        "allowed_write_roots_sha256",
+        "scope_sha256",
+        "holder_id",
+        "fencing_token",
+        "issued_at",
+        "expires_at",
+        "lease_state_sha256",
+        "consumed",
+        "status",
+    }
+    properties = receipt_schema.get("properties")
+    expected_selection_branches = [
+        {
+            "properties": {
+                "job_id": {"const": binding["job_id"]},
+                "lease_receipt_ref": {
+                    "const": binding["lease_receipt_ref"]
+                },
+                "allowed_read_roots": {
+                    "const": binding["allowed_read_roots"]
+                },
+                "allowed_read_roots_sha256": {
+                    "const": binding["allowed_read_roots_sha256"]
+                },
+                "allowed_write_roots": {
+                    "const": binding["allowed_write_roots"]
+                },
+                "allowed_write_roots_sha256": {
+                    "const": binding["allowed_write_roots_sha256"]
+                },
+                "scope_sha256": {"const": binding["scope_sha256"]},
+            }
+        }
+        for binding in bindings
+    ]
+    return bool(
+        sorted(binding_ids) == job_ids
+        and len(set(binding_ids)) == len(binding_ids)
+        and receipt_schema.get("type") == "object"
+        and receipt_schema.get("additionalProperties") is False
+        and required_receipt_fields.issubset(set(receipt_schema.get("required", [])))
+        and isinstance(properties, Mapping)
+        and properties.get("workpack_id", {}).get("const") == workpack_id
+        and properties.get("command_id", {}).get("const")
+        == command.get("command_id")
+        and properties.get("job_id", {}).get("enum") == job_ids
+        and receipt_schema.get("oneOf") == expected_selection_branches
+        and properties.get("consumed", {}).get("const") is False
+        and properties.get("status", {}).get("const") == "ACTIVE"
+        and len(receipt_schema.get("x-invariants", [])) >= 7
+        and {
+            "JOB_ARTIFACT_LEASE_MISSING",
+            "JOB_ARTIFACT_LEASE_CARDINALITY_INVALID",
+            "JOB_ARTIFACT_LEASE_SCOPE_MISMATCH",
+            "JOB_ARTIFACT_LEASE_FENCING_TOKEN_INVALID",
+            "JOB_ARTIFACT_LEASE_EXPIRED",
+            "JOB_ARTIFACT_LEASE_REPLAYED",
+        }.issubset(set(contract.get("failure_codes", [])))
+    )
+
+
 def _is_nonexecutable_negative_fixture(case: Any) -> bool:
     atom_ids = case.get("atom_ids") if isinstance(case, Mapping) else None
     return bool(
@@ -399,6 +990,704 @@ def _is_nonexecutable_negative_fixture(case: Any) -> bool:
         and bool(case["input_fixture"])
         and isinstance(case.get("origin"), str)
         and bool(case["origin"].strip())
+    )
+
+
+def _structured_negative_mutation(value: Any, expected_failure: Any) -> bool:
+    allowed_operations = {
+        "SET_FIELD",
+        "REMOVE_REQUIRED_FIELD",
+        "REMOVE_CONDITIONALLY_REQUIRED_FIELD",
+        "REPLACE_HASH",
+        "SET_OUT_OF_RANGE_VALUE",
+        "SET_ORDER",
+        "ADD_ACTIVE_LEASE",
+        "REPLAY_ATTESTATION",
+        "SUBSTITUTE_OUTPUT",
+        "REPLACE_EXECUTOR",
+        "OMIT_STAGE_RECEIPT",
+        "CHANGE_LOCKED_HASH",
+        "REMOVE_AUTHORIZATION",
+        "DUPLICATE_SIDE_EFFECT",
+        "INVALIDATE_UPSTREAM",
+        "REQUEST_FORBIDDEN_ACTION",
+    }
+    return bool(
+        isinstance(value, Mapping)
+        and isinstance(value.get("operation"), str)
+        and value["operation"] in allowed_operations
+        and isinstance(value.get("target_ref"), str)
+        and value["target_ref"].strip()
+        and not value["target_ref"].startswith("validation-input://")
+        and "invalid_value" in value
+        and isinstance(value.get("violated_constraint"), Mapping)
+        and bool(value["violated_constraint"])
+        and isinstance(value.get("target_binding"), Mapping)
+        and not (
+            isinstance(value.get("invalid_value"), Mapping)
+            and set(value["invalid_value"]) == {"declared_violation"}
+        )
+        and value.get("expected_failure") == expected_failure
+    )
+
+
+def _schema_pointer_resolves(schema: Any, pointer: str) -> bool:
+    if not isinstance(schema, Mapping) or not pointer.startswith("/"):
+        return False
+    current: Any = schema
+    for raw_token in pointer[1:].split("/"):
+        token = raw_token.replace("~1", "/").replace("~0", "~")
+        if token.isdigit():
+            current = current.get("items") if isinstance(current, Mapping) else None
+        else:
+            properties = (
+                current.get("properties")
+                if isinstance(current, Mapping)
+                else None
+            )
+            current = properties.get(token) if isinstance(properties, Mapping) else None
+        if not isinstance(current, Mapping):
+            return False
+    return True
+
+
+def _resolvable_negative_target_binding(
+    value: Any,
+    *,
+    artifact_index: Mapping[str, Any],
+    fixture_jobs: list[Any],
+) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    resolver = value.get("resolver")
+    pointers = value.get("json_pointers")
+    if (
+        not isinstance(pointers, list)
+        or not pointers
+        or any(
+            not isinstance(pointer, str) or not pointer.startswith("/")
+            for pointer in pointers
+        )
+    ):
+        return False
+    if resolver == "ARTIFACT_MANIFEST_SCHEMA_POINTER_V1":
+        artifact_kind = value.get("artifact_kind")
+        artifact_ids = value.get("artifact_ids")
+        artifact_refs = value.get("artifact_refs")
+        if (
+            value.get("resource_kind") != "DECLARED_ARTIFACT_SET"
+            or value.get("application_cardinality")
+            != "EVERY_MATCHED_ARTIFACT"
+            or not isinstance(artifact_kind, str)
+            or not isinstance(artifact_ids, list)
+            or not artifact_ids
+            or len(artifact_ids) != len(set(artifact_ids))
+            or not isinstance(artifact_refs, list)
+            or len(artifact_refs) != len(artifact_ids)
+        ):
+            return False
+        for artifact_id, artifact_ref in zip(
+            artifact_ids, artifact_refs, strict=True
+        ):
+            artifact = artifact_index.get(artifact_id)
+            if (
+                not isinstance(artifact_id, str)
+                or not isinstance(artifact_ref, str)
+                or not isinstance(artifact, Mapping)
+                or artifact.get("artifact_kind") != artifact_kind
+                or artifact.get("artifact_ref") != artifact_ref
+                or any(
+                    not _schema_pointer_resolves(
+                        artifact.get("schema"), pointer
+                    )
+                    for pointer in pointers
+                )
+            ):
+                return False
+        return True
+    if resolver == "FIXTURE_INPUT_JSON_POINTER_V1":
+        selector = value.get("instance_selector")
+        declared_job_ids = sorted(
+            str(item["job_id"])
+            for item in fixture_jobs
+            if isinstance(item, Mapping) and item.get("job_id")
+        )
+        return bool(
+            value.get("resource_kind") == "FIXTURE_JOB_SET"
+            and isinstance(value.get("base_input_ref"), str)
+            and value["base_input_ref"].startswith(
+                "harness-resource://candidate/validation/case_fixtures/"
+            )
+            and isinstance(selector, Mapping)
+            and selector.get("match_field") == "job_id"
+            and selector.get("cardinality") == "EXACT_DECLARED_JOB_SET"
+            and selector.get("match_values") == declared_job_ids
+            and bool(declared_job_ids)
+        )
+    if resolver == "EXECUTION_INPUT_JSON_POINTER_V1":
+        return bool(
+            value.get("resource_kind")
+            == "DECLARED_EXECUTION_VALIDATION_INPUT"
+            and isinstance(value.get("base_input_ref"), str)
+            and value["base_input_ref"].startswith(
+                "harness-resource://execution/validation-inputs/"
+            )
+            and value.get("materialization_requirement")
+            == "MUST_EXIST_BEFORE_MUTATION_APPLICATION"
+        )
+    return False
+
+
+def _concrete_negative_input(
+    value: Any,
+    expected_failure: Any,
+    *,
+    artifacts_declared: bool,
+    artifact_index: Mapping[str, Any] | None = None,
+) -> bool:
+    if not isinstance(value, Mapping) or not value:
+        return False
+    if "mutation" in value:
+        resolved_artifact_index = (
+            artifact_index if isinstance(artifact_index, Mapping) else {}
+        )
+        fixture_jobs = (
+            value.get("fixture_jobs")
+            if isinstance(value.get("fixture_jobs"), list)
+            else []
+        )
+        if not _structured_negative_mutation(
+            value.get("mutation"), expected_failure
+        ) or not _resolvable_negative_target_binding(
+            value["mutation"].get("target_binding"),
+            artifact_index=resolved_artifact_index,
+            fixture_jobs=fixture_jobs,
+        ):
+            return False
+        variants = value.get("mutation_variants")
+        mutation_manifest = value.get("mutation_manifest")
+        fixture_id = str(value.get("fixture_id") or "")
+        expected_variants_by_fixture = {
+            "FIXTURE-NEG-MULTI-SKILL-OR-DURATION-DRIFT": {
+                "MULTI-SKILL",
+                "DURATION-DRIFT",
+                "WRONG-CANVAS-OR-FPS",
+                "FORCED-NARRATION-SPEED",
+            },
+            "FIXTURE-NEG-UNSUPPORTED-EFFECT-OR-FAKE-DEMO": {
+                "UNSUPPORTED-EFFECT",
+                "ILLUSTRATION-LABELED-ACTUAL",
+            },
+            "FIXTURE-NEG-CLOUD-TTS-OR-APPROXIMATE-SYNC": {
+                "CLOUD-TTS",
+                "MISSING-FORCED-ALIGNMENT",
+                "SCENE-ONLY-APPROXIMATE-TIMING",
+                "INCOMPLETE-OBJECT-SET",
+                "TIMING-TOLERANCE-EXCEEDED",
+            },
+            "FIXTURE-NEG-UNROUTED-ASSET-OR-EXTERNAL-ANIMATION": {
+                "OBJECT-WITHOUT-PROVENANCE",
+                "UNAUTHORIZED-CODEX-IMAGEGEN",
+                "EXTERNAL-TEXT-TO-VIDEO",
+                "UNPINNED-SHOTCRAFT",
+            },
+            "FIXTURE-NEG-UNAUTHORIZED-TARGET-EXECUTION-OR-FALSE-RESUME": {
+                "DENIED-GATE-SIDE-EFFECT",
+                "PROGRAM-WIDE-AUTHORIZATION-SUBSTITUTION",
+                "STALE-AUTHORIZATION-OR-INPUT-HASH",
+                "CONSUMED-AUTHORIZATION-REPLAY",
+                "FALSE-RESUME-SIDE-EFFECT-REPLAY",
+            },
+            "FIXTURE-NEG-FIXTURE-NARRATIVE-PASS-OR-AUTHORING-EXECUTION": {
+                "MISSING-FIXTURE-EVIDENCE",
+                "NARRATIVE-PASS",
+                "DEPENDENCY-INSTALL",
+                "MODEL-DOWNLOAD",
+                "MEDIA-RENDER",
+                "WORKPACK-START",
+                "DRIVER-START",
+                "EXECUTION-ROOT-CREATE",
+            },
+        }
+        actual_variant_ids = {
+            str(item.get("variant_id"))
+            for item in variants or []
+            if isinstance(item, Mapping)
+        }
+        expected_variant_ids = expected_variants_by_fixture.get(fixture_id)
+        artifact_expectations = value.get("artifact_expectations")
+        expected_dependency_mode = (
+            "DECLARED_PRODUCTION_ARTIFACTS"
+            if artifacts_declared
+            else "NO_DECLARED_PRODUCTION_ARTIFACTS"
+        )
+        return bool(
+            isinstance(variants, list)
+            and variants
+            and len(actual_variant_ids) == len(variants)
+            and (
+                expected_variant_ids is None
+                or actual_variant_ids == expected_variant_ids
+            )
+            and all(
+                isinstance(item, Mapping)
+                and isinstance(item.get("variant_id"), str)
+                and item["variant_id"]
+                and _structured_negative_mutation(
+                    item.get("mutation"), expected_failure
+                )
+                and _resolvable_negative_target_binding(
+                    item["mutation"].get("target_binding"),
+                    artifact_index=resolved_artifact_index,
+                    fixture_jobs=fixture_jobs,
+                )
+                for item in variants
+            )
+            and mutation_manifest == variants
+            and value.get("mutation_manifest_sha256")
+            == _json_hash(mutation_manifest)
+            and isinstance(artifact_expectations, list)
+            and bool(artifact_expectations) is artifacts_declared
+            and value.get("artifact_dependency_mode")
+            == expected_dependency_mode
+            and isinstance(value.get("fixture_jobs"), list)
+        )
+    return bool(
+        set(value)
+        - {
+            "fixture_id",
+            "atom_ids",
+            "description",
+        }
+    )
+
+
+def _strict_case_result_schema(schema: Any) -> bool:
+    if not isinstance(schema, Mapping):
+        return False
+    schema_properties = schema.get("properties")
+    if not isinstance(schema_properties, Mapping):
+        return False
+    assertion_results = schema_properties.get("assertion_results")
+    items = (
+        assertion_results.get("items")
+        if isinstance(assertion_results, Mapping)
+        else None
+    )
+    required = set(items.get("required", [])) if isinstance(items, Mapping) else set()
+    properties = items.get("properties") if isinstance(items, Mapping) else None
+    artifact_checks = schema_properties.get("artifact_checks")
+    artifact_items = (
+        artifact_checks.get("items")
+        if isinstance(artifact_checks, Mapping)
+        else None
+    )
+    artifact_required = (
+        set(artifact_items.get("required", []))
+        if isinstance(artifact_items, Mapping)
+        else set()
+    )
+    source_jobs = schema_properties.get("source_job_bindings")
+    source_job_items = (
+        source_jobs.get("items") if isinstance(source_jobs, Mapping) else None
+    )
+    mutation_results = schema_properties.get("mutation_variant_results")
+    mutation_items = (
+        mutation_results.get("items")
+        if isinstance(mutation_results, Mapping)
+        else None
+    )
+    mutation_required = (
+        set(mutation_items.get("required", []))
+        if isinstance(mutation_items, Mapping)
+        else set()
+    )
+    all_of = schema.get("allOf")
+    serialized_conditions = json.dumps(all_of, sort_keys=True, default=str)
+    return bool(
+        schema.get("type") == "object"
+        and schema.get("additionalProperties") is False
+        and {
+            "case_id",
+            "case_kind",
+            "fixture_sha256",
+            "assertion_manifest_sha256",
+            "command_receipt_ref",
+            "command_receipt_sha256",
+            "assertion_results",
+            "oracle_decision",
+            "status",
+        }.issubset(set(schema.get("required", [])))
+        and schema_properties.get("case_kind", {}).get("enum")
+        == ["ACCEPTANCE", "NEGATIVE"]
+        and isinstance(assertion_results, Mapping)
+        and assertion_results.get("type") == "array"
+        and assertion_results.get("uniqueItems") is True
+        and isinstance(items, Mapping)
+        and items.get("type") == "object"
+        and {
+            "assertion_id",
+            "operator",
+            "passed",
+            "actual",
+            "expected",
+            "evidence_refs",
+        }.issubset(required)
+        and isinstance(properties, Mapping)
+        and isinstance(properties.get("operator", {}).get("enum"), list)
+        and {
+            "VALIDATED_RECEIPT_EXISTS",
+            "SET_EQUALS",
+            "ALL_ARTIFACTS_SCHEMA_HASH_AND_ORACLE_PASS",
+            "EXACT_SOURCE_JOBS_MATCH",
+            "EQUALS",
+        }.issubset(set(properties["operator"]["enum"]))
+        and properties.get("passed", {}).get("type") == "boolean"
+        and properties.get("evidence_refs", {}).get("minItems", 0) >= 1
+        and isinstance(artifact_checks, Mapping)
+        and artifact_checks.get("type") == "array"
+        and artifact_checks.get("minItems", 0) >= 1
+        and artifact_checks.get("uniqueItems") is True
+        and isinstance(artifact_items, Mapping)
+        and artifact_items.get("additionalProperties") is False
+        and {
+            "artifact_id",
+            "job_id",
+            "source_id",
+            "artifact_ref",
+            "schema_sha256",
+            "oracle_pass",
+            "evidence_refs",
+        }.issubset(artifact_required)
+        and isinstance(source_jobs, Mapping)
+        and source_jobs.get("type") == "array"
+        and source_jobs.get("minItems", 0) >= 1
+        and source_jobs.get("uniqueItems") is True
+        and isinstance(source_job_items, Mapping)
+        and source_job_items.get("additionalProperties") is False
+        and {
+            "job_id",
+            "source_id",
+            "repository_url",
+            "commit_sha",
+        }.issubset(set(source_job_items.get("required", [])))
+        and {
+            "observed_failure_code",
+            "expected_failure_observed",
+            "mutation_manifest_sha256",
+            "mutation_variant_results",
+            "side_effect_receipt_ref",
+            "side_effect_receipt_sha256",
+            "side_effects_started",
+        }.issubset(set(schema_properties))
+        and isinstance(mutation_results, Mapping)
+        and mutation_results.get("type") == "array"
+        and mutation_results.get("minItems", 0) >= 1
+        and mutation_results.get("uniqueItems") is True
+        and isinstance(mutation_items, Mapping)
+        and mutation_items.get("additionalProperties") is False
+        and {
+            "variant_id",
+            "base_input_ref",
+            "base_input_sha256",
+            "mutated_input_ref",
+            "mutated_input_sha256",
+            "mutation_receipt_ref",
+            "mutation_receipt_sha256",
+            "command_receipt_ref",
+            "command_receipt_sha256",
+            "validator_finding_ref",
+            "validator_finding_sha256",
+            "side_effect_receipt_ref",
+            "side_effect_receipt_sha256",
+            "observed_failure_code",
+            "expected_failure_observed",
+            "side_effects_started",
+            "status",
+        }.issubset(mutation_required)
+        and isinstance(all_of, list)
+        and len(all_of) >= 4
+        and '"case_kind": {"const": "ACCEPTANCE"}' in serialized_conditions
+        and '"case_kind": {"const": "NEGATIVE"}' in serialized_conditions
+        and '"passed": {"const": false}' in serialized_conditions
+    )
+
+
+def _strict_case_specific_result_schema(
+    schema: Any, fixture: Any, *, negative: bool
+) -> bool:
+    if not isinstance(schema, Mapping) or not isinstance(fixture, Mapping):
+        return False
+    properties = schema.get("properties")
+    bindings = fixture.get("oracle_bindings")
+    assertions = fixture.get("assertions")
+    if (
+        not isinstance(properties, Mapping)
+        or not isinstance(bindings, Mapping)
+        or not isinstance(assertions, list)
+    ):
+        return False
+    assertion_results = properties.get("assertion_results")
+    assertion_constraints = (
+        assertion_results.get("allOf")
+        if isinstance(assertion_results, Mapping)
+        else None
+    )
+    required = set(schema.get("required", []))
+    if not (
+        properties.get("case_id", {}).get("const") == fixture.get("case_id")
+        and properties.get("case_kind", {}).get("const")
+        == fixture.get("case_kind")
+        and properties.get("assertion_manifest_sha256", {}).get("const")
+        == bindings.get("assertion_manifest_sha256")
+        and isinstance(assertion_results, Mapping)
+        and assertion_results.get("uniqueItems") is True
+        and assertion_results.get("minItems") == len(assertions)
+        and assertion_results.get("maxItems") == len(assertions)
+        and isinstance(assertion_constraints, list)
+        and len(assertion_constraints) == len(assertions)
+    ):
+        return False
+    serialized_assertions = json.dumps(
+        assertion_constraints, ensure_ascii=False, sort_keys=True
+    )
+    if any(
+        json.dumps(str(item.get("assertion_id") or ""))
+        not in serialized_assertions
+        for item in assertions
+        if isinstance(item, Mapping)
+    ):
+        return False
+    if negative:
+        expected_failure = str(
+            fixture.get("expected_failure") or "EXPECTED_REJECTION"
+        )
+        fixture_input = fixture.get("input")
+        mutation_manifest = (
+            fixture_input.get("mutation_manifest")
+            if isinstance(fixture_input, Mapping)
+            else None
+        )
+        bindings = fixture.get("oracle_bindings")
+        mutation_results = properties.get("mutation_variant_results")
+        mutation_constraints = (
+            mutation_results.get("allOf")
+            if isinstance(mutation_results, Mapping)
+            else None
+        )
+        serialized_mutations = json.dumps(
+            mutation_constraints, ensure_ascii=False, sort_keys=True
+        )
+        return bool(
+            {
+                "observed_failure_code",
+                "expected_failure_observed",
+                "artifact_manifest_sha256",
+                "source_job_manifest_sha256",
+                "mutation_manifest_sha256",
+                "mutation_variant_results",
+                "side_effect_receipt_ref",
+                "side_effect_receipt_sha256",
+                "side_effects_started",
+            }.issubset(required)
+            and properties.get("observed_failure_code", {}).get("const")
+            == expected_failure
+            and properties.get("expected_failure_observed", {}).get("const")
+            is True
+            and properties.get("side_effects_started", {}).get("const") is False
+            and isinstance(bindings, Mapping)
+            and isinstance(mutation_manifest, list)
+            and bool(mutation_manifest)
+            and bindings.get("mutation_manifest") == mutation_manifest
+            and bindings.get("mutation_manifest_sha256")
+            == _json_hash(mutation_manifest)
+            and properties.get("mutation_manifest_sha256", {}).get("const")
+            == bindings.get("mutation_manifest_sha256")
+            and properties.get("artifact_manifest_sha256", {}).get("const")
+            == bindings.get("artifact_manifest_sha256")
+            and properties.get("source_job_manifest_sha256", {}).get("const")
+            == bindings.get("source_job_manifest_sha256")
+            and isinstance(mutation_results, Mapping)
+            and mutation_results.get("uniqueItems") is True
+            and mutation_results.get("minItems") == len(mutation_manifest)
+            and mutation_results.get("maxItems") == len(mutation_manifest)
+            and isinstance(mutation_constraints, list)
+            and len(mutation_constraints) == len(mutation_manifest)
+            and all(
+                json.dumps(str(item.get("variant_id") or ""))
+                in serialized_mutations
+                for item in mutation_manifest
+                if isinstance(item, Mapping)
+            )
+        )
+    artifact_manifest = bindings.get("artifact_manifest")
+    source_manifest = bindings.get("source_job_manifest")
+    artifact_checks = properties.get("artifact_checks")
+    source_jobs = properties.get("source_job_bindings")
+    return bool(
+        {
+            "artifact_checks",
+            "artifact_manifest_sha256",
+            "source_job_bindings",
+            "source_job_manifest_sha256",
+        }.issubset(required)
+        and isinstance(artifact_manifest, list)
+        and isinstance(source_manifest, list)
+        and properties.get("artifact_manifest_sha256", {}).get("const")
+        == bindings.get("artifact_manifest_sha256")
+        and properties.get("source_job_manifest_sha256", {}).get("const")
+        == bindings.get("source_job_manifest_sha256")
+        and isinstance(artifact_checks, Mapping)
+        and artifact_checks.get("uniqueItems") is True
+        and artifact_checks.get("minItems") == len(artifact_manifest)
+        and artifact_checks.get("maxItems") == len(artifact_manifest)
+        and len(artifact_checks.get("allOf", [])) == len(artifact_manifest)
+        and isinstance(source_jobs, Mapping)
+        and source_jobs.get("uniqueItems") is True
+        and source_jobs.get("minItems") == len(source_manifest)
+        and source_jobs.get("maxItems") == len(source_manifest)
+        and len(source_jobs.get("allOf", [])) == len(source_manifest)
+    )
+
+
+def _concrete_acceptance_fixture(
+    fixture: Any,
+    artifact_index: Mapping[str, Any],
+    repository_pins: list[dict[str, str]],
+) -> bool:
+    if not isinstance(fixture, Mapping):
+        return False
+    payload = fixture.get("input")
+    assertions = fixture.get("assertions")
+    oracle_bindings = fixture.get("oracle_bindings")
+    if (
+        not isinstance(payload, Mapping)
+        or not isinstance(assertions, list)
+        or not isinstance(oracle_bindings, Mapping)
+    ):
+        return False
+    declared_inputs = payload.get("declared_inputs")
+    expectations = payload.get("artifact_expectations")
+    jobs = payload.get("fixture_jobs")
+    required_artifact_kinds = payload.get("required_artifact_kinds")
+    if (
+        not isinstance(declared_inputs, list)
+        or not declared_inputs
+        or not isinstance(expectations, list)
+        or (bool(artifact_index) and not expectations)
+        or not isinstance(jobs, list)
+        or not isinstance(required_artifact_kinds, list)
+        or payload.get("one_skill_per_job") is not True
+    ):
+        return False
+    assertion_manifest = [
+        {
+            "assertion_id": str(item.get("assertion_id") or ""),
+            "operator": str(item.get("operator") or ""),
+            "expected": item.get("expected"),
+        }
+        for item in assertions
+        if isinstance(item, Mapping)
+    ]
+    if (
+        len(assertion_manifest) != len(assertions)
+        or oracle_bindings.get("evaluator_id") != "EXACT_CASE_SET_ORACLE_V1"
+        or oracle_bindings.get("evaluator_registry_ref")
+        != ORACLE_EVALUATOR_REGISTRY_REF
+        or oracle_bindings.get("set_equality_required") is not True
+        or oracle_bindings.get("assertion_manifest") != assertion_manifest
+        or oracle_bindings.get("assertion_manifest_sha256")
+        != _json_hash(assertion_manifest)
+        or oracle_bindings.get("artifact_manifest") != expectations
+        or oracle_bindings.get("artifact_manifest_sha256")
+        != _json_hash(expectations)
+    ):
+        return False
+    seen_expectations: set[str] = set()
+    observed_artifact_kinds: set[str] = set()
+    for expectation in expectations:
+        if not isinstance(expectation, Mapping):
+            return False
+        artifact_id = expectation.get("artifact_id")
+        artifact = artifact_index.get(str(artifact_id))
+        if (
+            not isinstance(artifact, Mapping)
+            or expectation.get("artifact_ref") != artifact.get("artifact_ref")
+            or expectation.get("artifact_kind") != artifact.get("artifact_kind")
+            or expectation.get("schema_sha256")
+            != _json_hash(artifact.get("schema"))
+            or expectation.get("job_id") != artifact.get("job_id")
+            or expectation.get("source_id") != artifact.get("source_id")
+            or str(artifact_id) in seen_expectations
+        ):
+            return False
+        seen_expectations.add(str(artifact_id))
+        observed_artifact_kinds.add(str(expectation.get("artifact_kind") or ""))
+    if not set(required_artifact_kinds).issubset(observed_artifact_kinds):
+        return False
+    if payload.get("evidence_closure_policy") == (
+        "ALL_CASE_BOUND_ARTIFACT_KINDS_REQUIRED"
+    ) and set(required_artifact_kinds) != observed_artifact_kinds:
+        return False
+    if payload.get("evidence_closure_policy") == (
+        "ALL_DECLARED_TIMING_THRESHOLDS_INCLUDE_TERMINAL_MEDIA_ACCEPTANCE"
+    ) and "MEDIA_ACCEPTANCE_RECEIPT" not in observed_artifact_kinds:
+        return False
+    expected_jobs = {
+        (
+            item["job_id"],
+            item["source_id"],
+            item["repository_url"],
+            item["commit_sha"],
+        )
+        for item in repository_pins
+    }
+    actual_jobs = {
+        (
+            str(item.get("job_id")),
+            str(item.get("source_id")),
+            str(item.get("repository_url")),
+            str(item.get("commit_sha")),
+        )
+        for item in jobs
+        if isinstance(item, Mapping)
+        and item.get("input_skill_count") == 1
+        and item.get("expected_output_count") == 1
+        and re.fullmatch(r"[0-9a-f]{40}", str(item.get("commit_sha") or ""))
+        and re.fullmatch(r"[0-9a-f]{40}", str(item.get("git_tree_oid") or ""))
+        and re.fullmatch(r"[0-9a-f]{64}", str(item.get("tree_sha256") or ""))
+        and all(
+            isinstance(item.get(field), str) and bool(item.get(field))
+            for field in (
+                "expected_function",
+                "expected_scenario",
+                "expected_effect",
+                "demo_contract_ref",
+            )
+        )
+    }
+    source_job_manifest = [
+        {
+            field: item[field]
+            for field in ("job_id", "source_id", "repository_url", "commit_sha")
+        }
+        for item in jobs
+        if isinstance(item, Mapping)
+    ]
+    if (
+        actual_jobs != expected_jobs
+        or len(actual_jobs) != len(jobs)
+        or oracle_bindings.get("source_job_manifest") != source_job_manifest
+        or oracle_bindings.get("source_job_manifest_sha256")
+        != _json_hash(source_job_manifest)
+    ):
+        return False
+    return any(
+        isinstance(assertion, Mapping)
+        and assertion.get("operator")
+        == "ALL_ARTIFACTS_SCHEMA_HASH_AND_ORACLE_PASS"
+        and assertion.get("expected") is True
+        for assertion in assertions
     )
 
 
@@ -434,12 +1723,32 @@ def _check_nonexecutable_negative_fixture_schema(
             )
         ]
     seen: set[str] = set()
+    artifact_manifest_path = (
+        root / "canonical_sources/ARTIFACT_OBLIGATION_MANIFEST.json"
+    )
+    artifact_manifest = (
+        _read_json(artifact_manifest_path, findings)
+        if artifact_manifest_path.is_file()
+        else {}
+    )
+    artifact_index = (
+        artifact_manifest.get("artifact_index", {})
+        if isinstance(artifact_manifest, Mapping)
+        else {}
+    )
+    artifacts_declared = bool(artifact_index)
     for index, case in enumerate(cases):
         if not isinstance(case, Mapping) or "fixture_kind" not in case:
             continue
         case_id = case.get("case_id")
         if (
             not _is_nonexecutable_negative_fixture(case)
+            or not _concrete_negative_input(
+                case.get("input_fixture"),
+                case.get("expected_failure"),
+                artifacts_declared=artifacts_declared,
+                artifact_index=artifact_index,
+            )
             or str(case_id) in seen
         ):
             findings.append(
@@ -453,6 +1762,597 @@ def _check_nonexecutable_negative_fixture_schema(
     return findings
 
 
+def _check_executable_acceptance_and_oracles(
+    root: Path,
+) -> list[dict[str, Any]]:
+    """Reject prose-only cases that cannot drive a later independent oracle."""
+
+    findings: list[dict[str, Any]] = []
+    manifest_path = root / "validation/CASE_EXECUTION_MANIFEST.json"
+    manifest = _read_json(manifest_path, findings)
+    result_schema_path = root / "validation/schemas/CASE_RESULT.schema.json"
+    result_schema = _read_json(result_schema_path, findings)
+    registry_path = root / "validation/ORACLE_EVALUATOR_REGISTRY.json"
+    registry = _read_json(registry_path, findings)
+    artifact_manifest_path = (
+        root / "canonical_sources/ARTIFACT_OBLIGATION_MANIFEST.json"
+    )
+    artifact_manifest = (
+        _read_json(artifact_manifest_path, findings)
+        if artifact_manifest_path.is_file()
+        else {}
+    )
+    source_manifest = _read_json(
+        root / "canonical_sources/SOURCE_MANIFEST.json", findings
+    )
+    frozen_ir = _read_json(
+        root / "canonical_sources/FROZEN_REQUIREMENT_IR.json", findings
+    )
+    public_job_interface_path = (
+        root / "validation/PUBLIC_SKILL_JOB_INTERFACE.json"
+    )
+    public_job_interface = (
+        _read_json(public_job_interface_path, findings)
+        if public_job_interface_path.is_file()
+        else None
+    )
+    expected_public_job_interface = (
+        public_skill_job_interface(frozen_ir)
+        if isinstance(frozen_ir, Mapping)
+        else None
+    )
+    if (
+        not isinstance(public_job_interface, Mapping)
+        or public_job_interface != expected_public_job_interface
+    ):
+        findings.append(
+            _finding(
+                "PUBLIC_SKILL_JOB_INTERFACE_INVALID",
+                "validation/PUBLIC_SKILL_JOB_INTERFACE.json",
+            )
+        )
+    artifact_index = (
+        artifact_manifest.get("artifact_index", {})
+        if isinstance(artifact_manifest, Mapping)
+        else {}
+    )
+    artifact_kinds = {
+        str(item.get("artifact_kind"))
+        for item in (
+            artifact_index.values()
+            if isinstance(artifact_index, Mapping)
+            else []
+        )
+        if isinstance(item, Mapping) and item.get("artifact_kind")
+    }
+    try:
+        expected_oracle_registry = oracle_evaluator_registry(
+            artifact_kinds,
+            [
+                item
+                for item in (
+                    artifact_index.values()
+                    if isinstance(artifact_index, Mapping)
+                    else []
+                )
+                if isinstance(item, Mapping)
+            ],
+        )
+    except ValueError as exc:
+        expected_oracle_registry = None
+        findings.append(
+            _finding(
+                "ARTIFACT_INVARIANT_CONTRACT_INCOMPLETE",
+                str(exc),
+            )
+        )
+    repository_pins = repository_job_bindings(
+        source_manifest if isinstance(source_manifest, Mapping) else {}
+    )
+    commands = {
+        str(item.get("command_id")): item
+        for item in (
+            manifest.get("commands", []) if isinstance(manifest, Mapping) else []
+        )
+        if isinstance(item, Mapping) and item.get("command_id")
+    }
+    external_command_manifest = _read_json(
+        root / "project_start_packages/external_lab/COMMAND_MANIFEST.json",
+        findings,
+    )
+    certification_commands = _read_json(
+        root
+        / "project_start_packages/external_lab/commands/"
+        "LAB-CERTIFICATION.commands.json",
+        findings,
+    )
+    registered_commands = {
+        str(item.get("command_id")): item
+        for item in (
+            external_command_manifest.get("commands", [])
+            if isinstance(external_command_manifest, Mapping)
+            else []
+        )
+        if isinstance(item, Mapping) and item.get("command_id")
+    }
+    owned_certification_commands = {
+        str(item.get("command_id")): item
+        for item in (
+            certification_commands.get("commands", [])
+            if isinstance(certification_commands, Mapping)
+            else []
+        )
+        if isinstance(item, Mapping) and item.get("command_id")
+    }
+    expected_case_command_ids = {
+        "LAB-RUN-ACCEPTANCE-CASE",
+        "LAB-RUN-NEGATIVE-CASE",
+        "LAB-RUN-REGISTRY-CASE",
+        "LAB-EVALUATE-CASE-ORACLE",
+    }
+    expected_registry_invocations = []
+    seen_registry_result_refs: set[str] = set()
+    for matrix_field, case_kind in (
+        ("invariant_negative_case_matrix", "INVARIANT"),
+        ("schema_native_negative_case_matrix", "SCHEMA_NATIVE"),
+    ):
+        for case_index, case in enumerate(
+            registry.get(matrix_field, [])
+            if isinstance(registry, Mapping)
+            else []
+        ):
+            if not isinstance(case, Mapping) or not case.get("case_id"):
+                continue
+            for schema_sha256 in case.get("applicable_schema_sha256s", []):
+                fixture_ref = (
+                    f"{ORACLE_EVALUATOR_REGISTRY_REF}#/"
+                    f"{matrix_field}/{case_index}"
+                )
+                result_ref = registry_case_result_ref(
+                    case_kind,
+                    str(case["case_id"]),
+                    str(schema_sha256),
+                )
+                if result_ref in seen_registry_result_refs:
+                    continue
+                seen_registry_result_refs.add(result_ref)
+                expected_registry_invocations.append(
+                    {
+                        "case_id": str(case["case_id"]),
+                        "case_kind": case_kind,
+                        "schema_sha256": str(schema_sha256),
+                        "owner_workpack_id": CASE_EVIDENCE_WRITER_WORKPACK_ID,
+                        "executor_command_id": "LAB-RUN-REGISTRY-CASE",
+                        "fixture_ref": fixture_ref,
+                        "result_ref": result_ref,
+                        "executor_argv": [
+                            f"{LOGICAL_EXECUTION_ROOT}/project_start_packages/"
+                            "external_lab/.venv/bin/python",
+                            "-m",
+                            "external_lab",
+                            "run-registry-case",
+                            "--fixture-ref",
+                            fixture_ref,
+                            "--result-ref",
+                            result_ref,
+                        ],
+                    }
+                )
+    acceptance_document_for_refs = _read_json(
+        root / "validation/ACCEPTANCE_CASES.json", findings
+    )
+    negative_document_for_refs = _read_json(
+        root / "validation/NEGATIVE_CASES.json", findings
+    )
+    acceptance_cases_for_refs = (
+        acceptance_document_for_refs.get("cases", [])
+        if isinstance(acceptance_document_for_refs, Mapping)
+        else []
+    )
+    negative_cases_for_refs = (
+        negative_document_for_refs.get("cases", [])
+        if isinstance(negative_document_for_refs, Mapping)
+        else []
+    )
+    expected_result_refs = sorted(
+        [
+            *[
+                case_result_ref("ACCEPTANCE", str(case.get("case_id")))
+                for case in acceptance_cases_for_refs
+                if isinstance(case, Mapping) and case.get("case_id")
+            ],
+            *[
+                case_result_ref("NEGATIVE", str(case.get("case_id")))
+                for case in negative_cases_for_refs
+                if isinstance(case, Mapping) and case.get("case_id")
+            ],
+            *[
+                str(item["result_ref"])
+                for item in expected_registry_invocations
+            ],
+        ]
+    )
+    command_ownership_valid = all(
+        command_id in registered_commands
+        and command_id in owned_certification_commands
+        and commands.get(command_id, {}).get("owner_workpack_id")
+        == CASE_EVIDENCE_WRITER_WORKPACK_ID
+        and registered_commands[command_id].get("owner_workpack_id")
+        == CASE_EVIDENCE_WRITER_WORKPACK_ID
+        and owned_certification_commands[command_id].get("owner_workpack_id")
+        == CASE_EVIDENCE_WRITER_WORKPACK_ID
+        and commands.get(command_id, {}).get("argv")
+        == registered_commands[command_id].get("argv")
+        and list(commands.get(command_id, {}).get("argv") or [])
+        == list(owned_certification_commands[command_id].get("argv") or [])[:4]
+        and commands.get(command_id, {}).get("result_writer_contract", {}).get(
+            "result_root_ref"
+        )
+        == CASE_EXECUTION_RESULT_ROOT_REF
+        for command_id in expected_case_command_ids
+    )
+    fixture_acceptance_artifacts = [
+        artifact
+        for artifact in (
+            artifact_index.values()
+            if isinstance(artifact_index, Mapping)
+            else []
+        )
+        if isinstance(artifact, Mapping)
+        and artifact.get("artifact_kind") == "FIXTURE_ACCEPTANCE_RECEIPT"
+    ]
+    fixture_evidence_binding_valid = all(
+        artifact.get("depends_on_evidence_refs") == expected_result_refs
+        and artifact.get("case_evidence_ownership", {}).get(
+            "writer_workpack_id"
+        )
+        == CASE_EVIDENCE_WRITER_WORKPACK_ID
+        for artifact in fixture_acceptance_artifacts
+    )
+    if (
+        not isinstance(manifest, Mapping)
+        or manifest.get("status") != "DECLARE_ONLY"
+        or manifest.get("execution_started") is not False
+        or manifest.get("authorization_ref") is not None
+        or manifest.get("owner_project_id") != "EXTERNAL_CONFORMANCE_LAB"
+        or manifest.get("owner_workpack_id")
+        != CASE_EVIDENCE_WRITER_WORKPACK_ID
+        or manifest.get("result_root_ref") != CASE_EXECUTION_RESULT_ROOT_REF
+        or manifest.get("result_writer_cardinality")
+        != "EXACTLY_ONE_WORKPACK"
+        or manifest.get("job_read_partition_policy")
+        != (
+            "EXACTLY_ONE_ACTIVE_JOB_LEASE_PER_CASE_PARTITION_THEN_"
+            "HASH_BOUND_CASE_AGGREGATION"
+        )
+        or manifest.get("expected_case_result_refs") != expected_result_refs
+        or manifest.get("registry_case_invocations")
+        != expected_registry_invocations
+        or expected_oracle_registry is None
+        or registry != expected_oracle_registry
+        or manifest.get("oracle_evaluator_registry_ref")
+        != ORACLE_EVALUATOR_REGISTRY_REF
+        or manifest.get("oracle_evaluator_registry_sha256")
+        != _file_hash(registry_path)
+        or manifest.get("public_skill_job_interface_ref")
+        != PUBLIC_SKILL_JOB_INTERFACE_REF
+        or not public_job_interface_path.is_file()
+        or manifest.get("public_skill_job_interface_sha256")
+        != (
+            _file_hash(public_job_interface_path)
+            if public_job_interface_path.is_file()
+            else None
+        )
+        or manifest.get("assertion_operators")
+        != [
+            "VALIDATED_RECEIPT_EXISTS",
+            "SET_EQUALS",
+            "ALL_ARTIFACTS_SCHEMA_HASH_AND_ORACLE_PASS",
+            "EXACT_SOURCE_JOBS_MATCH",
+            "EQUALS",
+        ]
+        or manifest.get("manifest_sha256")
+        != _hash_without_field(manifest, "manifest_sha256")
+        or set(commands) != expected_case_command_ids
+        or not command_ownership_valid
+        or not fixture_evidence_binding_valid
+        or any(
+            command.get("command_sha256")
+            != _hash_without_field(command, "command_sha256")
+            for command in commands.values()
+        )
+        or not _strict_case_result_schema(result_schema)
+        or not isinstance(artifact_index, Mapping)
+    ):
+        findings.append(
+            _finding(
+                "CASE_EXECUTION_MANIFEST_INVALID",
+                "validation/CASE_EXECUTION_MANIFEST.json",
+            )
+        )
+    for relative, negative in (
+        ("validation/ACCEPTANCE_CASES.json", False),
+        ("validation/NEGATIVE_CASES.json", True),
+    ):
+        document = _read_json(root / relative, findings)
+        cases = document.get("cases") if isinstance(document, Mapping) else None
+        if not isinstance(cases, list) or not cases:
+            findings.append(
+                _finding("EXECUTABLE_CASE_SET_MISSING", relative)
+            )
+            continue
+        if negative:
+            mutation_manifest_hashes = [
+                str(case.get("mutation_manifest_sha256") or "")
+                for case in cases
+                if isinstance(case, Mapping)
+            ]
+            if (
+                len(mutation_manifest_hashes) != len(cases)
+                or any(not SHA256_RE.fullmatch(value) for value in mutation_manifest_hashes)
+                or len(set(mutation_manifest_hashes)) != len(mutation_manifest_hashes)
+            ):
+                findings.append(
+                    _finding(
+                        "NEGATIVE_MUTATION_MANIFEST_SET_NOT_UNIQUE",
+                        relative,
+                    )
+                )
+        for index, case in enumerate(cases):
+            label = f"{relative}.cases[{index}]"
+            if not isinstance(case, Mapping):
+                findings.append(_finding("EXECUTABLE_CASE_INVALID", label))
+                continue
+            required_arrays = (
+                ("preconditions", True),
+                ("steps", True),
+                ("assertions", True),
+            )
+            if not negative:
+                required_arrays = (("inputs", True), *required_arrays)
+            invalid_arrays = [
+                field
+                for field, require_nonempty in required_arrays
+                if not isinstance(case.get(field), list)
+                or (require_nonempty and not case.get(field))
+            ]
+            steps = case.get("steps") or []
+            assertions = case.get("assertions") or []
+            oracle = case.get("oracle_contract")
+            fixture_path = _candidate_uri_path(root, case.get("fixture_ref"))
+            fixture_document = (
+                _read_json(fixture_path, findings)
+                if fixture_path is not None and fixture_path.is_file()
+                else None
+            )
+            case_schema_path = _candidate_uri_path(
+                root, case.get("result_schema_ref")
+            )
+            case_schema = (
+                _read_json(case_schema_path, findings)
+                if case_schema_path is not None and case_schema_path.is_file()
+                else None
+            )
+            case_command_id = case.get("executor_command_id")
+            case_command = commands.get(str(case_command_id))
+            case_argv = case.get("executor_argv")
+            oracle_command_id = (
+                oracle.get("executor_command_id")
+                if isinstance(oracle, Mapping)
+                else None
+            )
+            oracle_command = commands.get(str(oracle_command_id))
+            oracle_argv = (
+                oracle.get("executor_argv")
+                if isinstance(oracle, Mapping)
+                else None
+            )
+            result_ref = case.get("result_ref")
+            expected_command_id = (
+                "LAB-RUN-NEGATIVE-CASE"
+                if negative
+                else "LAB-RUN-ACCEPTANCE-CASE"
+            )
+            fixture_input = (
+                fixture_document.get("input")
+                if isinstance(fixture_document, Mapping)
+                else None
+            )
+            expected_partition_job_ids = sorted(
+                {
+                    str(expectation["job_id"])
+                    for expectation in (
+                        fixture_input.get("artifact_expectations", [])
+                        if isinstance(fixture_input, Mapping)
+                        else []
+                    )
+                    if isinstance(expectation, Mapping)
+                    and expectation.get("job_id")
+                }
+            )
+            expected_partitions = [
+                {
+                    "job_id": job_id,
+                    "lease_receipt_ref": (
+                        f"{LOGICAL_EXECUTION_ROOT}/evidence/"
+                        "job_artifact_leases/LAB-CERTIFICATION/"
+                        f"{expected_command_id}/{job_id}.lease.json"
+                    ),
+                    "result_fragment_ref": (
+                        f"{CASE_EXECUTION_RESULT_ROOT_REF}/fragments/"
+                        f"{'negative' if negative else 'acceptance'}-"
+                        f"{_slug(str(case.get('case_id'))).lower()}/"
+                        f"{_slug(job_id).lower()}.result.json"
+                    ),
+                }
+                for job_id in expected_partition_job_ids
+            ]
+            executable_binding_invalid = bool(
+                fixture_path is None
+                or not fixture_path.is_file()
+                or _file_hash(fixture_path) != case.get("fixture_sha256")
+                or case_command_id != expected_command_id
+                or not isinstance(case_command, Mapping)
+                or case.get("executor_command_manifest_ref")
+                != f"{LOGICAL_CANDIDATE_ROOT}/validation/CASE_EXECUTION_MANIFEST.json"
+                or not isinstance(case_argv, list)
+                or len(case_argv) < 8
+                or case_argv[:4]
+                != list(case_command.get("argv", []))[:4]
+                or case.get("fixture_ref") not in case_argv
+                or result_ref not in case_argv
+                or not isinstance(result_ref, str)
+                or not result_ref.startswith(f"{LOGICAL_EXECUTION_ROOT}/")
+                or case_schema_path is None
+                or not case_schema_path.is_file()
+                or not isinstance(case_schema, Mapping)
+                or case_schema.get("$id") != case.get("result_schema_ref")
+                or case_schema.get("properties", {})
+                .get("fixture_sha256", {})
+                .get("const")
+                != case.get("fixture_sha256")
+                or case.get("result_schema_sha256")
+                != _file_hash(case_schema_path)
+                or case.get("job_read_partition_policy")
+                != (
+                    "EXACTLY_ONE_ACTIVE_JOB_LEASE_PER_CASE_PARTITION_"
+                    "THEN_HASH_BOUND_CASE_AGGREGATION"
+                )
+                or case.get("job_read_partitions") != expected_partitions
+                or not _strict_case_specific_result_schema(
+                    case_schema, fixture_document, negative=negative
+                )
+                or oracle_command_id != "LAB-EVALUATE-CASE-ORACLE"
+                or not isinstance(oracle_command, Mapping)
+                or not isinstance(oracle_argv, list)
+                or len(oracle_argv) < 8
+                or oracle_argv[:4]
+                != list(oracle_command.get("argv", []))[:4]
+                or case.get("fixture_ref") not in oracle_argv
+                or result_ref not in oracle_argv
+                or oracle.get("result_schema_ref")
+                != case.get("result_schema_ref")
+                or oracle.get("result_schema_sha256")
+                != case.get("result_schema_sha256")
+                or (
+                    not negative
+                    and not _concrete_acceptance_fixture(
+                        fixture_document,
+                        artifact_index,
+                        repository_pins,
+                    )
+                )
+                or (
+                    negative
+                    and (
+                        not isinstance(fixture_document, Mapping)
+                        or not isinstance(fixture_document.get("input"), Mapping)
+                        or case.get("mutation_manifest_ref")
+                        != f"{case.get('fixture_ref')}#/input/mutation_manifest"
+                        or case.get("mutation_manifest_sha256")
+                        != fixture_document["input"].get(
+                            "mutation_manifest_sha256"
+                        )
+                        or not _concrete_negative_input(
+                            fixture_document["input"],
+                            case.get("expected_failure"),
+                            artifacts_declared=bool(artifact_index),
+                            artifact_index=artifact_index,
+                        )
+                    )
+                )
+                or any(
+                    not isinstance(step, Mapping)
+                    or step.get("command_id") != expected_command_id
+                    or step.get("fixture_ref") != case.get("fixture_ref")
+                    or step.get("result_ref") != result_ref
+                    for step in steps
+                )
+            )
+            if (
+                invalid_arrays
+                or executable_binding_invalid
+                or any(
+                    not isinstance(step, Mapping)
+                    or not step.get("step_id")
+                    or not step.get("action")
+                    for step in steps
+                )
+                or any(
+                    not isinstance(assertion, Mapping)
+                    or not assertion.get("assertion_id")
+                    or not assertion.get("operator")
+                    or "expected" not in assertion
+                    or (
+                        assertion.get("operator") == "VALIDATED_RECEIPT_EXISTS"
+                        and assertion.get("actual_ref") != result_ref
+                    )
+                    for assertion in assertions
+                )
+                or not isinstance(oracle, Mapping)
+                or any(
+                    not oracle.get(field)
+                    for field in ("oracle_id", "owner", "decision_rule")
+                )
+                or not isinstance(oracle.get("evidence_required"), list)
+                or not oracle.get("evidence_required")
+                or not isinstance(oracle.get("common_mode_exclusions"), list)
+                or not oracle.get("common_mode_exclusions")
+                or oracle.get("evaluator_id") != "EXACT_CASE_SET_ORACLE_V1"
+                or oracle.get("evaluator_registry_ref")
+                != ORACLE_EVALUATOR_REGISTRY_REF
+                or not isinstance(fixture_document, Mapping)
+                or not isinstance(
+                    fixture_document.get("oracle_bindings"), Mapping
+                )
+                or any(
+                    oracle.get(field)
+                    != fixture_document["oracle_bindings"].get(field)
+                    for field in (
+                        "assertion_manifest_sha256",
+                        "artifact_manifest_sha256",
+                        "source_job_manifest_sha256",
+                        "mutation_manifest_sha256",
+                    )
+                )
+            ):
+                findings.append(
+                    _finding(
+                        "EXECUTABLE_CASE_ORACLE_INCOMPLETE",
+                        f"{label}:{','.join(invalid_arrays)}",
+                    )
+                )
+    return findings
+
+
+def _check_package_lifecycle_identity(root: Path) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    package = _read_json(root / "PACKAGE_MANIFEST.json", findings)
+    context = _read_json(root / "START_CONTEXT.json", findings)
+    provenance = _read_json(root / "FACTORY_PROVENANCE.json", findings)
+    if not all(isinstance(value, Mapping) for value in (package, context, provenance)):
+        return findings
+    epochs = {
+        package.get("requirement_epoch"),
+        context.get("requirement_epoch"),
+        provenance.get("requirement_epoch"),
+    }
+    package_version = package.get("version")
+    if (
+        len(epochs) != 1
+        or any(isinstance(value, bool) or not isinstance(value, int) for value in epochs)
+        or context.get("package_version") != package_version
+        or package_version in (None, "", "0.1.0-draft")
+    ):
+        findings.append(
+            _finding(
+                "PACKAGE_LIFECYCLE_IDENTITY_MISMATCH",
+                "Requirement epoch and package version must be identical across provenance, manifest, and Start Context",
+            )
+        )
+    return findings
+
+
 def _check_candidate_execution_separation(root: Path) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
     candidate_root, execution_root, context = _context_roots(root, findings)
@@ -463,7 +2363,12 @@ def _check_candidate_execution_separation(root: Path) -> list[dict[str, Any]]:
         == "READ_ONLY_AFTER_ATOMIC_PUBLICATION"
     )
     if not immutable:
-        return findings
+        findings.append(
+            _finding(
+                "CANDIDATE_IMMUTABILITY_VIOLATION",
+                "Candidate root must become read-only after atomic publication",
+            )
+        )
     portable = _portable_context(context)
     expected_candidate_value = (
         LOGICAL_CANDIDATE_ROOT if portable else str(candidate_root)
@@ -524,6 +2429,31 @@ def _check_candidate_execution_separation(root: Path) -> list[dict[str, Any]]:
                 )
             )
 
+    def check_read_path(value: Any, *, label: str) -> None:
+        path = Path(str(value)).expanduser()
+        valid = (
+            (
+                _logical_path_within(value, candidate_root)
+                or _logical_path_within(value, execution_root)
+            )
+            if portable
+            else path.is_absolute()
+            and (
+                path.resolve().is_relative_to(candidate_root)
+                or path.resolve().is_relative_to(execution_root)
+            )
+        )
+        if not valid:
+            findings.append(
+                _finding(
+                    "CANDIDATE_IMMUTABILITY_VIOLATION",
+                    (
+                        f"{label} escapes candidate and planned execution "
+                        f"read domains: {value}"
+                    ),
+                )
+            )
+
     nonexecutable_fixture_payload_ids: set[int] = set()
 
     def visit(value: Any, location: str) -> None:
@@ -534,9 +2464,7 @@ def _check_candidate_execution_separation(root: Path) -> list[dict[str, Any]]:
                 label = f"{location}.{key}"
                 if key in read_list_keys and isinstance(item, list):
                     for entry in item:
-                        check_path(
-                            entry, expected_root=candidate_root, label=label
-                        )
+                        check_read_path(entry, label=label)
                 elif key in write_list_keys and isinstance(item, list):
                     for entry in item:
                         check_path(
@@ -557,6 +2485,12 @@ def _check_candidate_execution_separation(root: Path) -> list[dict[str, Any]]:
                 nonexecutable_fixture_payload_ids = (
                     _nonexecutable_negative_fixture_payload_ids(document)
                 )
+            elif (
+                relative.startswith("validation/case_fixtures/negative-")
+                and isinstance(document, Mapping)
+                and document.get("case_kind") == "NEGATIVE"
+            ):
+                nonexecutable_fixture_payload_ids = {id(document.get("input"))}
             else:
                 nonexecutable_fixture_payload_ids = set()
             visit(document, relative)
@@ -576,12 +2510,61 @@ def _check_candidate_execution_separation(root: Path) -> list[dict[str, Any]]:
     return findings
 
 
+def _check_physical_candidate_read_only(root: Path) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    for path in (root, *sorted(root.rglob("*"))):
+        try:
+            mode = path.lstat().st_mode
+        except OSError as exc:
+            findings.append(
+                _finding("CANDIDATE_PERMISSION_INSPECTION_FAILED", str(exc))
+            )
+            continue
+        if mode & 0o222:
+            findings.append(
+                _finding(
+                    "CANDIDATE_PHYSICALLY_WRITABLE",
+                    path.relative_to(root).as_posix() if path != root else ".",
+                )
+            )
+    return findings
+
+
+def _permission_drift_is_nonblocking(
+    requirement_ir: Mapping[str, Any] | None,
+) -> bool:
+    """Recognize the explicit personal-local best-effort permission policy."""
+
+    if not isinstance(requirement_ir, Mapping):
+        return False
+    target = requirement_ir.get("target")
+    if not isinstance(target, Mapping):
+        return False
+    policy = target.get("start_package_immutability_policy")
+    return bool(
+        isinstance(policy, Mapping)
+        and policy.get("candidate_root_read_only_after_atomic_publication")
+        is True
+        and policy.get("physical_permission_enforcement")
+        == "BEST_EFFORT_PERSONAL_LOCAL"
+        and policy.get("permission_drift_disposition")
+        == "NON_BLOCKING_DIAGNOSTIC"
+        and policy.get("candidate_write_after_publication") == "FORBIDDEN"
+        and policy.get("candidate_execution_roots_must_not_overlap") is True
+    )
+
+
 def _check_portability(root: Path) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
     portable_inventory: set[str] | None = None
     manifest_path = root / "validation/PORTABILITY_MANIFEST.json"
     if not manifest_path.is_file():
-        return findings
+        return [
+            _finding(
+                "PORTABILITY_MANIFEST_MISSING",
+                "every versioned Candidate must export logical Resource roots",
+            )
+        ]
     manifest = _read_json(manifest_path, findings)
     context = _read_json(root / "START_CONTEXT.json", findings)
     if not isinstance(manifest, dict) or not isinstance(context, dict):
@@ -1297,6 +3280,32 @@ def _check_toolchain_manifest(
         if isinstance(item, dict)
     ]
     expected_dependencies = _candidate_command_dependencies(root)
+    frozen = _read_json(
+        root / "canonical_sources/FROZEN_REQUIREMENT_IR.json", findings
+    )
+    frozen_target = frozen.get("target") if isinstance(frozen, Mapping) else None
+    frozen_required = (
+        frozen_target.get("required_tools", [])
+        if isinstance(frozen_target, Mapping)
+        else []
+    )
+    if isinstance(frozen_required, (str, Mapping)):
+        frozen_required = [frozen_required]
+    frozen_labels = {
+        str(item)
+        for item in frozen_required
+        if isinstance(item, str) and item.strip()
+    }
+    compiled_labels = {
+        str(item.get("requirement_label"))
+        for item in declared or []
+        if isinstance(item, Mapping) and item.get("requirement_label")
+    }
+    frozen_ids = {
+        str(item.get("tool_id"))
+        for item in frozen_required
+        if isinstance(item, Mapping) and item.get("tool_id")
+    }
     if (
         not isinstance(declared, list)
         or declared != release_declared
@@ -1305,11 +3314,13 @@ def _check_toolchain_manifest(
         or any(not isinstance(item, str) or not item for item in ids)
         or toolchain.get("command_dependencies") != expected_dependencies
         or toolchain.get("command_dependency_count") != len(expected_dependencies)
+        or not frozen_labels.issubset(compiled_labels)
+        or not frozen_ids.issubset(set(ids))
     ):
         findings.append(
             _finding(
                 "TOOLCHAIN_MANIFEST_MISMATCH",
-                "declared tools must exactly cover the compiled command graph",
+                "declared tools must preserve every frozen target requirement and exactly cover the compiled command graph",
             )
         )
         return findings
@@ -1362,6 +3373,7 @@ def _check_portable_source_index(root: Path) -> list[dict[str, Any]]:
         "source_id",
         "source_sha256",
         "copy_policy",
+        "repository_metadata",
         "receipt_ref",
         "receipt_sha256",
         "payload_ref",
@@ -1406,6 +3418,24 @@ def _check_portable_source_index(root: Path) -> list[dict[str, Any]]:
             or source.get("portable_evidence_ref") != entry.get("receipt_ref")
             or source.get("sha256") != entry.get("source_sha256")
             or source.get("copy_policy") != entry.get("copy_policy")
+            or entry.get("repository_metadata")
+            != (
+                {
+                    field: source[field]
+                    for field in (
+                        "repository_url",
+                        "revision",
+                        "commit_sha",
+                        "git_tree_oid",
+                        "tree_sha256",
+                        "license_spdx",
+                        "license_ref",
+                        "retrieved_at",
+                    )
+                    if source.get(field) not in (None, "")
+                }
+                or None
+            )
             or receipt_path is None
             or not receipt_path.is_file()
             or _file_hash(receipt_path) != entry.get("receipt_sha256")
@@ -1420,6 +3450,8 @@ def _check_portable_source_index(root: Path) -> list[dict[str, Any]]:
             or receipt.get("source_id") != source_id
             or receipt.get("source_sha256") != source.get("sha256")
             or receipt.get("copy_policy") != source.get("copy_policy")
+            or receipt.get("repository_metadata")
+            != entry.get("repository_metadata")
             or receipt.get("payload_embedded") is not entry.get("payload_embedded")
             or receipt.get("payload_ref") != entry.get("payload_ref")
         ):
@@ -1518,17 +3550,58 @@ def _expected_dag_path_containment_matrix(
     dag_path: Path,
     dag: Mapping[str, Any],
 ) -> dict[str, Any]:
+    root = dag_path.parent
+    workpack_artifact_refs_by_node: dict[str, list[str]] = {}
+    for _project_id, directory in PROJECTS:
+        index_path = (
+            root
+            / "project_start_packages"
+            / directory
+            / "WORKPACK_INDEX.json"
+        )
+        try:
+            index = json.loads(index_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            continue
+        for raw_workpack in index.get("workpacks", []):
+            workpack = raw_workpack if isinstance(raw_workpack, Mapping) else {}
+            if workpack.get("program_control_surface") != "ENGINEERING_PROJECT_DAG":
+                continue
+            node_id = str(workpack.get("program_control_node_id") or "")
+            if not node_id:
+                continue
+            refs = workpack_artifact_refs_by_node.setdefault(node_id, [])
+            for artifact_ref in workpack.get("required_artifact_refs", []):
+                if isinstance(artifact_ref, str) and artifact_ref not in refs:
+                    refs.append(artifact_ref)
     rows: list[dict[str, Any]] = []
     for raw_node in dag.get("nodes", []):
         node = raw_node if isinstance(raw_node, Mapping) else {}
+        node_id = str(node.get("node_id") or "")
         allowed = list(node.get("allowed_write_paths") or [])
         outputs = list(node.get("success_output_refs") or [])
+        workpack_artifact_refs = workpack_artifact_refs_by_node.get(
+            node_id, []
+        )
         contained = [
             output
             for output in outputs
             if any(_contract_path_is_contained(output, root) for root in allowed)
         ]
         outside = [output for output in outputs if output not in contained]
+        contained_workpack_artifact_refs = [
+            artifact_ref
+            for artifact_ref in workpack_artifact_refs
+            if any(
+                _contract_path_is_contained(artifact_ref, allowed_root)
+                for allowed_root in allowed
+            )
+        ]
+        outside_workpack_artifact_refs = [
+            artifact_ref
+            for artifact_ref in workpack_artifact_refs
+            if artifact_ref not in contained_workpack_artifact_refs
+        ]
         rows.append(
             {
                 "node_id": node.get("node_id"),
@@ -1536,8 +3609,19 @@ def _expected_dag_path_containment_matrix(
                 "success_output_refs": outputs,
                 "contained_success_output_refs": contained,
                 "outside_success_output_refs": outside,
+                "workpack_artifact_refs": workpack_artifact_refs,
+                "contained_workpack_artifact_refs": (
+                    contained_workpack_artifact_refs
+                ),
+                "outside_workpack_artifact_refs": (
+                    outside_workpack_artifact_refs
+                ),
                 "status": "PASS"
-                if outputs and len(contained) == len(outputs)
+                if (
+                    outputs
+                    and len(contained) == len(outputs)
+                    and not outside_workpack_artifact_refs
+                )
                 else "FAIL",
             }
         )
@@ -1553,6 +3637,9 @@ def _expected_dag_path_containment_matrix(
         "finding_code": (
             "ENGINEERING_DAG_SUCCESS_OUTPUT_OUTSIDE_ALLOWED_WRITE_PATHS"
         ),
+        "workpack_artifact_finding_code": (
+            "ENGINEERING_DAG_WORKPACK_ARTIFACT_OUTSIDE_ALLOWED_WRITE_PATHS"
+        ),
         "node_count": len(rows),
         "pass_count": pass_count,
         "rows": rows,
@@ -1565,6 +3652,14 @@ def _expected_epoch_domain_contract(
 ) -> dict[str, Any]:
     architecture_epoch = target.get("architecture_epoch")
     architecture_control_plane_epoch = target.get("control_plane_epoch")
+    requirement_architecture_epoch = architecture_epoch
+    requirement_architecture_control_plane_epoch = (
+        architecture_control_plane_epoch
+    )
+    unbound_zero_semantics = (
+        architecture_epoch is None
+        and architecture_control_plane_epoch is None
+    )
     if architecture_epoch is None and architecture_control_plane_epoch is None:
         architecture_epoch = 0
         architecture_control_plane_epoch = 0
@@ -1576,6 +3671,16 @@ def _expected_epoch_domain_contract(
         ),
         "execution_control_plane_epoch": 0,
         "legacy_control_plane_epoch_alias": "execution_control_plane_epoch",
+        "requirement_architecture_epoch": requirement_architecture_epoch,
+        "requirement_architecture_control_plane_epoch": (
+            requirement_architecture_control_plane_epoch
+        ),
+        "projection_rule": (
+            "NULL_REQUIREMENT_EPOCHS_TO_EXPLICIT_UNBOUND_ZERO_SENTINEL"
+            if unbound_zero_semantics
+            else "IDENTITY_REQUIREMENT_EPOCH_PROJECTION"
+        ),
+        "unbound_zero_semantics": unbound_zero_semantics,
     }
 
 
@@ -2960,12 +5065,36 @@ def _check_controlled_workpack_runtime_executable_closure(
                 },
             ),
         }
+        artifact_manifest_path = (
+            root / "canonical_sources/ARTIFACT_OBLIGATION_MANIFEST.json"
+        )
+        artifact_manifest = (
+            _read_json(artifact_manifest_path, findings)
+            if artifact_manifest_path.is_file()
+            else {}
+        )
+        artifact_index = (
+            artifact_manifest.get("artifact_index", {})
+            if isinstance(artifact_manifest, Mapping)
+            else {}
+        )
+        artifacts_declared = bool(artifact_index)
         if set(cases) != set(expected) or any(
             not _is_nonexecutable_negative_fixture(case)
             or case.get("origin")
             != "EPOCH45_CONTROLLED_RUNTIME_WORKPACK_EXECUTABLE_CLOSURE"
             or case.get("expected_failure") != expected[case_id][0]
-            or case.get("input_fixture") != expected[case_id][1]
+            or not isinstance(case.get("input_fixture"), Mapping)
+            or any(
+                case["input_fixture"].get(field) != value
+                for field, value in expected[case_id][1].items()
+            )
+            or not _concrete_negative_input(
+                case["input_fixture"],
+                case.get("expected_failure"),
+                artifacts_declared=artifacts_declared,
+                artifact_index=artifact_index,
+            )
             for case_id, case in cases.items()
         ):
             findings.append(
@@ -5947,6 +8076,21 @@ def _check_dag_containment_and_closure(
                 str(outside),
             )
         )
+    workpack_artifacts_outside = [
+        {
+            "node_id": row["node_id"],
+            "outside": row["outside_workpack_artifact_refs"],
+        }
+        for row in expected_matrix["rows"]
+        if row["outside_workpack_artifact_refs"]
+    ]
+    if workpack_artifacts_outside:
+        findings.append(
+            _finding(
+                "ENGINEERING_DAG_WORKPACK_ARTIFACT_OUTSIDE_ALLOWED_WRITE_PATHS",
+                str(workpack_artifacts_outside),
+            )
+        )
     if matrix != expected_matrix:
         findings.append(
             _finding(
@@ -7006,6 +9150,53 @@ def _validate_candidate(
     except (OSError, UnicodeError, json.JSONDecodeError):
         pass
 
+    permission_requirement_ir = (
+        authoritative_requirement_ir
+        if isinstance(authoritative_requirement_ir, Mapping)
+        else candidate_requirement_ir
+    )
+    permission_drift_nonblocking = _permission_drift_is_nonblocking(
+        permission_requirement_ir
+    )
+    published_candidate = candidate == logical_root
+    permission_findings = (
+        _check_physical_candidate_read_only(candidate)
+        if published_candidate
+        else []
+    )
+    permission_diagnostics = (
+        [
+            {
+                "code": "CANDIDATE_PERMISSION_DRIFT",
+                "message": finding["message"],
+            }
+            for finding in permission_findings
+        ]
+        if permission_drift_nonblocking
+        else []
+    )
+    blocking_permission_findings = (
+        [] if permission_drift_nonblocking else permission_findings
+    )
+    checks.append(
+        {
+            "check_id": "PHYSICAL_CANDIDATE_READ_ONLY",
+            "status": "FAIL" if blocking_permission_findings else "PASS",
+            "findings": blocking_permission_findings,
+            "diagnostics": permission_diagnostics,
+            "enforcement": (
+                "BEST_EFFORT_PERSONAL_LOCAL"
+                if permission_drift_nonblocking
+                else "STRICT_FAIL_CLOSED"
+            ),
+            "validation_basis": (
+                "PUBLISHED_CANDIDATE_PERMISSION_BITS"
+                if published_candidate
+                else "PREPUBLICATION_STAGING_NOT_YET_SEALED"
+            ),
+        }
+    )
+
     def controlled_runtime_scope_claimed(
         requirement_ir: Mapping[str, Any] | None,
         *,
@@ -7209,14 +9400,24 @@ def _validate_candidate(
                 "Factory Event Store Source Registry was not supplied",
             )
         )
+    local_consistency_mode = (
+        epoch38_local_profile or not external_authority_required
+    )
+    source_authority_status = (
+        "FAIL"
+        if authority_findings
+        else "PASS"
+        if authoritative_sources is not None
+        else "NOT_EVALUATED"
+    )
     source_authority_check = {
-            "check_id": (
-                "FACTORY_LOCAL_SOURCE_CONSISTENCY"
-                if epoch38_local_profile
-                else "FACTORY_EXTERNAL_SOURCE_AUTHORITY_ORACLE"
-            ),
-            "status": "FAIL" if authority_findings else "PASS",
-            "findings": authority_findings,
+        "check_id": (
+            "FACTORY_LOCAL_SOURCE_CONSISTENCY"
+            if local_consistency_mode
+            else "FACTORY_EXTERNAL_SOURCE_AUTHORITY_ORACLE"
+        ),
+        "status": source_authority_status,
+        "findings": authority_findings,
             **(
                 {
                     "validation_basis": (
@@ -7225,7 +9426,7 @@ def _validate_candidate(
                         else "PORTABLE_STRUCTURE_ONLY"
                     )
                 }
-                if epoch38_local_profile
+                if local_consistency_mode
                 else {
                     "authority_input": (
                         "FACTORY_EVENT_STORE_SOURCE_REGISTRY"
@@ -7262,13 +9463,20 @@ def _validate_candidate(
                 "Factory Event Store Requirement IR was not supplied",
             )
         )
+    release_history_status = (
+        "FAIL"
+        if history_findings
+        else "PASS"
+        if authoritative_requirement_ir is not None
+        else "NOT_EVALUATED"
+    )
     release_history_check = {
-            "check_id": (
-                "FACTORY_LOCAL_REQUIREMENT_IR_CONSISTENCY"
-                if epoch38_local_profile
-                else "FACTORY_EXTERNAL_RELEASE_HISTORY_ORACLE"
-            ),
-            "status": "FAIL" if history_findings else "PASS",
+        "check_id": (
+            "FACTORY_LOCAL_REQUIREMENT_IR_CONSISTENCY"
+            if local_consistency_mode
+            else "FACTORY_EXTERNAL_RELEASE_HISTORY_ORACLE"
+        ),
+        "status": release_history_status,
             "findings": history_findings,
             **(
                 {
@@ -7278,7 +9486,7 @@ def _validate_candidate(
                         else "PORTABLE_STRUCTURE_ONLY"
                     )
                 }
-                if epoch38_local_profile
+                if local_consistency_mode
                 else {
                     "authority_input": (
                         "FACTORY_EVENT_STORE_REQUIREMENT_IR"
@@ -7415,8 +9623,13 @@ def _validate_candidate(
             "findings": provenance_findings,
         }
     )
-    valid = all(item["status"] == "PASS" for item in checks)
+    valid = all(
+        item["status"] in {"PASS", "NOT_EVALUATED"} for item in checks
+    )
     blocking = [finding for item in checks for finding in item.get("findings", [])]
+    non_blocking = [
+        finding for item in checks for finding in item.get("diagnostics", [])
+    ]
     return {
         "schema_version": "1.0",
         "validator_id": "HARNESS_FOUNDRY_V2_8_TARGET_CANDIDATE_VALIDATOR",
@@ -7434,10 +9647,17 @@ def _validate_candidate(
         "valid": valid,
         "checks": checks,
         "blocking_findings": blocking,
+        "non_blocking_findings": non_blocking,
         "permitted_terminal_state": TARGET_CANDIDATE_STATE,
         "writes_performed": False,
         "commands_executed": regression_commands_executed,
         "runtime_claims_verified": False,
+        "external_authority_oracles_evaluated": bool(
+            external_authority_required
+            and authoritative_sources is not None
+            and authoritative_requirement_ir is not None
+            and normalized_authority_provenance is not None
+        ),
     }
 
 
@@ -8336,6 +10556,19 @@ def _check_source_authority_normalization_contract(
             != (raw.get("copy_policy") or "REFERENCE_ONLY")
             or materialized.get("loaded_completely")
             is not bool(raw.get("loaded_completely", True))
+            or any(
+                materialized.get(field) != raw.get(field)
+                for field in (
+                    "repository_url",
+                    "revision",
+                    "commit_sha",
+                    "git_tree_oid",
+                    "tree_sha256",
+                    "license_spdx",
+                    "license_ref",
+                    "retrieved_at",
+                )
+            )
         ):
             findings.append(
                 _finding(
@@ -8478,6 +10711,30 @@ def _check_sources_atoms_coverage(root: Path) -> list[dict[str, Any]]:
         ):
             findings.append(_finding("SOURCE_HASH_INVALID", str(source)))
             continue
+        repository_declared = bool(
+            source.get("repository_url")
+            or "github.com/" in str(source.get("scope") or "")
+        )
+        if repository_declared and (
+            not str(source.get("repository_url") or "").startswith(
+                ("https://github.com/", "git@github.com:")
+            )
+            or re.fullmatch(r"[0-9a-f]{40}", str(source.get("commit_sha") or ""))
+            is None
+            or re.fullmatch(r"[0-9a-f]{40}", str(source.get("git_tree_oid") or ""))
+            is None
+            or re.fullmatch(r"[0-9a-f]{64}", str(source.get("tree_sha256") or ""))
+            is None
+            or source.get("tree_sha256") != source_hash
+            or not str(source.get("revision") or "")
+            or not str(source.get("license_spdx") or "")
+        ):
+            findings.append(
+                _finding(
+                    "SOURCE_REPOSITORY_PIN_INCOMPLETE",
+                    str(source.get("source_id")),
+                )
+            )
         location = source.get("path_or_uri") or source.get("path")
         if (
             not location
@@ -8577,6 +10834,22 @@ def _check_sources_atoms_coverage(root: Path) -> list[dict[str, Any]]:
             (value for value in atoms if isinstance(value, dict) and value.get("atom_id") == atom_id),
             {},
         )
+        if str(item.get("routing_basis") or "").startswith("DERIVED_"):
+            expected_edge = normalize_ir_coverage({"atoms": [atom]})[
+                "coverage_edges"
+            ][0]
+            if (
+                item.get("workpack_ids") != expected_edge["workpack_ids"]
+                or item.get("stage_ids") != expected_edge["stage_ids"]
+                or item.get("release_step_ids")
+                != expected_edge["release_step_ids"]
+            ):
+                findings.append(
+                    _finding(
+                        "SEMANTIC_PHASE_ROUTING_INVALID",
+                        f"{atom_id}:expected={expected_edge['workpack_ids']}",
+                    )
+                )
         valid_cases = {
             value.get("case_id"): value
             for document in (acceptance, negative)
@@ -8981,6 +11254,597 @@ def _check_phase_and_release(root: Path) -> list[dict[str, Any]]:
     return findings
 
 
+def _check_baseline_migration_contract(root: Path) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    frozen = _read_json(
+        root / "canonical_sources/FROZEN_REQUIREMENT_IR.json", findings
+    )
+    target = frozen.get("target") if isinstance(frozen, Mapping) else None
+    expected = (
+        target.get("baseline_migration_contract")
+        if isinstance(target, Mapping)
+        else None
+    )
+    if not isinstance(expected, Mapping):
+        return findings
+    matrix = _read_json(
+        root / "canonical_sources/BASELINE_MIGRATION_MATRIX.json", findings
+    )
+    package = _read_json(root / "PACKAGE_MANIFEST.json", findings)
+    artifact_manifest = _read_json(
+        root / "canonical_sources/ARTIFACT_OBLIGATION_MANIFEST.json", findings
+    )
+    acceptance = _read_json(root / "validation/ACCEPTANCE_CASES.json", findings)
+    if not all(
+        isinstance(value, Mapping)
+        for value in (matrix, package, artifact_manifest, acceptance)
+    ):
+        return findings
+    rows = matrix.get("disposition_rows")
+    source_ids = {
+        str(item.get("source_id"))
+        for item in frozen.get("sources", [])
+        if isinstance(item, Mapping)
+    }
+    expected_rows = expected.get("disposition_rows")
+    expected_by_capability = {
+        str(row.get("baseline_capability_id")): row
+        for row in expected_rows or []
+        if isinstance(row, Mapping) and row.get("baseline_capability_id")
+    }
+    artifact_index = artifact_manifest.get("artifact_index", {})
+    artifact_ids = set(artifact_index)
+    schema_catalog = (
+        target.get("artifact_schema_catalog")
+        if isinstance(target, Mapping)
+        else None
+    )
+    primary_kind_by_atom = {
+        str(atom_id): str(entry.get("artifact_kind"))
+        for atom_id, entry in (schema_catalog or {}).items()
+        if isinstance(entry, Mapping) and entry.get("artifact_kind")
+    }
+    sorted_atom_ids = sorted(primary_kind_by_atom, key=len, reverse=True)
+
+    def resolved_targets_are_primary(row: Mapping[str, Any]) -> bool:
+        declared_ids = row.get("declared_target_artifact_ids")
+        resolved_ids = row.get("target_artifact_ids")
+        if (
+            not isinstance(declared_ids, list)
+            or not isinstance(resolved_ids, list)
+            or len(declared_ids) != len(resolved_ids)
+        ):
+            return False
+        for declared_id, resolved_id in zip(declared_ids, resolved_ids):
+            atom_id = next(
+                (
+                    value
+                    for value in sorted_atom_ids
+                    if str(declared_id).startswith(f"ART-{value}-")
+                ),
+                None,
+            )
+            resolved_artifact = artifact_index.get(str(resolved_id))
+            if (
+                atom_id is None
+                or not isinstance(resolved_artifact, Mapping)
+                or resolved_artifact.get("artifact_kind")
+                != primary_kind_by_atom[atom_id]
+            ):
+                return False
+        return True
+
+    acceptance_case_ids = {
+        str(case.get("case_id"))
+        for case in acceptance.get("cases", [])
+        if isinstance(case, Mapping) and case.get("case_id")
+    }
+    valid_rows = (
+        isinstance(rows, list)
+        and bool(rows)
+        and len(rows) == len(expected_by_capability)
+        and all(
+            isinstance(row, Mapping)
+            and row.get("target_disposition")
+            in {"RETAIN", "UPGRADE", "REPLACE", "REMOVE"}
+            and isinstance(row.get("target_artifact_ids"), list)
+            and bool(row.get("target_artifact_ids"))
+            and set(row.get("target_artifact_ids", [])).issubset(artifact_ids)
+            and isinstance(row.get("declared_target_artifact_ids"), list)
+            and resolved_targets_are_primary(row)
+            and isinstance(row.get("regression_case_ids"), list)
+            and bool(row.get("regression_case_ids"))
+            and set(row.get("regression_case_ids", [])).issubset(
+                acceptance_case_ids
+            )
+            and bool(row.get("rationale"))
+            and str(row.get("baseline_capability_id")) in expected_by_capability
+            and row.get("declared_target_artifact_ids")
+            == expected_by_capability[str(row.get("baseline_capability_id"))].get(
+                "target_artifact_ids"
+            )
+            and all(
+                row.get(field)
+                == expected_by_capability[
+                    str(row.get("baseline_capability_id"))
+                ].get(field)
+                for field in (
+                    "baseline_capability_id",
+                    "target_disposition",
+                    "regression_case_ids",
+                    "rationale",
+                )
+            )
+            for row in rows
+        )
+    )
+    if (
+        matrix.get("baseline_source_id") != expected.get("baseline_source_id")
+        or matrix.get("baseline_source_id") not in source_ids
+        or matrix.get("baseline_version") != expected.get("baseline_version")
+        or matrix.get("target_version") != expected.get("target_version")
+        or matrix.get("requirement_epoch") != package.get("requirement_epoch")
+        or matrix.get("status") != "FROZEN_NOT_EXECUTED"
+        or matrix.get("contract_sha256")
+        != _hash_without_field(matrix, "contract_sha256")
+        or not valid_rows
+    ):
+        findings.append(
+            _finding(
+                "BASELINE_MIGRATION_CONTRACT_INVALID",
+                "baseline dispositions and regression oracles must be complete and frozen",
+            )
+        )
+    return findings
+
+
+def _check_frozen_phase_evidence_projection(
+    frozen_ir: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Reject dual timing contracts across frozen and executable projections."""
+
+    findings: list[dict[str, Any]] = []
+    compilation = frozen_ir.get("production_contract_compilation")
+    derived_projection = bool(
+        isinstance(compilation, Mapping)
+        and compilation.get("status") == "COMPILED_NOT_EXECUTED"
+    )
+    target = frozen_ir.get("target")
+    catalog = (
+        target.get("artifact_schema_catalog")
+        if isinstance(target, Mapping)
+        else None
+    )
+    has_alignment_profile = False
+    if isinstance(catalog, Mapping):
+        for atom_id, profile in catalog.items():
+            if not isinstance(profile, Mapping):
+                continue
+            schema = profile.get("schema")
+            if not isinstance(schema, Mapping):
+                continue
+            if (
+                derived_projection
+                and profile.get("compiled_schema_sha256") != _json_hash(schema)
+            ):
+                findings.append(
+                    _finding(
+                        "FROZEN_ARTIFACT_SCHEMA_PROJECTION_INVALID",
+                        str(atom_id),
+                    )
+                )
+            if profile.get("artifact_kind") != "AUDIO_ALIGNMENT_RECEIPT":
+                continue
+            has_alignment_profile = True
+            required = set(schema.get("required", []))
+            properties = schema.get("properties")
+            invariants = set(schema.get("x-invariants", []))
+            phase_contract = profile.get("phase_evidence_contract")
+            if derived_projection and (
+                not isinstance(properties, Mapping)
+                or {
+                    "final_av_drift_frames",
+                    "absolute_final_av_drift_frames",
+                }.intersection(required | set(properties))
+                or "ABSOLUTE_FINAL_AV_DRIFT_EQUALS_ABS_FINAL_AV_DRIFT"
+                in invariants
+                or not isinstance(phase_contract, Mapping)
+                or phase_contract.get(
+                    "terminal_video_av_drift_owner_artifact_kind"
+                )
+                != "MEDIA_ACCEPTANCE_RECEIPT"
+                or phase_contract.get("terminal_video_av_drift_owner_phase")
+                != "MB-P3"
+            ):
+                findings.append(
+                    _finding(
+                        "FROZEN_PHASE_EVIDENCE_CONTRACT_INCONSISTENT",
+                        str(atom_id),
+                    )
+                )
+    relocations = (
+        compilation.get("phase_evidence_relocations")
+        if isinstance(compilation, Mapping)
+        else None
+    )
+    expected_relocation = {
+        "evidence": "FINAL_AUDIO_VIDEO_DRIFT",
+        "from_artifact_kind": "AUDIO_ALIGNMENT_RECEIPT",
+        "from_phase": "MB-P2",
+        "to_artifact_kind": "MEDIA_ACCEPTANCE_RECEIPT",
+        "to_phase": "MB-P3",
+        "status": "COMPILED_AND_FROZEN",
+    }
+    if has_alignment_profile and expected_relocation not in (relocations or []):
+        findings.append(
+            _finding(
+                "FROZEN_PHASE_EVIDENCE_CONTRACT_INCONSISTENT",
+                "phase-relocation-manifest",
+            )
+        )
+    for case in frozen_ir.get("acceptance_cases", []):
+        if (
+            not isinstance(case, Mapping)
+            or str(case.get("evidence_type") or "")
+            not in {"LOCAL_AUDIO_ALIGNMENT_MOTION_SYNC_RECEIPTS"}
+        ):
+            continue
+        if (
+            "MEDIA_ACCEPTANCE_RECEIPT"
+            not in set(case.get("required_artifact_kinds", []))
+            or case.get("evidence_closure_policy")
+            != (
+                "ALL_DECLARED_TIMING_THRESHOLDS_INCLUDE_TERMINAL_"
+                "MEDIA_ACCEPTANCE"
+            )
+        ):
+            findings.append(
+                _finding(
+                    "ACCEPTANCE_CASE_PHASE_EVIDENCE_INCOMPLETE",
+                    str(case.get("case_id") or "unnamed"),
+                )
+            )
+    return findings
+
+
+def _check_video_artifact_evidence_semantics(
+    artifact_index: Mapping[str, Any],
+    contract_artifact_index: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Independently require satisfiable video evidence and timing contracts."""
+
+    findings: list[dict[str, Any]] = []
+    required_ref_hash_pairs = {
+        "AUDIO_ALIGNMENT_RECEIPT": (
+            ("tts_receipt_ref", "tts_receipt_sha256"),
+            ("narration_script_ref", "narration_script_sha256"),
+        ),
+        "OBJECT_MOTION_IR": (
+            ("alignment_receipt_ref", "alignment_receipt_sha256"),
+            ("narration_script_ref", "narration_script_sha256"),
+            ("asset_plan_ref", "asset_plan_sha256"),
+            ("claim_matrix_ref", "claim_matrix_sha256"),
+        ),
+        "LOCAL_RENDER_RECEIPT": (
+            ("tts_receipt_ref", "tts_receipt_sha256"),
+            ("alignment_receipt_ref", "alignment_receipt_sha256"),
+            ("motion_ir_ref", "motion_ir_sha256"),
+            ("asset_plan_ref", "asset_plan_sha256"),
+            ("dependency_manifest_ref", "dependency_manifest_sha256"),
+            ("render_input_manifest_ref", "render_input_manifest_sha256"),
+            ("composition_ref", "composition_sha256"),
+            ("render_command_receipt_ref", "render_command_receipt_sha256"),
+            ("render_trace_ref", "render_trace_sha256"),
+            ("video_ref", "video_sha256"),
+        ),
+        "MEDIA_ACCEPTANCE_RECEIPT": (
+            ("ffprobe_receipt_ref", "ffprobe_receipt_sha256"),
+            ("render_receipt_ref", "render_receipt_sha256"),
+            ("tts_receipt_ref", "tts_receipt_sha256"),
+            ("alignment_receipt_ref", "alignment_receipt_sha256"),
+            ("dependency_manifest_ref", "dependency_manifest_sha256"),
+            ("motion_probe_ref", "motion_probe_sha256"),
+            ("video_ref", "video_sha256"),
+        ),
+    }
+    hash_schema = {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+    artifact_kind_by_id = {
+        str(artifact_id): str(artifact.get("artifact_kind") or "")
+        for artifact_id, artifact in artifact_index.items()
+        if isinstance(artifact, Mapping)
+    }
+    for artifact_id, artifact in artifact_index.items():
+        if not isinstance(artifact, Mapping):
+            continue
+        kind = str(artifact.get("artifact_kind") or "")
+        full_contract = (
+            contract_artifact_index.get(str(artifact_id), artifact)
+            if isinstance(contract_artifact_index, Mapping)
+            else artifact
+        )
+        schema = artifact.get("schema")
+        if not isinstance(schema, Mapping):
+            continue
+        properties = schema.get("properties")
+        required = set(schema.get("required", []))
+        if not isinstance(properties, Mapping):
+            continue
+        semantic_schema = full_contract.get("schema")
+        if not isinstance(semantic_schema, Mapping):
+            semantic_schema = schema
+        semantic_properties = semantic_schema.get("properties")
+        if not isinstance(semantic_properties, Mapping):
+            semantic_properties = properties
+        semantic_required = set(semantic_schema.get("required", []))
+        semantic_invariants = set(semantic_schema.get("x-invariants", []))
+        pairs = required_ref_hash_pairs.get(kind, ())
+        if any(
+            ref_field not in required
+            or hash_field not in required
+            or not isinstance(properties.get(ref_field), Mapping)
+            or properties.get(hash_field) != hash_schema
+            for ref_field, hash_field in pairs
+        ):
+            findings.append(
+                _finding(
+                    "ARTIFACT_BYTE_LINEAGE_CONTRACT_INCOMPLETE",
+                    str(artifact_id),
+                )
+            )
+        invariants = set(schema.get("x-invariants", []))
+        if (
+            invariants
+            and not schema_invariant_contracts_are_complete(schema)
+        ) or (
+            semantic_invariants
+            and not schema_invariant_contracts_are_complete(semantic_schema)
+        ):
+            findings.append(
+                _finding(
+                    "ARTIFACT_INVARIANT_CONTRACT_INCOMPLETE",
+                    str(artifact_id),
+                )
+            )
+        if kind == "AUDIO_ALIGNMENT_RECEIPT":
+            final_video_fields = {
+                "final_av_drift_frames",
+                "absolute_final_av_drift_frames",
+            }
+            failure_codes = {
+                str(item.get("error_code") or "")
+                for item in full_contract.get("failure_returns", [])
+                if isinstance(item, Mapping)
+            }
+            expected_oracle_rule = (
+                "Recompute word anchors from synthesized audio and verify "
+                "anchor ordering, audio hashes, opening dead air, and "
+                "alignment error thresholds."
+            )
+            oracle = full_contract.get("oracle")
+            if (
+                final_video_fields.intersection(semantic_required)
+                or final_video_fields.intersection(semantic_properties)
+                or "ABSOLUTE_FINAL_AV_DRIFT_EQUALS_ABS_FINAL_AV_DRIFT"
+                in semantic_invariants
+                or "AUDIO_VIDEO_DRIFT" in failure_codes
+                or not isinstance(oracle, Mapping)
+                or oracle.get("decision_rule") != expected_oracle_rule
+            ):
+                findings.append(
+                    _finding(
+                        "ARTIFACT_PHASE_EVIDENCE_CONTRACT_INVALID",
+                        str(artifact_id),
+                    )
+                )
+        if kind == "OBJECT_MOTION_IR":
+            sync_invariant = (
+                "EVERY_OBJECT_WORD_TO_MOTION_ERROR_DOES_NOT_EXCEED_0_1_SECONDS"
+            )
+            invariant_contracts = semantic_schema.get("x-invariant-contracts")
+            expected_sync_contract = {
+                "algorithm": (
+                    "FOR_EACH_OBJECT_RESOLVE_AUDIO_ANCHOR_START_SECONDS_AND_"
+                    "REQUIRE_ABS_OBJECT_ENTER_TIME_MINUS_ANCHOR_START_SECONDS_"
+                    "LTE_WORD_TO_MOTION_TOLERANCE_SECONDS"
+                ),
+                "failure_code": "MOTION_SYNC_TOLERANCE_EXCEEDED",
+            }
+            sync_contract = (
+                invariant_contracts.get(sync_invariant)
+                if isinstance(invariant_contracts, Mapping)
+                else None
+            )
+            if (
+                "word_to_motion_tolerance_seconds" not in semantic_required
+                or semantic_properties.get("word_to_motion_tolerance_seconds")
+                != {"const": 0.1}
+                or sync_invariant not in semantic_invariants
+                or not isinstance(sync_contract, Mapping)
+                or any(
+                    sync_contract.get(field) != value
+                    for field, value in expected_sync_contract.items()
+                )
+            ):
+                findings.append(
+                    _finding(
+                        "MOTION_SYNC_CONTRACT_INCOMPLETE",
+                        str(artifact_id),
+                    )
+                )
+            shots = semantic_properties.get("shots")
+            transitions = semantic_properties.get("scene_transition_count")
+            if (
+                not isinstance(shots, Mapping)
+                or shots.get("minItems") != 10
+                or shots.get("maxItems") != 14
+                or not isinstance(transitions, Mapping)
+                or transitions.get("minimum") != 9
+                or transitions.get("maximum") != 13
+            ):
+                findings.append(
+                    _finding(
+                        "VIDEO_CADENCE_CONTRACT_INCOMPLETE",
+                        str(artifact_id),
+                    )
+                )
+        if kind == "BEFORE_AFTER_DEMO_CONTRACT":
+            branches = semantic_schema.get("oneOf")
+            authorized_branch_declared = any(
+                isinstance(branch, Mapping)
+                and isinstance(branch.get("properties"), Mapping)
+                and isinstance(
+                    branch["properties"].get("provenance_state"), Mapping
+                )
+                and branch["properties"]["provenance_state"].get("const")
+                == "AUTHORIZED_TARGET_SKILL_RUN"
+                for branch in (branches if isinstance(branches, list) else [])
+            )
+            dependency_kinds = {
+                artifact_kind_by_id.get(str(dependency_id), "")
+                for dependency_id in full_contract.get(
+                    "depends_on_artifact_ids", []
+                )
+            }
+            if (
+                authorized_branch_declared
+                and "TARGET_SKILL_EXECUTION_GATE_RECEIPT"
+                not in dependency_kinds
+            ):
+                findings.append(
+                    _finding(
+                        "AUTHORIZED_DEMO_BRANCH_UNREACHABLE",
+                        str(artifact_id),
+                    )
+                )
+        if kind in {"LOCAL_RENDER_RECEIPT", "MEDIA_ACCEPTANCE_RECEIPT"}:
+            if not {
+                "DEPENDENCY_MANIFEST_SHA256_MATCHES_REFERENCED_BYTES",
+                "DEPENDENCY_MANIFEST_BINDS_EXACT_DECLARED_ARTIFACT_DEPENDENCIES",
+            }.issubset(invariants):
+                findings.append(
+                    _finding(
+                        "ARTIFACT_DEPENDENCY_BYTE_LINEAGE_CONTRACT_INCOMPLETE",
+                        str(artifact_id),
+                    )
+                )
+        if kind == "FIXTURE_ACCEPTANCE_RECEIPT":
+            required_lineage_invariants = {
+                "EVERY_FIXTURE_CASE_RESULT_SHA256_MATCHES_REFERENCED_BYTES",
+                "EVERY_FIXTURE_VIDEO_SHA256_MATCHES_REFERENCED_BYTES",
+                "ACCEPTANCE_CASE_RESULT_REFS_EQUAL_FROZEN_CASE_RESULT_REFS",
+                "EVERY_ACCEPTANCE_CASE_RESULT_SHA256_MATCHES_REFERENCED_BYTES",
+                "NEGATIVE_CASE_RESULT_REFS_EQUAL_FROZEN_CASE_RESULT_REFS",
+                "EVERY_NEGATIVE_CASE_RESULT_SHA256_MATCHES_REFERENCED_BYTES",
+                "INVARIANT_NEGATIVE_RESULT_REFS_EQUAL_FROZEN_REGISTRY_RESULT_REFS",
+                "EVERY_INVARIANT_NEGATIVE_RESULT_SHA256_MATCHES_REFERENCED_BYTES",
+                "SCHEMA_NATIVE_RESULT_REFS_EQUAL_FROZEN_REGISTRY_RESULT_REFS",
+                "EVERY_SCHEMA_NATIVE_RESULT_SHA256_MATCHES_REFERENCED_BYTES",
+            }
+            ownership = full_contract.get("case_evidence_ownership")
+            evidence_dependencies = full_contract.get(
+                "depends_on_evidence_refs"
+            )
+            media_artifact_ids = {
+                current_id
+                for current_id, current_kind in artifact_kind_by_id.items()
+                if current_kind == "MEDIA_ACCEPTANCE_RECEIPT"
+            }
+            artifact_dependencies = set(
+                full_contract.get("depends_on_artifact_ids", [])
+            )
+            expected_lab_dependencies = {
+                str(current_id)
+                for current_id in artifact_kind_by_id
+                if str(current_id) != str(artifact_id)
+            }
+            if (
+                not required_lineage_invariants.issubset(invariants)
+                or not isinstance(ownership, Mapping)
+                or ownership.get("writer_workpack_id")
+                != CASE_EVIDENCE_WRITER_WORKPACK_ID
+                or ownership.get("result_root_ref")
+                != CASE_EXECUTION_RESULT_ROOT_REF
+                or ownership.get("writer_cardinality")
+                != "EXACTLY_ONE_WORKPACK"
+                or ownership.get("consumer_requires_hash_bound_bytes")
+                is not True
+                or not isinstance(evidence_dependencies, list)
+                or not evidence_dependencies
+                or len(evidence_dependencies)
+                != len(set(evidence_dependencies))
+                or any(
+                    not isinstance(ref, str)
+                    or not ref.startswith(
+                        f"{CASE_EXECUTION_RESULT_ROOT_REF}/"
+                    )
+                    for ref in evidence_dependencies
+                )
+                or not media_artifact_ids.issubset(artifact_dependencies)
+                or artifact_dependencies != expected_lab_dependencies
+            ):
+                findings.append(
+                    _finding(
+                        "FIXTURE_ACCEPTANCE_LINEAGE_CONTRACT_INCOMPLETE",
+                        str(artifact_id),
+                    )
+                )
+        if kind != "BEFORE_AFTER_DEMO_CONTRACT":
+            continue
+        effect_delta = properties.get("effect_delta")
+        item_schema = (
+            effect_delta.get("items")
+            if isinstance(effect_delta, Mapping)
+            else None
+        )
+        item_properties = (
+            item_schema.get("properties")
+            if isinstance(item_schema, Mapping)
+            else None
+        )
+        item_required = set(
+            item_schema.get("required", [])
+            if isinstance(item_schema, Mapping)
+            else []
+        )
+        invariant_contracts = schema.get("x-invariant-contracts")
+        demo_invariants = {
+            "DEMO_EFFECT_DELTA_PROPERTY_PATHS_RESOLVE_IN_BOTH_STATES",
+            "DEMO_EFFECT_DELTA_VALUES_EQUAL_RESOLVED_STATE_VALUES",
+            "DEMO_EFFECT_DELTA_BEFORE_AND_AFTER_VALUES_ARE_DISTINCT",
+            "DEMO_EFFECT_DELTA_EVIDENCE_SHA256_MATCHES_REFERENCED_BYTES",
+            "DEMO_EFFECT_DELTA_EVIDENCE_BINDS_BEFORE_AND_AFTER_BYTES",
+        }
+        if (
+            not isinstance(item_schema, Mapping)
+            or not isinstance(item_properties, Mapping)
+            or not {
+                "property_path",
+                "before_value",
+                "after_value",
+                "evidence_ref",
+                "evidence_sha256",
+                "evidence_input_sha256",
+                "evidence_output_sha256",
+                "observed_change",
+            }.issubset(item_required)
+            or item_properties.get("property_path", {}).get("pattern")
+            != "^(?:/(?:[^~/]|~0|~1)*)+$"
+            or not demo_invariants.issubset(set(schema.get("x-invariants", [])))
+            or not isinstance(invariant_contracts, Mapping)
+            or not demo_invariants.issubset(invariant_contracts)
+            or any(
+                not isinstance(invariant_contracts.get(invariant_id), Mapping)
+                or not invariant_contracts[invariant_id].get("algorithm")
+                or not invariant_contracts[invariant_id].get("failure_code")
+                for invariant_id in demo_invariants
+            )
+        ):
+            findings.append(
+                _finding("DEMO_EFFECT_DELTA_CONTRACT_INCOMPLETE", str(artifact_id))
+            )
+    return findings
+
+
 def _check_semantic_production_contracts(root: Path) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
     frozen_ir = _read_json(
@@ -8988,6 +11852,7 @@ def _check_semantic_production_contracts(root: Path) -> list[dict[str, Any]]:
     )
     if not isinstance(frozen_ir, dict) or not explicit_production_enabled(frozen_ir):
         return findings
+    findings.extend(_check_frozen_phase_evidence_projection(frozen_ir))
     findings.extend(validate_explicit_production_contracts(frozen_ir))
     manifest_path = root / "canonical_sources/ARTIFACT_OBLIGATION_MANIFEST.json"
     manifest = _read_json(manifest_path, findings)
@@ -9000,6 +11865,36 @@ def _check_semantic_production_contracts(root: Path) -> list[dict[str, Any]]:
         isinstance(item, dict)
         for item in (manifest, catalog, coverage, provenance)
     ):
+        return findings
+    findings.extend(
+        validate_composite_dependency_graph(
+            manifest.get("composite_dependency_graph"),
+            manifest.get("artifact_index", {}),
+        )
+    )
+    artifact_index = manifest.get("artifact_index", {})
+    if isinstance(artifact_index, Mapping):
+        contract_artifact_index = {
+            str(artifact.get("artifact_id")): artifact
+            for atom in frozen_ir.get("atoms", [])
+            if isinstance(atom, Mapping)
+            for obligation in (
+                atom.get("production_contract", {}).get(
+                    "workpack_obligations", []
+                )
+                if isinstance(atom.get("production_contract"), Mapping)
+                else []
+            )
+            if isinstance(obligation, Mapping)
+            for artifact in obligation.get("artifact_obligations", [])
+            if isinstance(artifact, Mapping) and artifact.get("artifact_id")
+        }
+        findings.extend(
+            _check_video_artifact_evidence_semantics(
+                artifact_index, contract_artifact_index
+            )
+        )
+    if findings:
         return findings
     expected_manifest = build_artifact_obligation_manifest(
         frozen_ir,
@@ -9049,6 +11944,7 @@ def _check_semantic_production_contracts(root: Path) -> list[dict[str, Any]]:
                 project_id=project_id,
                 program_id=str(frozen_ir.get("program_id")),
                 target_id=str(frozen_ir.get("target", {}).get("id")),
+                structural_contract=PROJECT_WORKPACK_CONTRACTS.get(workpack_id),
             )
             if expected_bundle is None:
                 if workpack.get("intent_atom_ids"):
@@ -9186,6 +12082,7 @@ def _check_three_projects(root: Path) -> list[dict[str, Any]]:
     project_workpack_ids: list[str] = []
     workpack_owner: dict[str, str] = {}
     project_workpack_write_paths: dict[str, list[str]] = {}
+    project_workpack_artifact_write_roots: dict[str, list[str]] = {}
     project_indexes: dict[str, dict[str, Any]] = {}
     for project_id, directory in PROJECTS:
         index = _read_json(
@@ -9228,6 +12125,25 @@ def _check_three_projects(root: Path) -> list[dict[str, Any]]:
                 project_workpack_write_paths[workpack_id] = list(
                     declared_write_paths
                 )
+            required_artifact_refs = item.get("required_artifact_refs", [])
+            artifact_write_roots = (
+                _artifact_write_roots_from_refs(
+                    execution_root, required_artifact_refs
+                )
+                if isinstance(required_artifact_refs, list)
+                else None
+            )
+            if artifact_write_roots is None:
+                findings.append(
+                    _finding(
+                        "PROJECT_WORKPACK_ARTIFACT_WRITE_ROOT_BINDING_INVALID",
+                        f"{directory}:{workpack_id}",
+                    )
+                )
+                artifact_write_roots = []
+            project_workpack_artifact_write_roots[workpack_id] = list(
+                artifact_write_roots
+            )
             expected_dag_node = expected_dag_by_workpack.get(workpack_id)
             expected_release_step = expected_release_by_workpack.get(workpack_id)
             expected_surface = (
@@ -9605,6 +12521,11 @@ def _check_three_projects(root: Path) -> list[dict[str, Any]]:
                             f"{expected_project_directory}/repository",
                         )
                     )
+                for artifact_root in project_workpack_artifact_write_roots.get(
+                    workpack_id, []
+                ):
+                    if artifact_root not in expected_workpack_write_paths:
+                        expected_workpack_write_paths.append(artifact_root)
                 if (
                     project_workpack_write_paths.get(workpack_id)
                     != expected_workpack_write_paths
@@ -9906,6 +12827,14 @@ def _check_project_workpack_execution_contracts(
         if isinstance(coverage_matrix, dict)
         else []
     )
+    artifact_manifest_path = (
+        root / "canonical_sources/ARTIFACT_OBLIGATION_MANIFEST.json"
+    )
+    artifact_manifest = (
+        _read_json(artifact_manifest_path, findings)
+        if artifact_manifest_path.is_file()
+        else {}
+    )
     project_directories = dict(PROJECTS)
     workpack_items: dict[str, Mapping[str, Any]] = {}
     workpack_positions: dict[str, tuple[str, int]] = {}
@@ -10087,12 +13016,76 @@ def _check_project_workpack_execution_contracts(
                 for value in (per_commands, capsule, result, loop)
             ):
                 continue
-            expected_commands = [
-                commands_by_id.get(command_id)
-                for command_id in contract["command_ids"]
+            required_artifact_refs = item.get("required_artifact_refs", [])
+            required_artifact_ids = item.get("required_artifact_ids", [])
+            artifact_write_roots = (
+                _artifact_write_roots_from_refs(
+                    execution_root, required_artifact_refs
+                )
+                if isinstance(required_artifact_refs, list)
+                else None
+            )
+            auxiliary_write_roots = (
+                [CASE_EXECUTION_RESULT_ROOT_REF]
+                if workpack_id == CASE_EVIDENCE_WRITER_WORKPACK_ID
+                else []
+            )
+            command_write_roots = (
+                list(
+                    dict.fromkeys(
+                        [*(artifact_write_roots or []), *auxiliary_write_roots]
+                    )
+                )
+                if artifact_write_roots is not None
+                else None
+            )
+            artifact_read_roots = (
+                _artifact_dependency_read_roots_from_manifest(
+                    execution_root,
+                    artifact_manifest,
+                    required_artifact_ids,
+                )
+                if isinstance(required_artifact_ids, list)
+                else None
+            )
+            shared_artifact_read_roots = [
+                root
+                for root in (artifact_read_roots or [])
+                if "/jobs/" not in root
             ]
+            job_artifact_read_scopes = (
+                _job_artifact_scopes(
+                    artifact_read_roots, roots_field="allowed_read_roots"
+                )
+                if artifact_read_roots is not None
+                else None
+            )
+            job_artifact_write_scopes = (
+                _job_artifact_scopes(
+                    artifact_write_roots, roots_field="allowed_write_roots"
+                )
+                if artifact_write_roots is not None
+                else None
+            )
+            expected_job_scope_activation_policy = (
+                "NO_JOB_ARTIFACT_ROOT_IS_ACTIVE_WITHOUT_EXACTLY_ONE_CURRENT_LEASE"
+                if job_artifact_read_scopes or job_artifact_write_scopes
+                else "NO_JOB_ARTIFACT_SCOPE"
+            )
+            expected_commands = (
+                _expected_workpack_commands(
+                    commands_by_id,
+                    contract["command_ids"],
+                    command_write_roots,
+                    artifact_read_roots or [],
+                    workpack_id=workpack_id,
+                )
+                if command_write_roots is not None
+                and artifact_read_roots is not None
+                else None
+            )
             if (
-                any(command is None for command in expected_commands)
+                expected_commands is None
                 or per_commands.get("program_id") != index.get("program_id")
                 or per_commands.get("project_id") != project_id
                 or per_commands.get("workpack_id") != workpack_id
@@ -10103,6 +13096,27 @@ def _check_project_workpack_execution_contracts(
                 or per_commands.get("intent_atom_ids")
                 != expected_intent_atom_ids
                 or per_commands.get("commands") != expected_commands
+                or any(
+                    not isinstance(command, Mapping)
+                    or not _job_artifact_lease_contract_is_valid(
+                        command, workpack_id=workpack_id
+                    )
+                    for command in per_commands.get("commands", [])
+                )
+                or (
+                    bool(required_artifact_refs)
+                    and per_commands.get("workpack_artifact_write_roots")
+                    != artifact_write_roots
+                )
+                or per_commands.get("workpack_auxiliary_write_roots")
+                != auxiliary_write_roots
+                or (
+                    bool(required_artifact_ids)
+                    and per_commands.get("workpack_artifact_read_roots")
+                    != artifact_read_roots
+                )
+                or per_commands.get("workpack_shared_artifact_read_roots")
+                != shared_artifact_read_roots
                 or per_commands.get("source_project_command_manifest_sha256")
                 != _file_hash(global_manifest_path)
                 or per_commands.get("manifest_sha256")
@@ -10136,10 +13150,95 @@ def _check_project_workpack_execution_contracts(
                         f"project_start_packages/{directory}/repository",
                     )
                 )
+            for artifact_root in artifact_write_roots or []:
+                if artifact_root not in expected_allowed_write_paths:
+                    expected_allowed_write_paths.append(artifact_root)
+            for auxiliary_root in auxiliary_write_roots:
+                if auxiliary_root not in expected_allowed_write_paths:
+                    expected_allowed_write_paths.append(auxiliary_root)
             if item.get("allowed_write_paths") != expected_allowed_write_paths:
                 findings.append(
                     _finding(
                         "PROJECT_WORKPACK_WRITE_ROOT_CONTRACT_INVALID",
+                        f"{directory}:{workpack_id}",
+                    )
+                )
+            expected_allowed_read_paths = list(
+                dict.fromkeys(
+                    [
+                        (
+                            LOGICAL_CANDIDATE_ROOT
+                            if candidate_root == VIRTUAL_CANDIDATE_ROOT
+                            else str(candidate_root)
+                        ),
+                        *shared_artifact_read_roots,
+                    ]
+                )
+            )
+            if item.get("allowed_read_paths") != expected_allowed_read_paths:
+                findings.append(
+                    _finding(
+                        "PROJECT_WORKPACK_READ_ROOT_CONTRACT_INVALID",
+                        f"{directory}:{workpack_id}",
+                    )
+                )
+            if (
+                job_artifact_read_scopes is None
+                or job_artifact_write_scopes is None
+                or item.get("job_artifact_read_scopes")
+                != job_artifact_read_scopes
+                or capsule.get("job_artifact_read_scopes")
+                != job_artifact_read_scopes
+                or item.get("job_artifact_write_scopes")
+                != job_artifact_write_scopes
+                or capsule.get("job_artifact_write_scopes")
+                != job_artifact_write_scopes
+                or item.get("job_artifact_scope_activation_policy")
+                != expected_job_scope_activation_policy
+                or capsule.get("job_artifact_scope_activation_policy")
+                != expected_job_scope_activation_policy
+                or item.get("active_job_artifact_lease_ref") is not None
+                or capsule.get("active_job_artifact_lease_ref") is not None
+                or capsule.get("case_result_write_root")
+                != (
+                    auxiliary_write_roots[0]
+                    if auxiliary_write_roots
+                    else None
+                )
+                or any(
+                    not isinstance(scope, Mapping)
+                    or not isinstance(scope.get("job_id"), str)
+                    or not isinstance(scope.get("allowed_read_roots"), list)
+                    or not scope["allowed_read_roots"]
+                    or any(
+                        not _contract_path(root_value).is_absolute()
+                        or not _contract_path(root_value).is_relative_to(
+                            execution_root
+                        )
+                        or f"/jobs/{scope['job_id']}/" not in root_value
+                        for root_value in scope["allowed_read_roots"]
+                    )
+                    for scope in (job_artifact_read_scopes or [])
+                )
+                or any(
+                    not isinstance(scope, Mapping)
+                    or not isinstance(scope.get("job_id"), str)
+                    or not isinstance(scope.get("allowed_write_roots"), list)
+                    or not scope["allowed_write_roots"]
+                    or any(
+                        not _contract_path(root_value).is_absolute()
+                        or not _contract_path(root_value).is_relative_to(
+                            execution_root
+                        )
+                        or f"/jobs/{scope['job_id']}/" not in root_value
+                        for root_value in scope["allowed_write_roots"]
+                    )
+                    for scope in (job_artifact_write_scopes or [])
+                )
+            ):
+                findings.append(
+                    _finding(
+                        "PROJECT_WORKPACK_JOB_ARTIFACT_LEASE_INVALID",
                         f"{directory}:{workpack_id}",
                     )
                 )
@@ -10148,7 +13247,10 @@ def _check_project_workpack_execution_contracts(
                 or not allowed_write_paths
                 or any(
                     not path.is_absolute()
-                    or not path.is_relative_to(candidate_root)
+                    or not (
+                        path.is_relative_to(candidate_root)
+                        or path.is_relative_to(execution_root)
+                    )
                     for path in allowed_read_paths
                 )
                 or any(
@@ -10294,6 +13396,102 @@ def _check_project_workpack_execution_contracts(
                             f"{workpack_id}:{capability}:{source_ref}",
                         )
                     )
+    return findings
+
+
+def _check_target_subauthorization_gates(root: Path) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    frozen = _read_json(
+        root / "canonical_sources/FROZEN_REQUIREMENT_IR.json", findings
+    )
+    policy = _read_json(root / "AUTHORIZATION_POLICY.json", findings)
+    context = _read_json(root / "START_CONTEXT.json", findings)
+    if not all(isinstance(value, Mapping) for value in (frozen, policy, context)):
+        return findings
+    atom_ids: set[str] = set()
+    error_codes: set[str] = set()
+    for atom in frozen.get("atoms", []):
+        if not isinstance(atom, Mapping):
+            continue
+        atom_ids.add(str(atom.get("atom_id") or ""))
+        error_codes.update(str(value) for value in atom.get("error_semantics", []))
+    required: set[str] = set()
+    if (
+        "ATOM-TARGET-SKILL-EXECUTION-GATE" in atom_ids
+        or "TARGET_SKILL_EXECUTION_AUTHORIZATION_REQUIRED" in error_codes
+    ):
+        required.add("TARGET_SKILL_EXECUTION_AUTHORIZATION")
+    if (
+        "ATOM-ASSET-ROUTING" in atom_ids
+        or "CODEX_IMAGE_GENERATION_AUTHORIZATION_REQUIRED" in error_codes
+    ):
+        required.add("CODEX_IMAGE_GENERATION_AUTHORIZATION")
+    if not required:
+        return findings
+    classes = set(policy.get("authorization_classes") or [])
+    rules = policy.get("target_subauthorization_rules")
+    refs = set(context.get("target_subauthorization_refs") or [])
+    for authorization_class in sorted(required):
+        rule = rules.get(authorization_class) if isinstance(rules, Mapping) else None
+        authorization = _read_json(
+            root / f"{authorization_class}.json", findings
+        )
+        if (
+            authorization_class not in classes
+            or f"{authorization_class}.json" not in refs
+            or not isinstance(rule, Mapping)
+            or rule.get("default_disposition") != "DENY"
+            or rule.get("status") != "NOT_GRANTED"
+            or any(
+                rule.get(field) is not True
+                for field in (
+                    "separate_exact_authorization_required",
+                    "may_not_be_included_in_program_execution_authorization",
+                    "one_time_use_required",
+                    "exact_target_and_input_hash_binding_required",
+                    "exact_job_commit_input_environment_and_output_binding_required",
+                    "environment_manifest_and_receipt_hash_required",
+                    "output_root_manifest_and_receipt_hash_required",
+                    "side_effect_preflight_required",
+                    "receipt_required",
+                )
+            )
+            or not isinstance(authorization, Mapping)
+            or authorization.get("authorization_class") != authorization_class
+            or authorization.get("status") != "NOT_GRANTED"
+            or authorization.get("authorization_id") is not None
+            or authorization.get("consumed") is not False
+            or authorization.get("execution_started") is not False
+            or authorization.get("exact_scope") is not None
+            or authorization.get("exact_scope_contract")
+            != {
+                "required_fields": [
+                    "target_skill_id",
+                    "job_id",
+                    "commit_sha",
+                    "input_manifest_sha256",
+                    "environment_id",
+                    "environment_manifest_ref",
+                    "environment_manifest_sha256",
+                    "output_root_ref",
+                    "output_manifest_sha256",
+                ],
+                "scope_kind": (
+                    "EXACT_JOB_COMMIT_INPUT_ENVIRONMENT_AND_OUTPUT"
+                ),
+                "program_wide_scope_forbidden": True,
+            }
+            or authorization.get("environment_receipt_ref") is not None
+            or authorization.get("environment_receipt_sha256") is not None
+            or authorization.get("output_receipt_ref") is not None
+            or authorization.get("output_receipt_sha256") is not None
+            ):
+            findings.append(
+                _finding(
+                    "TARGET_SUBAUTHORIZATION_GATE_INVALID",
+                    authorization_class,
+                )
+            )
     return findings
 
 
@@ -19721,7 +22919,22 @@ def _check_control_contracts(root: Path) -> list[dict[str, Any]]:
             findings.append(_finding("DRIVER_RECOVERY_INTERFACE_INCOMPLETE", str(sorted(commands))))
         transaction = driver.get("transaction_contract", {})
         recovery = driver.get("crash_recovery_contract", {})
-        if not all(value is True for value in transaction.values()) or len(transaction) < 5:
+        required_transaction_controls = {
+            "lease_and_fencing_token_required",
+            "job_artifact_root_requires_exactly_one_active_job_lease",
+            "job_artifact_lease_must_bind_command_workpack_job_and_scope_hash",
+            "workpack_union_paths_are_catalog_only_not_active_grants",
+            "stale_expired_or_consumed_job_artifact_lease_rejected",
+            "idempotency_key_required",
+            "command_completion_and_state_commit_atomic",
+            "duplicate_side_effect_command_rejected",
+            "single_next_action_or_block",
+        }
+        if (
+            not isinstance(transaction, Mapping)
+            or not required_transaction_controls.issubset(transaction)
+            or any(transaction.get(field) is not True for field in required_transaction_controls)
+        ):
             findings.append(_finding("DRIVER_TRANSACTION_CONTRACT_INCOMPLETE", str(transaction)))
         if not all(value is True for value in recovery.values()) or len(recovery) < 4:
             findings.append(_finding("DRIVER_CRASH_RECOVERY_INCOMPLETE", str(recovery)))

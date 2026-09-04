@@ -13,6 +13,7 @@ import unittest
 
 from harness_foundry_factory.compiler import compile_candidate
 from harness_foundry_factory.validator import validate_candidate
+from tests.permissions import make_path_writable
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -30,6 +31,7 @@ def json_hash(value: object) -> str:
 
 
 def write_json(path: Path, value: object) -> None:
+    make_path_writable(path)
     path.write_text(
         json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -316,6 +318,7 @@ class ControlKernelCandidateTests(unittest.TestCase):
     def test_generic_kernel_manifest_tamper_is_rejected(self) -> None:
         self.compile()
         manifest_path = self.candidate / "V2_9_CONTROL_KERNEL_MANIFEST.json"
+        make_path_writable(manifest_path)
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         manifest["runtime_module_sha256"][
             "tools/harness_foundry_runtime/control_kernel.py"

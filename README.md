@@ -1,4 +1,4 @@
-# Harness Foundry v2.9 Chat Factory v0.1
+# Harness Foundry v2.9 Chat Factory v0.2
 
 这是按 v2.9 协议实现的本地工程化 Foundry。默认画像是 `SELF_USE_LOCAL_TRUSTED_OPERATOR`：单一可信用户在可信本机完成 Requirement/Architecture 输入、双锁编译、通用状态推进、Checkpoint/Resume、解释停止、本地可移植打包和实现证据投影。
 
@@ -59,7 +59,7 @@ SQLite 是权威 Event Store；JSON/JSONL 是可再生成的只读视图。每�
 ## 兼容路线的附加安全性质
 
 - 只接受固定 sibling 2.8 规范根；逐文件 Hash、整体 Hash、版本、validator 身份均锁定。
-- 本地来源默认只读引用并绑定 Hash；可显式选择不可变快照。HTTP URL、Connector、Plugin、MCP 不在 v0.1 输入范围。
+- 本地来源默认只读引用并绑定 Hash；可显式选择不可变快照。HTTP URL、Connector、Plugin、MCP 不在 v0.2 输入范围。
 - `program_id`、`target.id` 和所有输出路径经过路径安全与重叠检查；规范、Factory、runs 和来源目录不可作为输出。
 - 冻结后变更必须 `REOPEN`，进入新 epoch，并选择新的空输出路径；旧候选不被覆盖。
 - Codex executor、最终 Runtime 与 Build Program Driver 分离；未确认的 CLI argv 不会被伪造，Python/Harness 自报不能证明 Codex 调用。

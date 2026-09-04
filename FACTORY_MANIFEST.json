@@ -4,7 +4,7 @@
   "factory_id": "HARNESS_FOUNDRY_V2_9_CHAT_FACTORY_V0_1",
   "baseline_factory_id": "HARNESS_FOUNDRY_V2_8_CHAT_FACTORY_V0_1",
   "target_protocol_version": "2.9",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "assurance_profile": "SELF_USE_LOCAL_TRUSTED_OPERATOR",
   "external_certification_claimed": false,
   "optional_security_hardening": "NOT_RUN",

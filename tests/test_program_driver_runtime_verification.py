@@ -23,6 +23,7 @@ from harness_foundry_factory.validator import (
 )
 from tests import test_control_plane_registration as registration_test_support
 from tests.test_generation_readiness import ROOT, _epoch38_fixture, _rehash
+from tests.permissions import make_path_writable, make_tree_writable
 
 
 class ProgramDriverRuntimeVerificationTests(unittest.TestCase):
@@ -114,6 +115,7 @@ class ProgramDriverRuntimeVerificationTests(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls) -> None:
+        make_tree_writable(cls.root)
         cls.temporary.cleanup()
 
     @staticmethod
@@ -459,6 +461,7 @@ class ProgramDriverRuntimeVerificationTests(unittest.TestCase):
             candidate = Path(temporary) / "candidate"
             shutil.copytree(self.candidate, candidate)
             entrypoint = candidate / "tools/program_driver.py"
+            make_path_writable(entrypoint)
             entrypoint.write_text(
                 entrypoint.read_text(encoding="utf-8") + "\n# drift\n",
                 encoding="utf-8",

@@ -24,6 +24,7 @@ from harness_foundry_factory.validator import (
     _check_control_plane_registration_executable_closure,
 )
 from tests.test_generation_readiness import ROOT, _epoch38_fixture, _rehash
+from tests.permissions import make_path_writable, make_tree_writable
 
 
 class ControlPlaneRegistrationTests(unittest.TestCase):
@@ -107,6 +108,7 @@ class ControlPlaneRegistrationTests(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls) -> None:
+        make_tree_writable(cls.root)
         cls.temporary.cleanup()
 
     @staticmethod
@@ -120,6 +122,7 @@ class ControlPlaneRegistrationTests(unittest.TestCase):
 
     @staticmethod
     def _write_json(path: Path, value: dict) -> None:
+        make_path_writable(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
             json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
@@ -383,6 +386,10 @@ class ControlPlaneRegistrationTests(unittest.TestCase):
                 "legacy_control_plane_epoch_alias": (
                     "execution_control_plane_epoch"
                 ),
+                "requirement_architecture_epoch": 4,
+                "requirement_architecture_control_plane_epoch": 4,
+                "projection_rule": "IDENTITY_REQUIREMENT_EPOCH_PROJECTION",
+                "unbound_zero_semantics": False,
             },
         )
         self.assertEqual(

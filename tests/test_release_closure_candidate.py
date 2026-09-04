@@ -62,6 +62,7 @@ from harness_foundry_factory.validator import (
     _factory_required_regression_execution,
     validate_candidate,
 )
+from tests.permissions import make_path_writable
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -1055,6 +1056,7 @@ def epoch31_remediation() -> dict:
 
 
 def write_json(path: Path, value: object) -> None:
+    make_path_writable(path)
     path.write_text(
         json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -1928,7 +1930,9 @@ class Epoch2CandidateTests(unittest.TestCase):
         )
         self.assertEqual(imported.returncode, 0, imported.stderr)
 
-        (self.candidate / "tools/harness_foundry_runtime/models.py").unlink()
+        missing = self.candidate / "tools/harness_foundry_runtime/models.py"
+        make_path_writable(missing)
+        missing.unlink()
         self.assertIn("PORTABLE_RUNTIME_DEPENDENCY_MISSING", self.codes())
         standalone = json.loads(self.run_self_check().stdout)
         self.assertIn(
@@ -2022,6 +2026,7 @@ class Epoch2CandidateTests(unittest.TestCase):
         self.ir["target"]["candidate_version"] = "v0_32"
         self.compile()
         probe = self.candidate / "tools/harness_foundry_runtime/binder_probe.py"
+        make_path_writable(probe)
         probe.write_text(
             "from .missing_for_binder_test import value\n",
             encoding="utf-8",
@@ -2057,6 +2062,7 @@ class Epoch2CandidateTests(unittest.TestCase):
         self.activate_epoch33()
         self.compile()
         readme_path = self.candidate / "README.md"
+        make_path_writable(readme_path)
         readme_path.write_text(
             readme_path.read_text(encoding="utf-8")
             + "\nAttack probe: harness-resource://candidate/missing/dangling.json\n",
@@ -2484,7 +2490,9 @@ class Epoch2CandidateTests(unittest.TestCase):
             "harness-resource://candidate/tools/harness_foundry_runtime/store.py"
         )
         write_json(report_path, report)
-        (self.candidate / "tools/harness_foundry_runtime/store.py").unlink()
+        missing = self.candidate / "tools/harness_foundry_runtime/store.py"
+        make_path_writable(missing)
+        missing.unlink()
 
         self.assertIn("CANDIDATE_RESOURCE_URI_DANGLING", self.codes())
         standalone = json.loads(self.run_self_check().stdout)
@@ -2511,7 +2519,7 @@ class Epoch2CandidateTests(unittest.TestCase):
         factory_oracle = next(
             check
             for check in report["checks"]
-            if check["check_id"] == "FACTORY_EXTERNAL_SOURCE_AUTHORITY_ORACLE"
+            if check["check_id"] == "FACTORY_LOCAL_SOURCE_CONSISTENCY"
         )
         self.assertEqual(factory_oracle["status"], "FAIL")
         self.assertEqual(
@@ -2772,7 +2780,7 @@ class Epoch2CandidateTests(unittest.TestCase):
         oracle = next(
             check
             for check in report["checks"]
-            if check["check_id"] == "FACTORY_EXTERNAL_RELEASE_HISTORY_ORACLE"
+            if check["check_id"] == "FACTORY_LOCAL_REQUIREMENT_IR_CONSISTENCY"
         )
         self.assertEqual(oracle["status"], "FAIL")
         self.assertIn(
@@ -3009,6 +3017,8 @@ class Epoch2CandidateTests(unittest.TestCase):
         )
         report_bytes = report_path.read_bytes()
         receipt_bytes = receipt_path.read_bytes()
+        make_path_writable(receipt_path)
+        make_path_writable(report_path)
         receipt_path.unlink()
         self.assertIn("VALIDATION_REPORT_RECEIPT_MISSING", self.codes())
         missing_receipt = json.loads(
@@ -3093,6 +3103,7 @@ class Epoch2CandidateTests(unittest.TestCase):
         ):
             with self.subTest(name=name):
                 for path, payload in originals.items():
+                    make_path_writable(path)
                     path.write_bytes(payload)
                 report = json.loads(report_path.read_text(encoding="utf-8"))
                 mutate(report)
@@ -3282,6 +3293,7 @@ class Epoch2CandidateTests(unittest.TestCase):
         self.assertIn("CANDIDATE_GENERATION_COMMIT_REPLAYED", finding_codes(report))
 
         for path, payload in original_files.items():
+            make_path_writable(path)
             path.write_bytes(payload)
         report_path = (
             self.candidate / "validation/START_PACKAGE_VALIDATION_REPORT.json"
@@ -3343,7 +3355,9 @@ class Epoch2CandidateTests(unittest.TestCase):
 
     def test_missing_epoch2_module_is_rejected_by_both_oracles(self) -> None:
         self.compile()
-        (self.candidate / EPOCH2_ARTIFACTS[17]).unlink()
+        missing = self.candidate / EPOCH2_ARTIFACTS[17]
+        make_path_writable(missing)
+        missing.unlink()
         self.refresh_closure_and_portable_hashes()
         self.assertIn("V2_9_EPOCH2_ARTIFACT_MISSING", self.codes())
         report = json.loads(self.run_self_check().stdout)
@@ -3420,6 +3434,7 @@ class Epoch2CandidateTests(unittest.TestCase):
             "if type(authority_adapter) is not SQLiteEventStoreAuthorityAdapter:",
             "if False:",
         )
+        make_path_writable(runtime_path)
         runtime_path.write_text(source, encoding="utf-8")
         closure_path = self.candidate / EPOCH2_ARTIFACTS[4]
         closure = json.loads(closure_path.read_text(encoding="utf-8"))
@@ -3450,6 +3465,7 @@ class Epoch2CandidateTests(unittest.TestCase):
         None""",
         )
         self.assertNotEqual(source, weakened)
+        make_path_writable(adapter_path)
         adapter_path.write_text(weakened, encoding="utf-8")
         adapter_sha = hashlib.sha256(adapter_path.read_bytes()).hexdigest()
 

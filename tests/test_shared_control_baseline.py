@@ -11,6 +11,7 @@ import unittest
 
 from harness_foundry_factory.compiler import compile_candidate
 from harness_foundry_factory.validator import validate_candidate
+from tests.permissions import make_path_writable, make_tree_writable
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -71,10 +72,12 @@ class SharedControlBaselineTests(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls) -> None:
+        make_tree_writable(cls.root)
         cls.temporary.cleanup()
 
     @staticmethod
     def _write_json(path: Path, value: dict) -> None:
+        make_path_writable(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
             json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n",

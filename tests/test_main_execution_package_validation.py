@@ -24,6 +24,7 @@ from harness_foundry_factory.validator import (
     _check_main_execution_package_validation_executable_closure,
 )
 from tests.test_generation_readiness import ROOT, _epoch38_fixture, _rehash
+from tests.permissions import make_path_writable, make_tree_writable
 
 
 class MainExecutionPackageValidationTests(unittest.TestCase):
@@ -115,6 +116,7 @@ class MainExecutionPackageValidationTests(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls) -> None:
+        make_tree_writable(cls.root)
         cls.temporary.cleanup()
 
     @staticmethod
@@ -128,6 +130,7 @@ class MainExecutionPackageValidationTests(unittest.TestCase):
 
     @staticmethod
     def _write_json(path: Path, value: dict) -> None:
+        make_path_writable(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
             json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True)
@@ -413,6 +416,7 @@ class MainExecutionPackageValidationTests(unittest.TestCase):
             candidate = Path(temporary) / "candidate"
             shutil.copytree(self.candidate, candidate)
             provider = candidate / action.IMPLEMENTATION_REF
+            make_path_writable(provider)
             provider.write_text(
                 provider.read_text(encoding="utf-8") + "\n# drift\n",
                 encoding="utf-8",

@@ -380,6 +380,9 @@ def _resolve_candidate_inputs(candidate_root: Path) -> dict[str, Any]:
         )
     architecture_epoch = target.get("architecture_epoch")
     architecture_control_plane_epoch = target.get("control_plane_epoch")
+    requirement_architecture_epoch = architecture_epoch
+    requirement_architecture_control_plane_epoch = architecture_control_plane_epoch
+    unbound_zero_semantics = architecture_epoch is None and architecture_control_plane_epoch is None
     if architecture_epoch is None and architecture_control_plane_epoch is None:
         architecture_epoch = 0
         architecture_control_plane_epoch = 0
@@ -389,6 +392,14 @@ def _resolve_candidate_inputs(candidate_root: Path) -> dict[str, Any]:
         "architecture_control_plane_epoch": architecture_control_plane_epoch,
         "execution_control_plane_epoch": 0,
         "legacy_control_plane_epoch_alias": "execution_control_plane_epoch",
+        "requirement_architecture_epoch": requirement_architecture_epoch,
+        "requirement_architecture_control_plane_epoch": requirement_architecture_control_plane_epoch,
+        "projection_rule": (
+            "NULL_REQUIREMENT_EPOCHS_TO_EXPLICIT_UNBOUND_ZERO_SENTINEL"
+            if unbound_zero_semantics
+            else "IDENTITY_REQUIREMENT_EPOCH_PROJECTION"
+        ),
+        "unbound_zero_semantics": unbound_zero_semantics,
     }
     require_equal(
         epoch_domains,

@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 from typing import Any, Callable, Iterable, Mapping
 import uuid
@@ -2104,6 +2105,7 @@ class FactoryService:
                 snapshot["spec_lock"],
                 authority_provenance=authority_provenance,
                 generation_readiness=generation_readiness,
+                active_requirement_epoch=int(snapshot.get("requirement_epoch", 0)),
             )
         except FileExistsError as exc:
             snapshot["factory_state"] = "OUTPUT_COLLISION"
@@ -2803,13 +2805,70 @@ class FactoryService:
                 raw_path = source
                 authority_rank = None
                 source_id = None
+
+            def repository_metadata(
+                source_value: Any, *, content_sha256: str
+            ) -> dict[str, Any]:
+                if not isinstance(source_value, Mapping):
+                    return {}
+                fields = (
+                    "repository_url",
+                    "revision",
+                    "commit_sha",
+                    "git_tree_oid",
+                    "tree_sha256",
+                    "license_spdx",
+                    "license_ref",
+                    "retrieved_at",
+                )
+                metadata = {
+                    field: source_value[field]
+                    for field in fields
+                    if source_value.get(field) not in (None, "")
+                }
+                scope = str(source_value.get("scope") or "")
+                repository_declared = bool(metadata) or "github.com/" in scope
+                if not repository_declared:
+                    return {}
+                required = {
+                    "repository_url",
+                    "revision",
+                    "commit_sha",
+                    "git_tree_oid",
+                    "tree_sha256",
+                    "license_spdx",
+                }
+                if not required.issubset(metadata):
+                    raise RequestValidationError(
+                        "repository sources require structured repository_url, revision, commit_sha, git_tree_oid, tree_sha256, and license_spdx"
+                    )
+                if (
+                    not str(metadata["repository_url"]).startswith(
+                        ("https://github.com/", "git@github.com:")
+                    )
+                    or re.fullmatch(r"[0-9a-fA-F]{40}", str(metadata["commit_sha"]))
+                    is None
+                    or re.fullmatch(r"[0-9a-fA-F]{40}", str(metadata["git_tree_oid"]))
+                    is None
+                    or re.fullmatch(r"[0-9a-fA-F]{64}", str(metadata["tree_sha256"]))
+                    is None
+                    or str(metadata["tree_sha256"]).lower() != content_sha256.lower()
+                    or not str(metadata["license_spdx"]).strip()
+                ):
+                    raise RequestValidationError(
+                        "repository source pin metadata is malformed or tree_sha256 does not match registered source bytes"
+                    )
+                metadata["commit_sha"] = str(metadata["commit_sha"]).lower()
+                metadata["git_tree_oid"] = str(metadata["git_tree_oid"]).lower()
+                metadata["tree_sha256"] = str(metadata["tree_sha256"]).lower()
+                return metadata
             if not isinstance(raw_path, (str, os.PathLike)):
                 raise RequestValidationError("each source requires path or path_or_uri")
             raw_location = str(raw_path)
             if "://" in raw_location:
                 if not raw_location.startswith("chat://"):
                     raise RequestValidationError(
-                        "v0.1 accepts only internal chat:// URIs; URLs and connectors are out of scope"
+                        "v0.2 accepts only internal chat:// URIs; URLs and connectors are out of scope"
                     )
                 if not isinstance(source, Mapping):
                     raise RequestValidationError(
@@ -2838,6 +2897,7 @@ class FactoryService:
                         "copy_policy": source.get("copy_policy", "REFERENCE_ONLY"),
                         "access_mode": "HASH_BOUND_REFERENCE",
                         "registered_at": now,
+                        **repository_metadata(source, content_sha256=sha256),
                     }
                 )
                 continue
@@ -2875,6 +2935,7 @@ class FactoryService:
                     "snapshot_path": str(snapshot_path) if snapshot_path else None,
                     "access_mode": "READ_ONLY_HASH_REGISTERED",
                     "registered_at": now,
+                    **repository_metadata(source, content_sha256=sha256),
                 }
             )
         return records
