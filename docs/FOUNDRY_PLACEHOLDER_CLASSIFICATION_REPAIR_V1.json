@@ -1,0 +1,155 @@
+{
+  "repair_id": "FOUNDRY-PLACEHOLDER-CLASSIFICATION-REPAIR-V1",
+  "schema_version": "1.0",
+  "baseline_git_head": "0f94791",
+  "status": "SOURCE_REPAIR_VALIDATED_AWAITING_EXPLICIT_REOPEN",
+  "scope": "Distinguish unresolved template markers from literal angle-bracket text in frozen human-authored history without weakening generated-contract validation.",
+  "trigger": {
+    "program_id": "PROGRAM-GITHUB-SKILL-VIDEO-EXPLAINER-HARNESS-V1",
+    "requirement_epoch": 21,
+    "failure_code": "INTERNAL_FACTORY_ERROR",
+    "failure_message": "compiler left unresolved template placeholders",
+    "published_candidate_created": false
+  },
+  "protected_boundaries": [
+    "DO_NOT_EDIT_FACTORY_SQLITE",
+    "DO_NOT_EDIT_EPOCH_21_STAGING_OR_CANDIDATE",
+    "DO_NOT_RELAX_VALIDATION_FOR_GENERATED_CONTRACT_FILES",
+    "DO_NOT_REOPEN_OR_RETRY_GENERATE_WITHOUT_NEW_EXPLICIT_AUTHORITY",
+    "DO_NOT_EXECUTE_WORKPACK_DRIVER_OR_HARNESS"
+  ],
+  "allowed_files": [
+    "src/harness_foundry_factory/compiler.py",
+    "src/harness_foundry_factory/validator.py",
+    "tests/test_compiler_validator.py",
+    "docs/FOUNDRY_PLACEHOLDER_CLASSIFICATION_REPAIR_V1.json"
+  ],
+  "workpacks": [
+    {
+      "workpack_id": "HF-E21-PH-WP1-REPRODUCE-AND-CLASSIFY",
+      "depends_on": [],
+      "write_scope": [
+        "tests/test_compiler_validator.py",
+        "docs/FOUNDRY_PLACEHOLDER_CLASSIFICATION_REPAIR_V1.json"
+      ],
+      "objective": "Reproduce the epoch 21 historical-literal false positive and define the active-template versus opaque-history boundary.",
+      "pass_criteria": [
+        "PRE_REPAIR_TEST_FAILS_ON_EXACT_HISTORICAL_LITERAL",
+        "ACTIVE_TEMPLATE_TOKEN_REMAINS_FAIL_CLOSED"
+      ],
+      "status": "COMPLETED"
+    },
+    {
+      "workpack_id": "HF-E21-PH-WP2-STRUCTURED-PRODUCER-SCAN",
+      "depends_on": [
+        "HF-E21-PH-WP1-REPRODUCE-AND-CLASSIFY"
+      ],
+      "write_scope": [
+        "src/harness_foundry_factory/compiler.py",
+        "tests/test_compiler_validator.py"
+      ],
+      "objective": "Replace raw whole-file angle-bracket scanning with JSON-structure-aware scanning that skips only enumerated frozen history subtrees.",
+      "pass_criteria": [
+        "HISTORICAL_LITERAL_PRESERVED_BYTE_FOR_BYTE",
+        "ACTIVE_REQUIREMENT_PLACEHOLDER_REJECTED_BEFORE_PUBLICATION",
+        "GENERATED_TEMPLATE_PLACEHOLDER_REJECTED_BEFORE_PUBLICATION"
+      ],
+      "status": "COMPLETED"
+    },
+    {
+      "workpack_id": "HF-E21-PH-WP3-INDEPENDENT-VALIDATOR-SCAN",
+      "depends_on": [
+        "HF-E21-PH-WP2-STRUCTURED-PRODUCER-SCAN"
+      ],
+      "write_scope": [
+        "src/harness_foundry_factory/validator.py",
+        "tests/test_compiler_validator.py"
+      ],
+      "objective": "Independently enforce the same semantic boundary in Candidate validation and reject active-field or generated-artifact mutations.",
+      "pass_criteria": [
+        "VALIDATOR_ACCEPTS_HASH_BOUND_HISTORICAL_LITERAL",
+        "VALIDATOR_REJECTS_ACTIVE_REQUIREMENT_PLACEHOLDER",
+        "VALIDATOR_REJECTS_GENERATED_ARTIFACT_PLACEHOLDER"
+      ],
+      "status": "COMPLETED"
+    },
+    {
+      "workpack_id": "HF-E21-PH-WP4-REGRESSION-AND-OFFICIAL-GATES",
+      "depends_on": [
+        "HF-E21-PH-WP1-REPRODUCE-AND-CLASSIFY",
+        "HF-E21-PH-WP2-STRUCTURED-PRODUCER-SCAN",
+        "HF-E21-PH-WP3-INDEPENDENT-VALIDATOR-SCAN"
+      ],
+      "write_scope": [
+        "docs/FOUNDRY_PLACEHOLDER_CLASSIFICATION_REPAIR_V1.json"
+      ],
+      "objective": "Run focused reproduction, full unit suite, Spec Lock, Skill, core validation, and diff-scope checks without lifecycle advancement.",
+      "pass_criteria": [
+        "FOCUSED_REGRESSION_PASS",
+        "FULL_UNIT_SUITE_PASS",
+        "VERIFY_SPEC_PASS",
+        "VALIDATE_SKILL_PASS",
+        "VALIDATE_CORE_PASS",
+        "NO_FACTORY_STATE_OR_CANDIDATE_MUTATION"
+      ],
+      "status": "COMPLETED"
+    }
+  ],
+  "repair_result": {
+    "status": "PASS",
+    "root_cause": "Raw whole-file angle-bracket scanning treated literal text in frozen human-authored decision history as an unresolved template token.",
+    "producer_change": "JSON-structure-aware scanning skips only enumerated opaque authority-history subtrees while continuing to inspect active Requirement fields, generated values, JSON keys, Markdown, and JSONL.",
+    "validator_independence": "Validator owns a separate history-subtree policy and traversal implementation and does not call Producer placeholder helpers.",
+    "regression": {
+      "pre_repair_reproduction": {
+        "status": "EXPECTED_FAILURE_OBSERVED",
+        "files": [
+          "canonical_sources/FROZEN_REQUIREMENT_IR.json",
+          "canonical_sources/REQUIREMENT_DECISIONS.json"
+        ]
+      },
+      "focused_tests": {
+        "status": "PASS",
+        "tests_run": 2
+      },
+      "full_unit_suite": {
+        "status": "PASS",
+        "tests_run": 348
+      },
+      "epoch_21_authoritative_prepublication_smoke": {
+        "status": "PASS",
+        "publication_intercepted_before_os_replace": true,
+        "frozen_target_remained_absent": true
+      }
+    },
+    "official_gates": {
+      "verify_spec": {
+        "status": "PASS",
+        "content_sha256": "be81e6b46573abcbff0a9851812b3b2bb78814928e57a59d65a2b5bb733b8503"
+      },
+      "validate_skill": {
+        "status": "PASS"
+      },
+      "validate_core": {
+        "status": "PASS",
+        "capability_count": 41,
+        "validation_sha256": "641bc6c2b6333585588793e7f9b3d4f0e4ab18445c2821fd0443d0b71202394f"
+      },
+      "git_diff_check": {
+        "status": "PASS"
+      }
+    },
+    "lifecycle_effects": {
+      "factory_revision": 137,
+      "factory_state": "REQUIREMENTS_FROZEN",
+      "factory_state_hash": "ac70484383643b2e0c561200c8507ede1f2ee06789a5fb115f76af115953d4ef",
+      "factory_state_mutated": false,
+      "epoch_21_candidate_published": false,
+      "epoch_21_failed_staging_modified": false,
+      "execution_root_created": false,
+      "reopen_performed": false,
+      "generate_retried": false,
+      "workpack_driver_or_harness_executed": false
+    }
+  }
+}

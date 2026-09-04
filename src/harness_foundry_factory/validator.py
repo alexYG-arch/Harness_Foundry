@@ -72,6 +72,21 @@ from .traceability import (
 
 
 PLACEHOLDER_RE = re.compile(r"<(?!\d)[^<>]+>")
+OPAQUE_FROZEN_HISTORY_SUBTREES = {
+    "canonical_sources/FROZEN_REQUIREMENT_IR.json": (
+        ("assumptions",),
+        ("open_questions",),
+        ("decisions",),
+        ("user_adjustments",),
+    ),
+    "canonical_sources/REQUIREMENT_DECISIONS.json": (
+        ("assumptions",),
+        ("open_questions",),
+        ("decisions",),
+        ("user_adjustments",),
+    ),
+    "canonical_sources/USER_ADJUSTMENT_RECORD.json": (("adjustments",),),
+}
 LINK_RE = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 PORTABLE_MODE = "LOGICAL_RESOURCE_URI"
@@ -11210,33 +11225,114 @@ def _check_syntax(root: Path) -> list[dict[str, Any]]:
     return findings
 
 
+def _validator_pointer_is_opaque_frozen_history(
+    relative_path: str,
+    pointer: tuple[str, ...],
+) -> bool:
+    return any(
+        pointer[: len(prefix)] == prefix
+        for prefix in OPAQUE_FROZEN_HISTORY_SUBTREES.get(relative_path, ())
+    )
+
+
+def _validator_text_template_findings(text: str, location: str) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    if PLACEHOLDER_RE.search(text):
+        findings.append(_finding("UNRESOLVED_TEMPLATE_PLACEHOLDER", location))
+    if re.search(r'(?m)(?:^\s*PLACEHOLDER\s*$|:\s*"PLACEHOLDER"\s*[,}])', text):
+        findings.append(_finding("FORBIDDEN_TEMPLATE_LITERAL", f"{location}: PLACEHOLDER"))
+    for literal in ("/absolute/path/to/", "TBD", "TODO", "PLANNED-REF-"):
+        if literal in text:
+            findings.append(_finding("FORBIDDEN_TEMPLATE_LITERAL", f"{location}: {literal}"))
+    return findings
+
+
+def _validator_json_template_findings(
+    value: Any,
+    *,
+    relative_path: str,
+    pointer: tuple[str, ...] = (),
+) -> list[dict[str, Any]]:
+    if _validator_pointer_is_opaque_frozen_history(relative_path, pointer):
+        return []
+    if isinstance(value, Mapping):
+        findings: list[dict[str, Any]] = []
+        for key, item in value.items():
+            findings.extend(
+                _validator_text_template_findings(
+                    str(key),
+                    f"{relative_path}#/{'/'.join((*pointer, str(key)))}",
+                )
+            )
+            findings.extend(
+                _validator_json_template_findings(
+                    item,
+                    relative_path=relative_path,
+                    pointer=(*pointer, str(key)),
+                )
+            )
+        return findings
+    if isinstance(value, list):
+        findings = []
+        for index, item in enumerate(value):
+            findings.extend(
+                _validator_json_template_findings(
+                    item,
+                    relative_path=relative_path,
+                    pointer=(*pointer, str(index)),
+                )
+            )
+        return findings
+    if not isinstance(value, str):
+        return []
+    pointer_text = "/" + "/".join(pointer) if pointer else "/"
+    return _validator_text_template_findings(
+        value,
+        f"{relative_path}#{pointer_text}",
+    )
+
+
 def _check_placeholders(root: Path) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
-    forbidden_literals = (
-        "/absolute/path/to/",
-        "TBD",
-        "TODO",
-        "PLANNED-REF-",
-    )
     for path in sorted(root.rglob("*")):
         if not path.is_file() or path.suffix not in {".md", ".json", ".jsonl"}:
             continue
+        relative_path = path.relative_to(root).as_posix()
         text = path.read_text(encoding="utf-8")
-        if PLACEHOLDER_RE.search(text):
-            findings.append(_finding("UNRESOLVED_TEMPLATE_PLACEHOLDER", path.relative_to(root).as_posix()))
-        if re.search(
-            r'(?m)(?:^\s*PLACEHOLDER\s*$|:\s*"PLACEHOLDER"\s*[,}])',
-            text,
-        ):
-            findings.append(
-                _finding(
-                    "FORBIDDEN_TEMPLATE_LITERAL",
-                    f"{path.relative_to(root)}: PLACEHOLDER",
+        if path.suffix == ".json":
+            try:
+                value = json.loads(text)
+            except json.JSONDecodeError:
+                findings.extend(_validator_text_template_findings(text, relative_path))
+            else:
+                findings.extend(
+                    _validator_json_template_findings(
+                        value,
+                        relative_path=relative_path,
+                    )
                 )
-            )
-        for literal in forbidden_literals:
-            if literal in text:
-                findings.append(_finding("FORBIDDEN_TEMPLATE_LITERAL", f"{path.relative_to(root)}: {literal}"))
+            continue
+        if path.suffix == ".jsonl":
+            parse_failed = False
+            for line_number, line in enumerate(text.splitlines(), 1):
+                if not line.strip():
+                    continue
+                try:
+                    value = json.loads(line)
+                except json.JSONDecodeError:
+                    parse_failed = True
+                    break
+                findings.extend(
+                    _validator_json_template_findings(
+                        value,
+                        relative_path=relative_path,
+                        pointer=(str(line_number),),
+                    )
+                )
+            if parse_failed:
+                findings.extend(_validator_text_template_findings(text, relative_path))
+            continue
+        findings.extend(_validator_text_template_findings(text, relative_path))
     return findings
 
 

@@ -66,6 +66,21 @@ from .traceability import WORKPACK_PROJECTS, normalize_ir_coverage
 
 PLACEHOLDER_RE = re.compile(r"<(?!\d)[^<>]+>")
 SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+OPAQUE_AUTHORITY_HISTORY_SUBTREES = {
+    "canonical_sources/FROZEN_REQUIREMENT_IR.json": (
+        ("assumptions",),
+        ("open_questions",),
+        ("decisions",),
+        ("user_adjustments",),
+    ),
+    "canonical_sources/REQUIREMENT_DECISIONS.json": (
+        ("assumptions",),
+        ("open_questions",),
+        ("decisions",),
+        ("user_adjustments",),
+    ),
+    "canonical_sources/USER_ADJUSTMENT_RECORD.json": (("adjustments",),),
+}
 PORTABLE_MODE = "LOGICAL_RESOURCE_URI"
 LOGICAL_CANDIDATE_ROOT = "harness-resource://candidate"
 LOGICAL_EXECUTION_ROOT = "harness-resource://execution"
@@ -20789,14 +20804,91 @@ def _token_value(token: str, context: Mapping[str, str], path: str) -> Any:
     return None
 
 
+def _is_opaque_authority_history_pointer(
+    relative_path: str,
+    pointer: tuple[str, ...],
+) -> bool:
+    return any(
+        pointer[: len(prefix)] == prefix
+        for prefix in OPAQUE_AUTHORITY_HISTORY_SUBTREES.get(relative_path, ())
+    )
+
+
+def _text_contains_unresolved_template_marker(text: str) -> bool:
+    return bool(
+        PLACEHOLDER_RE.search(text)
+        or "/absolute/path/to/" in text
+        or "TBD" in text
+        or "TODO" in text
+    )
+
+
+def _json_value_contains_unresolved_template_marker(
+    value: Any,
+    *,
+    relative_path: str,
+    pointer: tuple[str, ...] = (),
+) -> bool:
+    if _is_opaque_authority_history_pointer(relative_path, pointer):
+        return False
+    if isinstance(value, Mapping):
+        return any(
+            _text_contains_unresolved_template_marker(str(key))
+            or _json_value_contains_unresolved_template_marker(
+                item,
+                relative_path=relative_path,
+                pointer=(*pointer, str(key)),
+            )
+            for key, item in value.items()
+        )
+    if isinstance(value, list):
+        return any(
+            _json_value_contains_unresolved_template_marker(
+                item,
+                relative_path=relative_path,
+                pointer=(*pointer, str(index)),
+            )
+            for index, item in enumerate(value)
+        )
+    return isinstance(value, str) and _text_contains_unresolved_template_marker(value)
+
+
+def _file_contains_unresolved_template_marker(path: Path, relative_path: str) -> bool:
+    text = path.read_text(encoding="utf-8")
+    if path.suffix == ".json":
+        try:
+            value = json.loads(text)
+        except json.JSONDecodeError:
+            return _text_contains_unresolved_template_marker(text)
+        return _json_value_contains_unresolved_template_marker(
+            value,
+            relative_path=relative_path,
+        )
+    if path.suffix == ".jsonl":
+        for line in text.splitlines():
+            if not line.strip():
+                continue
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError:
+                return _text_contains_unresolved_template_marker(text)
+            if _json_value_contains_unresolved_template_marker(
+                value,
+                relative_path=relative_path,
+            ):
+                return True
+        return False
+    return _text_contains_unresolved_template_marker(text)
+
+
 def _scan_placeholders(root: Path) -> list[str]:
     findings: list[str] = []
     for path in sorted(root.rglob("*")):
         if not path.is_file() or path.suffix not in {".md", ".json", ".jsonl"}:
             continue
-        text = path.read_text(encoding="utf-8")
-        if PLACEHOLDER_RE.search(text) or "/absolute/path/to/" in text or "TBD" in text or "TODO" in text:
-            findings.append(path.relative_to(root).as_posix())
+        relative_path = path.relative_to(root).as_posix()
+        if _file_contains_unresolved_template_marker(path, relative_path):
+            findings.append(relative_path)
     return findings
 
 

@@ -2977,6 +2977,87 @@ class CompilerValidatorTests(unittest.TestCase):
         )
         self.assertEqual(validate_candidate(candidate)["status"], "PASS")
 
+    def test_frozen_historical_angle_bracket_literal_is_not_a_template_placeholder(self) -> None:
+        candidate = self.root / "historical-angle-bracket-candidate"
+        ir = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+        ir["target"]["output_root"] = str(candidate)
+        historical_reason = (
+            "The earlier request used the placeholder <new absolute empty path>; "
+            "that literal is retained only as frozen decision history."
+        )
+        ir["decisions"].append(
+            {
+                "decision_id": "DEC-HISTORICAL-ANGLE-BRACKET-001",
+                "kind": "REOPEN_REQUIREMENTS",
+                "reason": historical_reason,
+                "status": "CONFIRMED",
+            }
+        )
+
+        compile_candidate(
+            ir,
+            SPEC_ROOT,
+            self.root / "historical-angle-bracket-staging",
+            candidate,
+            CREATED_AT,
+        )
+
+        frozen = json.loads(
+            (candidate / "canonical_sources/FROZEN_REQUIREMENT_IR.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        decisions = json.loads(
+            (candidate / "canonical_sources/REQUIREMENT_DECISIONS.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(frozen["decisions"][-1]["reason"], historical_reason)
+        self.assertEqual(decisions["decisions"][-1]["reason"], historical_reason)
+        self.assertEqual(
+            validate_candidate(
+                candidate,
+                authoritative_sources=ir["sources"],
+                authoritative_requirement_ir=ir,
+            )["status"],
+            "PASS",
+        )
+
+    def test_active_and_generated_template_placeholders_remain_fail_closed(self) -> None:
+        candidate = self.root / "active-placeholder-candidate"
+        ir = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+        ir["target"]["output_root"] = str(candidate)
+        ir["target"]["name"] = "<TARGET-NAME>"
+
+        with self.assertRaisesRegex(ValueError, "unresolved template placeholders"):
+            compile_candidate(
+                ir,
+                SPEC_ROOT,
+                self.root / "active-placeholder-staging",
+                candidate,
+                CREATED_AT,
+            )
+        self.assertFalse(candidate.exists())
+
+        self._make_tree_writable(self.candidate)
+        context_path = self.candidate / "START_CONTEXT.json"
+        context = json.loads(context_path.read_text(encoding="utf-8"))
+        context["program_id"] = "<PROGRAM-ID>"
+        context["<UNRESOLVED-KEY>"] = "must remain detectable"
+        context_path.write_text(
+            json.dumps(context, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        findings = [
+            finding
+            for check in validate_candidate(self.candidate)["checks"]
+            for finding in check["findings"]
+        ]
+        self.assertIn(
+            "UNRESOLVED_TEMPLATE_PLACEHOLDER",
+            {finding["code"] for finding in findings},
+        )
+
     def test_structural_hash_repair_preserves_planned_executor_hash_contract(self) -> None:
         self._make_tree_writable(self.candidate)
         _repair_structural_hashes(self.candidate)
