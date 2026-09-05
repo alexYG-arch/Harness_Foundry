@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 from copy import deepcopy
 import hashlib
 import inspect
@@ -13,6 +14,7 @@ import tempfile
 import unittest
 
 from harness_foundry_factory.compiler import compile_candidate
+from harness_foundry_factory.invariant_contracts import registered_operator_findings
 from harness_foundry_factory.semantic_contracts import (
     build_artifact_obligation_manifest,
     build_composite_dependency_graph,
@@ -21,12 +23,15 @@ from harness_foundry_factory.semantic_contracts import (
     EXPLICIT_PRODUCTION_MODE,
     negative_case_specs_with_mandatory_controls,
     oracle_evaluator_registry,
+    PUBLIC_SKILL_METAMORPHIC_ENTRYPOINT_REF,
     PUBLIC_SKILL_METAMORPHIC_REPOSITORY_URL,
     PUBLIC_SKILL_METAMORPHIC_RESOLUTION_RECEIPT_REF,
     PUBLIC_SKILL_SOURCE_RESOLUTION_ENTRYPOINT,
+    PUBLIC_SKILL_JOB_PIPELINE_ENTRYPOINT,
     RESUMABLE_STAGE_ORDER,
     validate_composite_dependency_graph,
     validate_explicit_production_contracts,
+    _schema_declares_json_pointer,
 )
 from harness_foundry_factory.traceability import normalize_ir_coverage
 from harness_foundry_factory.validator import validate_candidate
@@ -2277,7 +2282,7 @@ class SemanticProductionContractTests(unittest.TestCase):
             ),
         )
 
-    def test_every_invariant_has_hash_bound_executable_contract(self) -> None:
+    def test_every_invariant_has_typed_executable_contract(self) -> None:
         self.configure_derived_media_atoms(
             (
                 "SOURCE_FREEZE_RECEIPT",
@@ -2318,9 +2323,12 @@ class SemanticProductionContractTests(unittest.TestCase):
             "quantifier",
             "subject_selector",
             "operand_refs",
+            "operand_types",
+            "cardinality",
+            "join_keys",
+            "evaluation_contract_kind",
             "evaluator_entrypoint",
             "predicate_ast",
-            "predicate_sha256",
         }
         contracts_by_kind: dict[str, dict[str, dict]] = {}
         for artifact in artifacts:
@@ -2331,10 +2339,22 @@ class SemanticProductionContractTests(unittest.TestCase):
             for invariant_id, contract in (contracts or {}).items():
                 self.assertTrue(required_fields.issubset(contract))
                 self.assertTrue(contract["input_refs"])
-                self.assertEqual(contract["target_ref"], contract["input_refs"][0])
+                # A negative Case edits one field; the operator may compare an
+                # entire collection or paired inputs in a different order.
+                self.assertTrue(_schema_declares_json_pointer(schema, contract["target_ref"]))
+                self.assertFalse(registered_operator_findings(contract["predicate_ast"]))
                 self.assertIn(contract["quantifier"], {"SINGLE", "FOR_ALL"})
                 self.assertTrue(contract["subject_selector"])
                 self.assertTrue(contract["operand_refs"])
+                self.assertEqual(
+                    len(contract["operand_types"]),
+                    len(contract["operand_refs"]),
+                )
+                self.assertEqual(
+                    contract["cardinality"]["operand_count"],
+                    len(contract["operand_refs"]),
+                )
+                self.assertNotIn("predicate_sha256", contract)
                 self.assertFalse(
                     {
                         "artifact://self",
@@ -2350,8 +2370,9 @@ class SemanticProductionContractTests(unittest.TestCase):
                     contract["predicate_ast"]["subject_selector"],
                     contract["subject_selector"],
                 )
-                if invariant_id.startswith(("EVERY_", "ALL_", "EACH_")):
-                    self.assertEqual(contract["quantifier"], "FOR_ALL")
+                if contract["quantifier"] == "SINGLE":
+                    self.assertNotIn("*", contract["subject_selector"])
+                else:
                     self.assertIn("*", contract["subject_selector"])
                 contracts_by_kind.setdefault(
                     artifact["artifact_kind"], {}
@@ -2479,14 +2500,6 @@ class SemanticProductionContractTests(unittest.TestCase):
         contract["predicate_ast"]["operand_refs"] = list(
             contract["operand_refs"]
         )
-        contract["predicate_sha256"] = hashlib.sha256(
-            json.dumps(
-                contract["predicate_ast"],
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        ).hexdigest()
         manifest_path.write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True)
             + "\n",
@@ -2550,20 +2563,24 @@ class SemanticProductionContractTests(unittest.TestCase):
                 invariant_id
             ]
             mutate(contract)
+            contract["operand_types"] = contract["operand_types"][: len(
+                contract["operand_refs"]
+            )]
+            contract["cardinality"]["operand_count"] = len(
+                contract["operand_refs"]
+            )
             contract["predicate_ast"]["operand_refs"] = list(
                 contract["operand_refs"]
+            )
+            contract["predicate_ast"]["operand_types"] = list(
+                contract["operand_types"]
+            )
+            contract["predicate_ast"]["cardinality"] = deepcopy(
+                contract["cardinality"]
             )
             contract["predicate_ast"]["parameters"] = deepcopy(
                 contract["parameters"]
             )
-            contract["predicate_sha256"] = hashlib.sha256(
-                json.dumps(
-                    contract["predicate_ast"],
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ).encode("utf-8")
-            ).hexdigest()
             manifest_path.write_text(
                 json.dumps(
                     manifest, ensure_ascii=False, indent=2, sort_keys=True
@@ -2584,15 +2601,7 @@ class SemanticProductionContractTests(unittest.TestCase):
             "ASSET_PROVENANCE_REFS_AND_HASHES_HAVE_EQUAL_CARDINALITY"
         ]
         contract["algorithm"] = "HASH_AND_BYTE_LINEAGE_V1"
-        contract["predicate_ast"]["operator"] = contract["algorithm"]
-        contract["predicate_sha256"] = hashlib.sha256(
-            json.dumps(
-                contract["predicate_ast"],
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        ).hexdigest()
+        contract["predicate_ast"]["algorithm"] = contract["algorithm"]
         manifest_path.write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True)
             + "\n",
@@ -2636,6 +2645,10 @@ class SemanticProductionContractTests(unittest.TestCase):
             vector["input"]["skill_url"],
             PUBLIC_SKILL_METAMORPHIC_REPOSITORY_URL,
         )
+        self.assertEqual(
+            vector["input"]["skill_entrypoint_ref"],
+            PUBLIC_SKILL_METAMORPHIC_ENTRYPOINT_REF,
+        )
         self.assertNotIn("resolved_source", vector)
         resolution = vector["resolution_contract"]
         self.assertEqual(
@@ -2659,6 +2672,10 @@ class SemanticProductionContractTests(unittest.TestCase):
                     "sha256_pointer": "/resolved_tree_sha256",
                 },
                 {
+                    "ref_pointer": "/resolved_skill_entrypoint_ref",
+                    "sha256_pointer": "/resolved_skill_entrypoint_sha256",
+                },
+                {
                     "ref_pointer": "/resolution_command_receipt_ref",
                     "sha256_pointer": "/resolution_command_receipt_sha256",
                 },
@@ -2675,6 +2692,12 @@ class SemanticProductionContractTests(unittest.TestCase):
         )
         self.assertNotIn(
             "requested_revision", specialization["job_identity_fields"]
+        )
+        self.assertIn(
+            "skill_entrypoint_ref", specialization["job_identity_fields"]
+        )
+        self.assertTrue(
+            vector["expected"]["video_artifact_descriptor_required"]
         )
         case_manifest = json.loads(
             (
@@ -2705,7 +2728,7 @@ class SemanticProductionContractTests(unittest.TestCase):
         )
         self.assertEqual(
             command["implementation_entrypoint"],
-            PUBLIC_SKILL_SOURCE_RESOLUTION_ENTRYPOINT,
+            PUBLIC_SKILL_JOB_PIPELINE_ENTRYPOINT,
         )
         self.assertEqual(
             command["parameter_contract"]["source_resolution_entrypoint"],
@@ -2729,8 +2752,53 @@ class SemanticProductionContractTests(unittest.TestCase):
             "run-metamorphic-case before content analysis.",
             lab_contract["implementation_obligations"],
         )
+        self.assertEqual(contract["status"], "DECLARE_ONLY_NOT_RUN")
+
+    def test_personal_local_candidate_omits_release_only_negative_cases(self) -> None:
+        self.ir["target"]["start_package_immutability_policy"] = {
+            "physical_permission_enforcement": "BEST_EFFORT_PERSONAL_LOCAL",
+            "permission_drift_disposition": "NON_BLOCKING_DIAGNOSTIC",
+        }
+        self.compile()
+        negative = json.loads(
+            (
+                self.candidate / "validation/NEGATIVE_CASES.json"
+            ).read_text(encoding="utf-8")
+        )
+        cases = {case["case_id"]: case for case in negative["cases"]}
+        self.assertIn("NEG-HF28-CODEX-SELF-REPORT", cases)
+        self.assertNotIn("NEG-HF28-ATTESTATION-REPLAY", cases)
+        self.assertNotIn("NEG-HF28-THREE-PROJECT-ORDER", cases)
         self.assertEqual(
-            contract["status"], "DECLARE_ONLY_NOT_RUN"
+            cases["NEG-HF28-CODEX-SELF-REPORT"]["assurance_profile"],
+            "LOCAL_EXEC_UNTRUSTED_INPUT",
+        )
+
+    def test_validator_does_not_reuse_producer_registry_builders(self) -> None:
+        validator_path = (
+            REPOSITORY_ROOT / "src/harness_foundry_factory/validator.py"
+        )
+        tree = ast.parse(validator_path.read_text(encoding="utf-8"))
+        forbidden = {"oracle_evaluator_registry", "repository_job_bindings"}
+        imported = {
+            alias.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom)
+            and (node.module or "").endswith("semantic_contracts")
+            for alias in node.names
+        }
+        called = {
+            node.func.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        self.assertFalse(
+            forbidden & imported,
+            "Validator must not import Producer registry builders",
+        )
+        self.assertFalse(
+            forbidden & called,
+            "Validator must independently validate persisted registry bytes",
         )
 
     def test_validator_rejects_public_resolver_reachability_drift(self) -> None:
@@ -2753,9 +2821,9 @@ class SemanticProductionContractTests(unittest.TestCase):
                 if item["command_id"] == "LAB-RUN-METAMORPHIC-CASE"
             )
             if replacement is None:
-                command.pop("implementation_entrypoint")
+                command["job_pipeline_contract"].pop("source_resolution_entrypoint")
             else:
-                command["implementation_entrypoint"] = replacement
+                command["job_pipeline_contract"]["source_resolution_entrypoint"] = replacement
             command["command_sha256"] = hashlib.sha256(
                 json.dumps(
                     {
@@ -2944,14 +3012,6 @@ class SemanticProductionContractTests(unittest.TestCase):
             "const"
         ]
         contract["predicate_ast"]["branch_selector"] = wrong_selector
-        contract["predicate_sha256"] = hashlib.sha256(
-            json.dumps(
-                contract["predicate_ast"],
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        ).hexdigest()
         manifest_path.write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True)
             + "\n",
@@ -3000,14 +3060,6 @@ class SemanticProductionContractTests(unittest.TestCase):
             "const"
         ]
         contract["predicate_ast"]["branch_selector"] = wrong_selector
-        contract["predicate_sha256"] = hashlib.sha256(
-            json.dumps(
-                contract["predicate_ast"],
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        ).hexdigest()
         manifest_path.write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True)
             + "\n",
@@ -3137,6 +3189,59 @@ class SemanticProductionContractTests(unittest.TestCase):
             encoding="utf-8",
         )
 
+        self.assertIn(
+            "PUBLIC_SKILL_JOB_CASE_CLOSURE_INCOMPLETE",
+            self.finding_codes(),
+        )
+
+    def test_validator_rejects_public_skill_entrypoint_identity_drift(self) -> None:
+        self.compile()
+        self.make_candidate_writable()
+        path = self.candidate / "validation/PUBLIC_SKILL_JOB_INTERFACE.json"
+        contract = json.loads(path.read_text(encoding="utf-8"))
+        contract["metamorphic_acceptance_vector"]["input"][
+            "skill_entrypoint_ref"
+        ] = "README.md"
+        contract["interface_sha256"] = hashlib.sha256(
+            json.dumps(
+                {
+                    key: value
+                    for key, value in contract.items()
+                    if key != "interface_sha256"
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        path.write_text(
+            json.dumps(contract, ensure_ascii=False, indent=2, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
+        self.assertIn(
+            "PUBLIC_SKILL_JOB_INTERFACE_INVALID", self.finding_codes()
+        )
+
+    def test_validator_rejects_public_video_descriptor_removal(self) -> None:
+        self.compile()
+        self.make_candidate_writable()
+        manifest = json.loads(
+            (
+                self.candidate / "validation/CASE_EXECUTION_MANIFEST.json"
+            ).read_text(encoding="utf-8")
+        )
+        invocation = manifest["metamorphic_case_invocations"][0]
+        schema_path = self.candidate / invocation[
+            "result_schema_ref"
+        ].removeprefix("harness-resource://candidate/")
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        schema["properties"]["artifacts"]["required"].remove("video")
+        schema_path.write_text(
+            json.dumps(schema, ensure_ascii=False, indent=2, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
         self.assertIn(
             "PUBLIC_SKILL_JOB_CASE_CLOSURE_INCOMPLETE",
             self.finding_codes(),

@@ -17,6 +17,18 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from .assurance_profiles import (
+    DISTRIBUTED_RELEASE_ADVERSARIAL,
+    assurance_profile_for_start_package,
+    filter_hf28_negative_case_ids,
+)
+from .artifact_descriptors import (
+    JOB_ARTIFACT_DESCRIPTOR_SCHEMA,
+    diagnose_candidate_hash_projections,
+)
+from .invariant_contracts import validate_invariant_contract_v1, registered_operator_findings
+from .media_evidence_contracts import media_contract_errors
+from .contract_references import resolve_candidate_operand
 from .constants import (
     BASELINE_FACTORY_ID,
     DAG_WORKPACK_BINDINGS,
@@ -50,16 +62,17 @@ from .semantic_contracts import (
     ORACLE_EVALUATOR_REGISTRY_REF,
     PUBLIC_SKILL_JOB_INTERFACE_REF,
     PUBLIC_SKILL_METAMORPHIC_CASE_ID,
+    PUBLIC_SKILL_METAMORPHIC_ENTRYPOINT_REF,
     PUBLIC_SKILL_METAMORPHIC_REPOSITORY_URL,
     PUBLIC_SKILL_METAMORPHIC_RESOLUTION_RECEIPT_REF,
     PUBLIC_SKILL_SOURCE_RESOLUTION_ENTRYPOINT,
+    PUBLIC_SKILL_JOB_PIPELINE_ENTRYPOINT,
+    RESUMABLE_STAGE_ORDER,
     build_artifact_obligation_manifest,
     explicit_production_enabled,
-    oracle_evaluator_registry,
     case_result_ref,
     registry_case_result_ref,
     required_artifact_kinds_for_case,
-    repository_job_bindings,
     task_bundle_for_workpack,
     validate_composite_dependency_graph,
     validate_explicit_production_contracts,
@@ -1975,6 +1988,19 @@ def _check_nonexecutable_negative_fixture_schema(
     return findings
 
 
+def _public_entrypoint_pattern_is_complete(pattern: Any) -> bool:
+    if not isinstance(pattern, str):
+        return False
+    try:
+        return all(re.fullmatch(pattern, path) is not None for path in (
+            "SKILL.md", "skills/example/SKILL.md", "skills/.system/example/SKILL.md",
+        )) and all(re.fullmatch(pattern, path) is None for path in (
+            "/SKILL.md", "../SKILL.md", "skills/../SKILL.md", "README.md",
+        ))
+    except re.error:
+        return False
+
+
 def _public_skill_job_interface_is_valid(
     interface: Any, frozen_ir: Mapping[str, Any]
 ) -> bool:
@@ -2018,19 +2044,24 @@ def _public_skill_job_interface_is_valid(
     identity_fields = [
         "request_id",
         "normalized_skill_url",
+        "skill_entrypoint_ref",
         "resolved_commit_sha",
         "resolved_git_tree_oid",
         "resolved_tree_sha256",
+        "resolved_skill_entrypoint_sha256",
     ]
     expected_resolution_required = {
         "request_id",
         "skill_url",
         "requested_revision",
+        "skill_entrypoint_ref",
         "normalized_skill_url",
         "resolved_commit_sha",
         "resolved_git_tree_oid",
         "resolved_tree_ref",
         "resolved_tree_sha256",
+        "resolved_skill_entrypoint_ref",
+        "resolved_skill_entrypoint_sha256",
         "resolution_command_receipt_ref",
         "resolution_command_receipt_sha256",
         "repository_readable",
@@ -2040,6 +2071,10 @@ def _public_skill_job_interface_is_valid(
         {
             "ref_pointer": "/resolved_tree_ref",
             "sha256_pointer": "/resolved_tree_sha256",
+        },
+        {
+            "ref_pointer": "/resolved_skill_entrypoint_ref",
+            "sha256_pointer": "/resolved_skill_entrypoint_sha256",
         },
         {
             "ref_pointer": "/resolution_command_receipt_ref",
@@ -2052,7 +2087,6 @@ def _public_skill_job_interface_is_valid(
             {
                 "atom_id": str(atom_id),
                 "artifact_kind": str(profile.get("artifact_kind") or ""),
-                "schema_sha256": _json_hash(profile.get("schema")),
             }
             for atom_id, profile in (
                 catalog.items() if isinstance(catalog, Mapping) else []
@@ -2076,7 +2110,13 @@ def _public_skill_job_interface_is_valid(
         and isinstance(skill_url_schema.get("pattern"), str)
         and re.fullmatch(skill_url_schema["pattern"], skill_url) is not None
         and skill_url == PUBLIC_SKILL_METAMORPHIC_REPOSITORY_URL
-        and frozen_fixtures == repository_job_bindings(frozen_ir)
+        and input_value.get("skill_entrypoint_ref")
+        == PUBLIC_SKILL_METAMORPHIC_ENTRYPOINT_REF
+        and request_schema.get("required", []).count("skill_entrypoint_ref")
+        == 1
+        and _public_entrypoint_pattern_is_complete(
+            schema_properties.get("skill_entrypoint_ref", {}).get("pattern"))
+        and frozen_fixtures == _independent_repository_job_bindings(frozen_ir)
         and skill_url not in frozen_urls
         and vector.get("case_id") == PUBLIC_SKILL_METAMORPHIC_CASE_ID
         and "resolved_source" not in vector
@@ -2097,6 +2137,8 @@ def _public_skill_job_interface_is_valid(
         == skill_url
         and resolution_properties.get("requested_revision", {}).get("const")
         == input_value.get("requested_revision")
+        and resolution_properties.get("skill_entrypoint_ref", {}).get("const")
+        == input_value.get("skill_entrypoint_ref")
         and resolution_properties.get("normalized_skill_url", {}).get(
             "const"
         )
@@ -2112,6 +2154,14 @@ def _public_skill_job_interface_is_valid(
         and resolution_properties.get("resolved_tree_sha256", {}).get(
             "pattern"
         )
+        == "^[0-9a-f]{64}$"
+        and resolution_properties.get(
+            "resolved_skill_entrypoint_ref", {}
+        ).get("const")
+        == input_value.get("skill_entrypoint_ref")
+        and resolution_properties.get(
+            "resolved_skill_entrypoint_sha256", {}
+        ).get("pattern")
         == "^[0-9a-f]{64}$"
         and resolution_schema.get("x-ref-sha256-bindings")
         == expected_resolution_bindings
@@ -2135,6 +2185,28 @@ def _public_skill_job_interface_is_valid(
         and specialization.get("resolved_tree_bytes_must_hash_match") is True
         and specialization.get("schema_template_bindings")
         == expected_templates
+        and specialization.get("template_binding_role")
+        == "INPUT_CATALOG_NOT_COMPLETE_OUTPUT_ARTIFACT_SET"
+        and specialization.get("job_pipeline_entrypoint")
+        == PUBLIC_SKILL_JOB_PIPELINE_ENTRYPOINT
+        and specialization.get("artifact_derivation_contract") == {
+            "algorithm": "RECOMPILE_FROZEN_CATALOG_WITH_SINGLE_RESOLVED_JOB_V1",
+            "input": "HASH_VERIFIED_SOURCE_RESOLUTION_AND_DERIVED_JOB_ID",
+            "supplemental_artifacts": {
+                "LOCAL_TTS_RECEIPT": ["NARRATION_SCRIPT"],
+                "OBJECT_MOTION_IR": ["ASSET_BINDING_RECEIPT"],
+            },
+            "stage_order": list(RESUMABLE_STAGE_ORDER),
+            "dependency_rule": "REUSE_COMPLETE_ARTIFACT_DEPENDENCY_COMPILER_FOR_ONE_JOB",
+            "renderer_binding": "PRESERVE_FROZEN_RENDERER_SEPARATE_FROM_DYNAMIC_CONTENT_SOURCE",
+            "write_root_rule": "EXECUTION_JOBS_DERIVED_JOB_ID_ONLY",
+            "execution_enabled": False,
+        }
+        and specialization.get("schema_catalog_ref")
+        == (
+            "harness-resource://candidate/canonical_sources/"
+            "FROZEN_REQUIREMENT_IR.json#/target/artifact_schema_catalog"
+        )
         and expected.get("job_id_derivation")
         == specialization.get("job_id_derivation")
         and "expected_job_id" not in expected
@@ -2144,6 +2216,11 @@ def _public_skill_job_interface_is_valid(
         and expected.get("output_video_count") == 1
         and expected.get("source_is_frozen_before_analysis") is True
         and expected.get("source_resolution_receipt_required") is True
+        and expected.get("skill_entrypoint_identity_required") is True
+        and expected.get("video_artifact_descriptor_required") is True
+        and expected.get("media_acceptance_artifact_descriptor_required")
+        is True
+        and expected.get("job_artifact_lease_descriptor_required") is True
         and expected.get("target_skill_execution_enabled") is False
         and vector.get("oracle", {}).get("algorithm_id")
         == "PUBLIC-SKILL-JOB-METAMORPHIC-ORACLE-V2"
@@ -2153,6 +2230,206 @@ def _public_skill_job_interface_is_valid(
         and interface.get("interface_sha256")
         == _hash_without_field(interface, "interface_sha256")
     )
+
+
+def _independent_repository_job_bindings(
+    requirement_ir: Mapping[str, Any],
+) -> list[dict[str, str]]:
+    """Reconstruct fixed repository jobs without invoking Producer helpers."""
+
+    jobs: list[dict[str, str]] = []
+    for source in requirement_ir.get("sources", []):
+        if not isinstance(source, Mapping) or not source.get("repository_url"):
+            continue
+        source_id = str(source.get("source_id") or "")
+        safe_source_id = "".join(
+            character if character.isalnum() else "-"
+            for character in source_id.upper()
+        ).strip("-")
+        jobs.append(
+            {
+                "job_id": f"FIXTURE-JOB-{safe_source_id}",
+                "source_id": source_id,
+                "repository_url": str(source["repository_url"]),
+                "revision": str(source.get("revision") or ""),
+                "commit_sha": str(source.get("commit_sha") or ""),
+                "git_tree_oid": str(source.get("git_tree_oid") or ""),
+                "tree_sha256": str(
+                    source.get("tree_sha256") or source.get("sha256") or ""
+                ),
+                "license_spdx": str(source.get("license_spdx") or ""),
+            }
+        )
+    return jobs
+
+
+def _oracle_registry_is_independently_consistent(
+    registry: Any,
+    artifact_index: Mapping[str, Any],
+) -> bool:
+    """Validate registry coverage from emitted artifact contracts, not Producer output."""
+
+    if not isinstance(registry, Mapping):
+        return False
+    if (
+        registry.get("schema_version") != "1.0"
+        or registry.get("status") != "DECLARE_ONLY_NOT_IMPLEMENTED_NOT_RUN"
+        or registry.get("execution_started") is not False
+        or registry.get("registry_sha256")
+        != _hash_without_field(registry, "registry_sha256")
+    ):
+        return False
+    evaluators = registry.get("evaluators")
+    invariant_matrix = registry.get("invariant_negative_case_matrix")
+    schema_matrix = registry.get("schema_native_negative_case_matrix")
+    if (
+        not isinstance(evaluators, Mapping)
+        or not isinstance(invariant_matrix, list)
+        or not isinstance(schema_matrix, list)
+    ):
+        return False
+    schemas_by_kind: dict[str, list[Mapping[str, Any]]] = {}
+    for artifact in artifact_index.values():
+        if not isinstance(artifact, Mapping):
+            return False
+        artifact_kind = str(artifact.get("artifact_kind") or "")
+        schema = artifact.get("schema")
+        if not artifact_kind or not isinstance(schema, Mapping):
+            return False
+        schemas_by_kind.setdefault(artifact_kind, []).append(schema)
+    evaluator_kinds = {
+        str(evaluator.get("artifact_kind") or "")
+        for evaluator in evaluators.values()
+        if isinstance(evaluator, Mapping)
+    }
+    if not set(schemas_by_kind).issubset(evaluator_kinds):
+        return False
+    expected_pairs: dict[tuple[str, str], tuple[Mapping[str, Any], list[str], str]] = {}
+    for evaluator_id, evaluator in evaluators.items():
+        if not isinstance(evaluator, Mapping):
+            return False
+        artifact_kind = str(evaluator.get("artifact_kind") or "")
+        contracts = evaluator.get("invariant_contracts")
+        if contracts is None:
+            if (
+                not isinstance(evaluator.get("implementation_entrypoint"), str)
+                or not evaluator.get("implementation_entrypoint")
+                or not isinstance(evaluator.get("required_inputs"), list)
+            ):
+                return False
+            continue
+        if not isinstance(contracts, Mapping):
+            return False
+        schema_contract_sets = [
+            schema.get("x-invariant-contracts", {})
+            for schema in schemas_by_kind.get(artifact_kind, [])
+        ]
+        if schema_contract_sets and any(
+            not isinstance(item, Mapping) or item != contracts
+            for item in schema_contract_sets
+        ):
+            return False
+        if (
+            evaluator.get("declared_invariant_count") != len(contracts)
+            or evaluator.get("invariant_contracts_sha256")
+            != _json_hash(contracts)
+        ):
+            return False
+        schema_hashes = sorted(
+            {
+                _json_hash(schema)
+                for schema in schemas_by_kind.get(artifact_kind, [])
+            }
+        )
+        for invariant_id, contract in contracts.items():
+            expected_pairs[(artifact_kind, str(invariant_id))] = (
+                contract,
+                schema_hashes,
+                str(evaluator_id),
+            )
+    observed_pairs: set[tuple[str, str]] = set()
+    for case in invariant_matrix:
+        if not isinstance(case, Mapping):
+            return False
+        pair = (
+            str(case.get("artifact_kind") or ""),
+            str(case.get("invariant_id") or ""),
+        )
+        expected = expected_pairs.get(pair)
+        if expected is None or pair in observed_pairs:
+            return False
+        contract, schema_hashes, evaluator_id = expected
+        applicable_schema_hashes = case.get("applicable_schema_sha256s")
+        mutation = case.get("mutation", {})
+        recipe = mutation.get("derivation_recipe", {})
+        selector = contract.get("branch_selector", {})
+        if selector.get("mode") == "REQUIRE_DISCRIMINATOR_CONST" and (
+            recipe.get("required_base_branch") != selector.get("const")
+            or case.get("base_precondition", {}).get("required_branch") != selector.get("const")
+        ):
+            return False
+        # Independent projection from schema-defined derivations, not from the
+        # Producer recipe. Only non-target canonical parents may be rebuilt.
+        expected_recomputations = []
+        peer_contracts = schemas_by_kind[pair[0]][0].get("x-invariant-contracts", {})
+        for peer in peer_contracts.values():
+            source = peer.get("parameters", {}).get("canonical_value_ref")
+            target = peer.get("target_ref")
+            if (peer.get("algorithm") == "CANONICAL_JSON_VALUE_HASH_V1"
+                    and isinstance(source, str) and isinstance(target, str)
+                    and str(contract.get("target_ref", "")).startswith(source.rstrip("/") + "/")
+                    and target != contract.get("target_ref")):
+                expected_recomputations.append({"algorithm": "CANONICAL_JSON_VALUE_HASH_V1",
+                    "source_ref": source, "target_ref": target})
+        if contract.get("algorithm") == "RENDER_INPUT_ASSET_SET_EQUALITY_V1" and (
+            recipe.get("strategy") != "MUTATE_REFERENCED_ASSET_DIGEST_AND_REBIND_MANIFEST"
+            or recipe.get("referenced_document_mutation") != {
+                "ref_pointer": "/render_input_manifest_ref",
+                "sha256_pointer": "/render_input_manifest_sha256",
+                "value_pointer": "/assets/0/asset_sha256",
+                "replacement_rule": "DIFFERENT_VALID_SHA256",
+            }
+        ):
+            return False
+        if contract.get("algorithm") == "REFERENCED_JSON_FIELD_EQUALITY_V1" and (
+            recipe.get("strategy") != "MUTATE_REFERENCED_FFPROBE_INPUT_AND_REBIND_RECEIPT"
+            or recipe.get("target_ref_role") != "RELATION_ANCHOR_NOT_MUTATED"
+            or recipe.get("preserved_top_level_refs") != ["/video_sha256"]
+            or recipe.get("referenced_document_mutation") != {
+                "ref_pointer": "/ffprobe_receipt_ref",
+                "sha256_pointer": "/ffprobe_receipt_sha256",
+                "value_pointer": "/input_sha256",
+                "replacement_rule": "DIFFERENT_VALID_SHA256",
+            }
+        ):
+            return False
+        if (recipe.get("derived_field_recomputations") != sorted(expected_recomputations, key=lambda item: item["target_ref"])
+                or recipe.get("result_classification") != {
+                    "success": "SCHEMA_PASS_AND_EXACT_TARGET_INVARIANT_FAILURE",
+                    "timeout_or_runner_error": "INCONCLUSIVE",
+                    "schema_rejection": "NOT_INVARIANT_EVIDENCE",
+                    "missing_counterexample": "INCONCLUSIVE_NOT_PASS",
+                    "recomputation_order": "AFTER_MUTATION_BEFORE_SCHEMA_AND_ALL_ORACLES",
+                }
+                or mutation.get("post_mutation_failed_invariant_ids") != [pair[1]]
+                or mutation.get("all_other_invariant_ids_expected") != "PASS"):
+            return False
+        if (
+            case.get("evaluator_id") != evaluator_id
+            or case.get("invariant_contract") != contract
+            or case.get("invariant_contract_sha256") != _json_hash(contract)
+            or not isinstance(applicable_schema_hashes, list)
+            or not applicable_schema_hashes
+            or not all(
+                isinstance(value, str) and SHA256_RE.fullmatch(value)
+                for value in applicable_schema_hashes
+            )
+            or (schema_hashes and applicable_schema_hashes != schema_hashes)
+            or case.get("apply_to_every_schema_instance") is not True
+        ):
+            return False
+        observed_pairs.add(pair)
+    return observed_pairs == set(expected_pairs)
 
 
 def _strict_public_metamorphic_result_schema(
@@ -2170,12 +2447,14 @@ def _strict_public_metamorphic_result_schema(
         "request_id",
         "normalized_skill_url",
         "requested_revision",
+        "skill_entrypoint_ref",
         "resolution_receipt_ref",
         "resolution_receipt_sha256",
         "resolved_commit_sha",
         "resolved_git_tree_oid",
         "resolved_tree_ref",
         "resolved_tree_sha256",
+        "resolved_skill_entrypoint_sha256",
         "derived_job_id",
         "output_video_count",
         "source_is_frozen_before_analysis",
@@ -2183,6 +2462,7 @@ def _strict_public_metamorphic_result_schema(
         "command_receipt_ref",
         "command_receipt_sha256",
         "side_effects_started",
+        "artifacts",
         "oracle_decision",
         "status",
     }
@@ -2202,6 +2482,10 @@ def _strict_public_metamorphic_result_schema(
             "sha256_pointer": "/resolved_tree_sha256",
         },
         {
+            "ref_pointer": "/skill_entrypoint_ref",
+            "sha256_pointer": "/resolved_skill_entrypoint_sha256",
+        },
+        {
             "ref_pointer": "/command_receipt_ref",
             "sha256_pointer": "/command_receipt_sha256",
         },
@@ -2214,9 +2498,11 @@ def _strict_public_metamorphic_result_schema(
         "identity_field_pointers": [
             "/request_id",
             "/normalized_skill_url",
+            "/skill_entrypoint_ref",
             "/resolved_commit_sha",
             "/resolved_git_tree_oid",
             "/resolved_tree_sha256",
+            "/resolved_skill_entrypoint_sha256",
         ],
         "output_pointer": "/derived_job_id",
         "output_format": "JOB-UPPERCASE-FIRST-16-SHA256-HEX",
@@ -2239,6 +2525,8 @@ def _strict_public_metamorphic_result_schema(
         .rstrip("/")
         and properties.get("requested_revision", {}).get("const")
         == input_value.get("requested_revision")
+        and properties.get("skill_entrypoint_ref", {}).get("const")
+        == input_value.get("skill_entrypoint_ref")
         and properties.get("resolution_receipt_ref", {}).get("const")
         == resolution.get("resolution_receipt_ref")
         and properties.get("resolution_receipt_sha256", {}).get("pattern")
@@ -2249,6 +2537,10 @@ def _strict_public_metamorphic_result_schema(
         == "^[0-9a-f]{40}$"
         and properties.get("resolved_tree_sha256", {}).get("pattern")
         == "^[0-9a-f]{64}$"
+        and properties.get("resolved_skill_entrypoint_sha256", {}).get(
+            "pattern"
+        )
+        == "^[0-9a-f]{64}$"
         and properties.get("derived_job_id", {}).get("pattern")
         == "^JOB-[0-9A-F]{16}$"
         and properties.get("output_video_count", {}).get("const") == 1
@@ -2258,15 +2550,58 @@ def _strict_public_metamorphic_result_schema(
         is True
         and properties.get("target_skill_execution_enabled", {}).get("const")
         is False
-        and properties.get("side_effects_started", {}).get("const") is False
+        and properties.get("side_effects_started", {}).get("type")
+        == "boolean"
+        and properties.get("artifacts")
+        == {
+            "type": "object",
+            "additionalProperties": False,
+            "required": [
+                "video",
+                "media_acceptance_receipt",
+                "job_artifact_lease",
+            ],
+            "properties": {
+                "video": JOB_ARTIFACT_DESCRIPTOR_SCHEMA,
+                "media_acceptance_receipt": JOB_ARTIFACT_DESCRIPTOR_SCHEMA,
+                "job_artifact_lease": JOB_ARTIFACT_DESCRIPTOR_SCHEMA,
+            },
+        }
         and schema.get("x-ref-sha256-bindings") == ref_bindings
+        and schema.get("x-job-artifact-binding") == {
+            "job_id_pointer": "/derived_job_id",
+            "descriptor_names": ["video", "media_acceptance_receipt", "job_artifact_lease"],
+            "descriptor_job_field": "producer_job_id",
+            "verify_exact_bytes_and_size": True,
+            "media_video_fields": ["video_ref", "video_sha256"],
+            "receipt_job_field": "job_id",
+            "lease_scope_field": "allowed_write_roots",
+            "implementation_entrypoint": "external_lab.oracle:verify_job_artifact_descriptors_v1",
+        }
         and schema.get("x-job-identity-derivation") == identity_contract
         and schema.get("x-invariants")
         == [
             "RESOLUTION_RECEIPT_SHA256_MATCHES_REFERENCED_BYTES",
             "RESOLVED_TREE_SHA256_MATCHES_REFERENCED_BYTES",
             "RESULT_RESOLVED_FIELDS_EQUAL_HASH_VERIFIED_RESOLUTION_RECEIPT",
+            "RESOLVED_SKILL_ENTRYPOINT_SHA256_MATCHES_TREE_MEMBER_BYTES",
             "DERIVED_JOB_ID_EQUALS_CANONICAL_RESOLVED_IDENTITY_HASH",
+            "PASS_RESULT_HAS_VIDEO_MEDIA_ACCEPTANCE_AND_JOB_LEASE_DESCRIPTORS",
+        ]
+        and schema.get("allOf")
+        == [
+            {
+                "if": {
+                    "properties": {"status": {"const": "PASS"}},
+                    "required": ["status"],
+                },
+                "then": {
+                    "properties": {
+                        "oracle_decision": {"const": "PASS"},
+                        "side_effects_started": {"const": True},
+                    }
+                },
+            }
         ]
     )
 
@@ -2328,37 +2663,11 @@ def _check_executable_acceptance_and_oracles(
         if isinstance(artifact_manifest, Mapping)
         else {}
     )
-    artifact_kinds = {
-        str(item.get("artifact_kind"))
-        for item in (
-            artifact_index.values()
-            if isinstance(artifact_index, Mapping)
-            else []
-        )
-        if isinstance(item, Mapping) and item.get("artifact_kind")
-    }
-    try:
-        expected_oracle_registry = oracle_evaluator_registry(
-            artifact_kinds,
-            [
-                item
-                for item in (
-                    artifact_index.values()
-                    if isinstance(artifact_index, Mapping)
-                    else []
-                )
-                if isinstance(item, Mapping)
-            ],
-        )
-    except ValueError as exc:
-        expected_oracle_registry = None
-        findings.append(
-            _finding(
-                "ARTIFACT_INVARIANT_CONTRACT_INCOMPLETE",
-                str(exc),
-            )
-        )
-    repository_pins = repository_job_bindings(
+    registry_is_consistent = _oracle_registry_is_independently_consistent(
+        registry,
+        artifact_index if isinstance(artifact_index, Mapping) else {},
+    )
+    repository_pins = _independent_repository_job_bindings(
         source_manifest if isinstance(source_manifest, Mapping) else {}
     )
     commands = {
@@ -2633,7 +2942,20 @@ def _check_executable_acceptance_and_oracles(
         and commands.get("LAB-RUN-METAMORPHIC-CASE", {}).get(
             "implementation_entrypoint"
         )
-        == PUBLIC_SKILL_SOURCE_RESOLUTION_ENTRYPOINT
+        == PUBLIC_SKILL_JOB_PIPELINE_ENTRYPOINT
+        and commands.get("LAB-RUN-METAMORPHIC-CASE", {}).get("job_pipeline_contract") == {
+            "source_resolution_entrypoint": PUBLIC_SKILL_SOURCE_RESOLUTION_ENTRYPOINT,
+            "specialization_ref": f"{PUBLIC_SKILL_JOB_INTERFACE_REF}#/dynamic_specialization_contract",
+            "sequence": ["RESOLVE_AND_VERIFY_SOURCE", "DERIVE_JOB_ID", "SPECIALIZE_ARTIFACT_GRAPH",
+                         "ACQUIRE_ONE_JOB_LEASE", "RUN_DECLARED_STAGES", "VERIFY_JOB_DESCRIPTORS"],
+            "lease_authority": "EXISTING_EXECUTION_AUTHORIZATION_ONLY",
+            "lease_job_id_pointer": "/derived_job_id",
+            "leased_read_scope": "TRANSITIVE_ARTIFACT_INPUTS_AND_DECLARED_RUNTIME_PROVIDERS_FOR_ONE_JOB",
+            "leased_write_root": {"root_ref": "harness-resource://execution/jobs", "child_from_pointer": "/derived_job_id"},
+            "caller_write_scope": "CASE_RECEIPTS_ONLY",
+            "descriptor_consumer": "external_lab.oracle:verify_job_artifact_descriptors_v1",
+            "authoring_execution_forbidden": True,
+        }
         and commands.get("LAB-RUN-METAMORPHIC-CASE", {}).get(
             "parameter_contract", {}
         ).get("source_resolution_entrypoint")
@@ -2698,7 +3020,7 @@ def _check_executable_acceptance_and_oracles(
             else None
         ),
         metamorphic_invocation.get("source_resolution_entrypoint"),
-        metamorphic_command.get("implementation_entrypoint"),
+        metamorphic_command.get("job_pipeline_contract", {}).get("source_resolution_entrypoint"),
         metamorphic_command.get("parameter_contract", {}).get(
             "source_resolution_entrypoint"
         ),
@@ -2713,6 +3035,8 @@ def _check_executable_acceptance_and_oracles(
             resolver_obligation
             not in lab_cli_case_contract.get("implementation_obligations", [])
         )
+        if lab_cli_case_contract.get("required_job_pipeline_entrypoint") != PUBLIC_SKILL_JOB_PIPELINE_ENTRYPOINT:
+            findings.append(_finding("PUBLIC_SKILL_JOB_PIPELINE_BINDING_MISMATCH", "LAB-CLI"))
     resolver_mismatch = any(
         value is not None
         and value != PUBLIC_SKILL_SOURCE_RESOLUTION_ENTRYPOINT
@@ -2775,8 +3099,7 @@ def _check_executable_acceptance_and_oracles(
         or not _strict_public_metamorphic_result_schema(
             public_schema, public_vector
         )
-        or expected_oracle_registry is None
-        or registry != expected_oracle_registry
+        or not registry_is_consistent
         or manifest.get("oracle_evaluator_registry_ref")
         != ORACLE_EVALUATOR_REGISTRY_REF
         or manifest.get("oracle_evaluator_registry_sha256")
@@ -10642,7 +10965,7 @@ def validate_candidate(
 ) -> dict[str, Any]:
     """Public fail-closed Candidate validation; no prepublication bypass."""
 
-    return _validate_candidate(
+    report = _validate_candidate(
         root,
         spec_lock,
         expected_target_root=expected_target_root,
@@ -10653,6 +10976,9 @@ def validate_candidate(
         authority_events=authority_events,
         prepublication_validation=False,
     )
+    if require_internal_report:
+        report["diagnostics"] = {"hash_projections": diagnose_candidate_hash_projections(root)}
+    return report
 
 
 def _validate_prepublication_staging_candidate(
@@ -12611,9 +12937,12 @@ def _independent_invariant_contract_findings(
         "quantifier",
         "subject_selector",
         "operand_refs",
+        "operand_types",
+        "cardinality",
+        "join_keys",
+        "evaluation_contract_kind",
         "evaluator_entrypoint",
         "predicate_ast",
-        "predicate_sha256",
     }
     structurally_invalid = not isinstance(contracts, Mapping) or set(
         contracts or {}
@@ -12652,6 +12981,18 @@ def _independent_invariant_contract_findings(
             "const": "DENIED_NO_SIDE_EFFECT",
         },
     }
+    expected_branch_selectors.update({name: {
+        "mode": "REQUIRE_DISCRIMINATOR_CONST", "discriminator_ref": "/status",
+        "const": "AUTHORIZED_EXECUTION_RECEIPT_VALID",
+    } for name in {
+        "AUTHORIZED_ENVIRONMENT_MANIFEST_SHA256_EQUALS_CURRENT_ENVIRONMENT_MANIFEST_SHA256",
+        "AUTHORIZED_OUTPUT_MANIFEST_SHA256_EQUALS_CURRENT_OUTPUT_MANIFEST_SHA256",
+        "TARGET_EXECUTION_ENVIRONMENT_RECEIPT_HASH_MATCHES_REFERENCED_BYTES",
+        "TARGET_EXECUTION_OUTPUT_RECEIPT_HASH_MATCHES_REFERENCED_BYTES",
+        "TARGET_EXECUTION_RECEIPT_HASH_MATCHES_REFERENCED_BYTES",
+        "AUTHORIZED_TARGET_EXECUTION_BINDS_EXACT_JOB_COMMIT_INPUT_ENVIRONMENT_AND_OUTPUT",
+        "TARGET_EXECUTION_AUTHORIZATION_IS_CURRENT_SINGLE_USE_AND_NOT_PROGRAM_WIDE",
+    }})
     dependency_kinds = set(dependency_kinds or set())
     dependency_schemas = dependency_schemas or {}
     if isinstance(contracts, Mapping):
@@ -12664,10 +13005,13 @@ def _independent_invariant_contract_findings(
             target_ref = contract.get("target_ref")
             predicate_ast = contract.get("predicate_ast")
             expected_predicate_ast = {
-                "operator": contract.get("algorithm"),
+                "algorithm": contract.get("algorithm"),
                 "quantifier": contract.get("quantifier"),
                 "subject_selector": contract.get("subject_selector"),
                 "operand_refs": contract.get("operand_refs"),
+                "operand_types": contract.get("operand_types"),
+                "cardinality": contract.get("cardinality"),
+                "join_keys": contract.get("join_keys"),
                 "branch_precondition": contract.get("branch_precondition"),
                 "branch_selector": contract.get("branch_selector"),
                 "numeric_tolerance": contract.get("numeric_tolerance"),
@@ -12677,9 +13021,18 @@ def _independent_invariant_contract_findings(
                 not required_fields.issubset(contract)
                 or not isinstance(input_refs, list)
                 or not input_refs
-                or input_refs[0] != target_ref
                 or not isinstance(contract.get("operand_refs"), list)
                 or not contract.get("operand_refs")
+                or not isinstance(contract.get("operand_types"), list)
+                or len(contract.get("operand_types", []))
+                != len(contract.get("operand_refs", []))
+                or not isinstance(contract.get("cardinality"), Mapping)
+                or contract.get("cardinality", {}).get("mode") != "EXACT"
+                or contract.get("cardinality", {}).get("operand_count")
+                != len(contract.get("operand_refs", []))
+                or not isinstance(contract.get("join_keys"), list)
+                or contract.get("evaluation_contract_kind")
+                not in {"TYPED_KERNEL_V1", "EXTERNAL_EXACT_ALGORITHM_V1"}
                 or not all(
                     isinstance(value, str) and value
                     for value in contract.get("operand_refs", [])
@@ -12697,8 +13050,7 @@ def _independent_invariant_contract_findings(
                 or contract.get("evaluator_entrypoint")
                 != "external_lab.invariants:evaluate_predicate_ast_v1"
                 or predicate_ast != expected_predicate_ast
-                or contract.get("predicate_sha256")
-                != _json_hash(expected_predicate_ast)
+                or "predicate_sha256" in contract
                 or not isinstance(contract.get("numeric_tolerance"), Mapping)
                 or any(
                     not isinstance(contract.get(field), str)
@@ -12716,6 +13068,23 @@ def _independent_invariant_contract_findings(
                     )
                 )
             )
+            if contract.get("evaluation_contract_kind") == "TYPED_KERNEL_V1":
+                typed_findings = validate_invariant_contract_v1(
+                    predicate_ast,
+                    schema=schema,
+                    location=f"{artifact_id}:{invariant_id}",
+                )
+                findings.extend(
+                    _finding(
+                        item["failure_code"],
+                        item["location"],
+                    )
+                    for item in typed_findings
+                )
+            else:
+                findings.extend(_finding(item["failure_code"], item["location"])
+                                for item in registered_operator_findings(predicate_ast,
+                                    location=f"{artifact_id}:{invariant_id}"))
             operand_refs = contract.get("operand_refs")
             if isinstance(operand_refs, list):
                 for operand_ref in operand_refs:
@@ -12766,6 +13135,25 @@ def _independent_invariant_contract_findings(
                             )
                         )
             algorithm = str(contract.get("algorithm") or "")
+            expected_media_algorithm = {
+                "RENDERED_SEMANTIC_BINDINGS_EQUAL_MOTION_IR_OBJECT_BINDINGS": "RENDER_OBJECT_BINDINGS_V1",
+                "OBSERVED_MOTION_SEMANTIC_BINDINGS_EQUAL_RENDERED_AND_MOTION_BINDINGS": "OBSERVED_OBJECT_BINDINGS_V1",
+                "FFPROBE_INPUT_SHA256_EQUALS_VIDEO_SHA256": "REFERENCED_JSON_FIELD_EQUALITY_V1",
+                "RENDER_INPUT_MANIFEST_BINDS_EXACT_ASSET_REFS_AND_SHA256S": "RENDER_INPUT_ASSET_SET_EQUALITY_V1",
+                "VIDEO_BYTES_INCLUDE_THE_REFERENCED_AUDIO_STREAM": "AUDIO_FILE_PACKET_LINEAGE_V2",
+            }.get(invariant_id)
+            if invariant_id == "CODEX_IMAGEGEN_MATERIALIZATION_REQUIRES_SEPARATE_CURRENT_AUTHORIZATION" and (
+                algorithm != "MATERIALIZED_ASSET_AUTHORIZATION_V1"
+                or contract.get("operand_refs") != ["/assets/*", "/job_id"]
+            ):
+                findings.append(_finding("INVARIANT_AUTHORIZATION_SEMANTICS_INVALID", f"{artifact_id}:{invariant_id}"))
+            if expected_media_algorithm is not None:
+                if algorithm != expected_media_algorithm:
+                    findings.append(_finding("MEDIA_INVARIANT_SEMANTIC_PROJECTION_MISMATCH",
+                                             f"{artifact_id}:{invariant_id}"))
+                else:
+                    findings.extend(_finding(code, f"{artifact_id}:{invariant_id}")
+                                    for code in media_contract_errors(contract))
             operand_count = (
                 len(operand_refs) if isinstance(operand_refs, list) else 0
             )
@@ -12809,18 +13197,12 @@ def _independent_invariant_contract_findings(
                             f"{artifact_id}:{invariant_id}",
                         )
                     )
-            quantified = invariant_id.startswith(("EVERY_", "ALL_", "EACH_"))
-            if quantified and (
-                contract.get("quantifier") != "FOR_ALL"
-                or "*" not in str(contract.get("subject_selector") or "")
+            quantifier = contract.get("quantifier")
+            subject_selector = str(contract.get("subject_selector") or "")
+            if quantifier not in {"SINGLE", "FOR_ALL", "EXISTS", "PAIRWISE"} or (
+                (quantifier == "SINGLE" and "*" in subject_selector)
+                or (quantifier != "SINGLE" and "*" not in subject_selector)
             ):
-                findings.append(
-                    _finding(
-                        "INVARIANT_QUANTIFIER_CONTRACT_INCOMPLETE",
-                        f"{artifact_id}:{invariant_id}",
-                    )
-                )
-            elif not quantified and contract.get("quantifier") != "SINGLE":
                 findings.append(
                     _finding(
                         "INVARIANT_QUANTIFIER_CONTRACT_INCOMPLETE",
@@ -12833,6 +13215,27 @@ def _independent_invariant_contract_findings(
                 invariant_id,
                 {"mode": "ANY_JSON_SCHEMA_VALID_BRANCH"},
             )
+            asset_state_expectations = {
+                "EVERY_MATERIALIZED_ASSET_REF_HASH_MATCHES_ASSET_SHA256": [
+                    "SOURCE_VERIFIED", "LOCAL_DETERMINISTIC_VERIFIED",
+                    "CODEX_IMAGEGEN_AUTHORIZED_MATERIALIZED",
+                ],
+                "LOCAL_DETERMINISTIC_ASSET_RECIPE_AND_OUTPUT_ARE_HASH_BOUND": [
+                    "LOCAL_DETERMINISTIC_VERIFIED"
+                ],
+                "CODEX_IMAGEGEN_MATERIALIZATION_REQUIRES_SEPARATE_CURRENT_AUTHORIZATION": [
+                    "CODEX_IMAGEGEN_AUTHORIZED_MATERIALIZED"
+                ],
+                "IMAGEGEN_RECEIPT_HASH_MATCHES_REFERENCED_BYTES_WHEN_MATERIALIZED": [
+                    "CODEX_IMAGEGEN_AUTHORIZED_MATERIALIZED"
+                ],
+            }
+            if invariant_id in asset_state_expectations:
+                expected_selector = {
+                    "mode": "REQUIRE_DISCRIMINATOR_IN",
+                    "discriminator_ref": "/assets/*/materialization_state",
+                    "values": asset_state_expectations[invariant_id],
+                }
             selector_invalid = branch_selector != expected_selector
             if expected_selector.get("mode") == "REQUIRE_DISCRIMINATOR_CONST":
                 selector_invalid = selector_invalid or bool(
@@ -13269,6 +13672,18 @@ def _check_semantic_production_contracts(root: Path) -> list[dict[str, Any]]:
     )
     artifact_index = manifest.get("artifact_index", {})
     if isinstance(artifact_index, Mapping):
+        candidate_operands = {
+            ref
+            for artifact in artifact_index.values()
+            for contract in artifact.get("schema", {}).get("x-invariant-contracts", {}).values()
+            for ref in contract.get("operand_refs", [])
+            if isinstance(ref, str) and ref.startswith(("candidate://", "harness-resource://candidate/"))
+        }
+        for ref in sorted(candidate_operands):
+            try:
+                resolve_candidate_operand(root, ref)
+            except (OSError, ValueError, KeyError, TypeError):
+                findings.append(_finding("INVARIANT_CANDIDATE_OPERAND_UNRESOLVED", ref))
         contract_artifact_index = {
             str(artifact.get("artifact_id")): artifact
             for atom in frozen_ir.get("atoms", [])
@@ -24419,6 +24834,19 @@ def _check_negative_contracts(root: Path) -> list[dict[str, Any]]:
     attestation = _read_json(root / "constitution/RUNTIME_ATTESTATION_POLICY.json", findings)
     runtime = _read_json(root / "constitution/RUNTIME_OWNERSHIP.json", findings)
     roles = _read_json(root / "PACKAGE_ROLES.json", findings)
+    frozen_ir = _read_json(
+        root / "canonical_sources/FROZEN_REQUIREMENT_IR.json", findings
+    )
+    assurance_profile_id = DISTRIBUTED_RELEASE_ADVERSARIAL
+    if isinstance(frozen_ir, Mapping):
+        try:
+            assurance_profile_id = assurance_profile_for_start_package(
+                frozen_ir
+            ).profile_id
+        except ValueError as exc:
+            findings.append(
+                _finding("ASSURANCE_PROFILE_INVALID", str(exc))
+            )
     if isinstance(negative, dict):
         cases = negative.get("cases", [])
         if not cases:
@@ -24435,7 +24863,7 @@ def _check_negative_contracts(root: Path) -> list[dict[str, Any]]:
         ]
         if len(structured) != len(cases) or _duplicates([case.get("case_id") for case in structured]):
             findings.append(_finding("NEGATIVE_CASE_STRUCTURE_INVALID", "NEGATIVE_CASES.json"))
-        required_case_ids = {
+        all_hf28_case_ids = {
             "NEG-HF28-CODEX-SELF-REPORT",
             "NEG-HF28-ATTESTATION-REPLAY",
             "NEG-HF28-OUTPUT-SUBSTITUTION",
@@ -24459,6 +24887,17 @@ def _check_negative_contracts(root: Path) -> list[dict[str, Any]]:
             "NEG-HF28-B0-B1-ORDER",
             "NEG-HF28-LINKAGE-AUTHORITY",
         }
+        try:
+            required_case_ids = set(
+                filter_hf28_negative_case_ids(
+                    sorted(all_hf28_case_ids), assurance_profile_id
+                )
+            )
+        except ValueError as exc:
+            required_case_ids = all_hf28_case_ids
+            findings.append(
+                _finding("ASSURANCE_PROFILE_CASE_ROUTING_INVALID", str(exc))
+            )
         actual_case_ids = {str(case.get("case_id")) for case in structured}
         missing_required = sorted(required_case_ids.difference(actual_case_ids))
         if missing_required:
@@ -24484,13 +24923,19 @@ def _check_negative_contracts(root: Path) -> list[dict[str, Any]]:
                 for term in ("illegal", "phase", "predecessor")
             )
         ]
-        if not codex_cases:
+        if (
+            "NEG-HF28-CODEX-SELF-REPORT" in required_case_ids
+            and not codex_cases
+        ):
             findings.append(_finding("FALSE_CODEX_RECEIPT_CASE_MISSING", "NEGATIVE_CASES.json"))
-        if not p3_cases:
+        if "NEG-HF28-P3-SKIP" in required_case_ids and not p3_cases:
             findings.append(_finding("P3_SKIP_NEGATIVE_CASE_MISSING", "NEGATIVE_CASES.json"))
     if isinstance(attestation, dict):
         text = json.dumps(attestation, ensure_ascii=False).lower()
-        for required in ("challenge", "replay", "executor", "raw"):
+        required_terms = ["executor", "raw"]
+        if assurance_profile_id == DISTRIBUTED_RELEASE_ADVERSARIAL:
+            required_terms.extend(["challenge", "replay"])
+        for required in required_terms:
             if required not in text:
                 findings.append(_finding("ATTESTATION_CONTRACT_INCOMPLETE", required))
         if attestation.get("self_reported_receipt_is_sufficient") is not False:

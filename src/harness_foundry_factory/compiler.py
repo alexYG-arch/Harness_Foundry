@@ -39,6 +39,7 @@ from .constants import (
     default_spec_root,
 )
 from .control_kernel import AUTHORITY_PRECEDENCE
+from .artifact_descriptors import JOB_ARTIFACT_DESCRIPTOR_SCHEMA
 from .semantic_contracts import (
     ARTIFACT_MANIFEST_REF,
     CASE_EVIDENCE_WRITER_WORKPACK_ID,
@@ -47,6 +48,7 @@ from .semantic_contracts import (
     PUBLIC_SKILL_JOB_INTERFACE_REF,
     PUBLIC_SKILL_METAMORPHIC_CASE_ID,
     PUBLIC_SKILL_SOURCE_RESOLUTION_ENTRYPOINT,
+    PUBLIC_SKILL_JOB_PIPELINE_ENTRYPOINT,
     build_artifact_obligation_manifest,
     compile_declared_production_contracts,
     explicit_production_enabled,
@@ -15810,6 +15812,60 @@ def _artifact_dependency_read_refs(
     )
 
 
+def specialize_public_job_contracts(
+    requirement_ir: Mapping[str, Any],
+    resolved_job: Mapping[str, str],
+    *,
+    declared_provider_read_refs: Sequence[str],
+) -> dict[str, Any]:
+    """Pure reference model for the declared dynamic pipeline; grants no lease.
+
+    Reuses the ordinary Producer and dependency traversal. The caller must
+    independently resolve/verify source bytes and authorize runtime providers.
+    Returned roots are a request, never execution authority or a receipt.
+    """
+    compiled = compile_declared_production_contracts(requirement_ir, resolved_job=resolved_job)
+    index = {
+        artifact["artifact_id"]: artifact
+        for atom in compiled.get("atoms", [])
+        for obligation in atom.get("production_contract", {}).get("workpack_obligations", [])
+        for artifact in obligation.get("artifact_obligations", [])
+    }
+    job_id = resolved_job["job_id"]
+    selected = {key: value for key, value in index.items() if value.get("job_id") == job_id}
+    if not selected:
+        raise ValueError("dynamic Job has no derived artifacts")
+    queue = list(selected)
+    visited = set()
+    while queue:
+        key = queue.pop()
+        if key in visited:
+            continue
+        visited.add(key)
+        if key not in index:
+            raise ValueError("dynamic Job has an unresolved dependency")
+        artifact = index[key]
+        if artifact.get("job_id") not in (None, job_id):
+            raise ValueError("dynamic Job depends on another Job")
+        queue.extend(artifact.get("depends_on_artifact_ids", []))
+    reads = _artifact_dependency_read_refs({"artifact_index": index}, list(selected))
+    job_root = f"harness-resource://execution/jobs/{job_id}"
+    source_reads = [resolved_job.get(field) for field in ("resolved_tree_ref", "resolution_receipt_ref")]
+    if any(not isinstance(ref, str) or not ref for ref in source_reads):
+        raise ValueError("dynamic Job needs the resolved source tree and receipt read references")
+    reads = list(dict.fromkeys([LOGICAL_CANDIDATE_ROOT, *source_reads, *reads, *declared_provider_read_refs]))
+    if any("/jobs/" in ref and not (ref == job_root or ref.startswith(job_root + "/")) for ref in reads):
+        raise ValueError("dynamic Job read request crosses Job roots")
+    if any(not value["artifact_ref"].startswith(job_root + "/") for value in selected.values()):
+        raise ValueError("dynamic Job output escapes its write root")
+    return {
+        "status": "DECLARE_ONLY_NOT_RUN", "execution_started": False,
+        "artifact_index": {key: index[key] for key in sorted(visited)},
+        "lease_request": {"job_id": job_id, "allowed_read_roots": reads,
+                          "allowed_write_roots": [job_root], "authorization_ref": None},
+    }
+
+
 def _artifact_dependency_read_paths(
     execution: Path,
     artifact_manifest: Mapping[str, Any] | None,
@@ -18111,8 +18167,22 @@ def _external_lab_case_command_contracts(
         }
         if command_id == "LAB-RUN-METAMORPHIC-CASE":
             command["implementation_entrypoint"] = (
-                PUBLIC_SKILL_SOURCE_RESOLUTION_ENTRYPOINT
+                PUBLIC_SKILL_JOB_PIPELINE_ENTRYPOINT
             )
+            command["job_pipeline_contract"] = {
+                "source_resolution_entrypoint": PUBLIC_SKILL_SOURCE_RESOLUTION_ENTRYPOINT,
+                "specialization_ref": f"{PUBLIC_SKILL_JOB_INTERFACE_REF}#/dynamic_specialization_contract",
+                "sequence": ["RESOLVE_AND_VERIFY_SOURCE", "DERIVE_JOB_ID", "SPECIALIZE_ARTIFACT_GRAPH",
+                             "ACQUIRE_ONE_JOB_LEASE", "RUN_DECLARED_STAGES", "VERIFY_JOB_DESCRIPTORS"],
+                "lease_authority": "EXISTING_EXECUTION_AUTHORIZATION_ONLY",
+                "lease_job_id_pointer": "/derived_job_id",
+                "leased_read_scope": "TRANSITIVE_ARTIFACT_INPUTS_AND_DECLARED_RUNTIME_PROVIDERS_FOR_ONE_JOB",
+                "leased_write_root": {"root_ref": "harness-resource://execution/jobs",
+                                      "child_from_pointer": "/derived_job_id"},
+                "caller_write_scope": "CASE_RECEIPTS_ONLY",
+                "descriptor_consumer": "external_lab.oracle:verify_job_artifact_descriptors_v1",
+                "authoring_execution_forbidden": True,
+            }
             command["parameter_contract"][
                 "source_resolution_entrypoint"
             ] = PUBLIC_SKILL_SOURCE_RESOLUTION_ENTRYPOINT
@@ -18258,12 +18328,14 @@ def _bind_case_execution_contracts(
             "request_id",
             "normalized_skill_url",
             "requested_revision",
+            "skill_entrypoint_ref",
             "resolution_receipt_ref",
             "resolution_receipt_sha256",
             "resolved_commit_sha",
             "resolved_git_tree_oid",
             "resolved_tree_ref",
             "resolved_tree_sha256",
+            "resolved_skill_entrypoint_sha256",
             "derived_job_id",
             "output_video_count",
             "source_is_frozen_before_analysis",
@@ -18271,6 +18343,7 @@ def _bind_case_execution_contracts(
             "command_receipt_ref",
             "command_receipt_sha256",
             "side_effects_started",
+            "artifacts",
             "oracle_decision",
             "status",
         ],
@@ -18288,6 +18361,9 @@ def _bind_case_execution_contracts(
             },
             "requested_revision": {
                 "const": public_vector["input"]["requested_revision"]
+            },
+            "skill_entrypoint_ref": {
+                "const": public_vector["input"]["skill_entrypoint_ref"]
             },
             "resolution_receipt_ref": {
                 "const": public_vector["resolution_contract"][
@@ -18311,6 +18387,10 @@ def _bind_case_execution_contracts(
                 "type": "string",
                 "pattern": "^[0-9a-f]{64}$",
             },
+            "resolved_skill_entrypoint_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$",
+            },
             "derived_job_id": {
                 "type": "string",
                 "pattern": "^JOB-[0-9A-F]{16}$",
@@ -18323,7 +18403,25 @@ def _bind_case_execution_contracts(
                 "type": "string",
                 "pattern": "^[0-9a-f]{64}$",
             },
-            "side_effects_started": {"const": False},
+            "side_effects_started": {"type": "boolean"},
+            "artifacts": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": [
+                    "video",
+                    "media_acceptance_receipt",
+                    "job_artifact_lease",
+                ],
+                "properties": {
+                    "video": deepcopy(JOB_ARTIFACT_DESCRIPTOR_SCHEMA),
+                    "media_acceptance_receipt": deepcopy(
+                        JOB_ARTIFACT_DESCRIPTOR_SCHEMA
+                    ),
+                    "job_artifact_lease": deepcopy(
+                        JOB_ARTIFACT_DESCRIPTOR_SCHEMA
+                    ),
+                },
+            },
             "oracle_decision": {"enum": ["PASS", "FAIL"]},
             "status": {"enum": ["PASS", "FAIL"]},
         },
@@ -18337,10 +18435,24 @@ def _bind_case_execution_contracts(
                 "sha256_pointer": "/resolved_tree_sha256",
             },
             {
+                "ref_pointer": "/skill_entrypoint_ref",
+                "sha256_pointer": "/resolved_skill_entrypoint_sha256",
+            },
+            {
                 "ref_pointer": "/command_receipt_ref",
                 "sha256_pointer": "/command_receipt_sha256",
             },
         ],
+        "x-job-artifact-binding": {
+            "job_id_pointer": "/derived_job_id",
+            "descriptor_names": ["video", "media_acceptance_receipt", "job_artifact_lease"],
+            "descriptor_job_field": "producer_job_id",
+            "verify_exact_bytes_and_size": True,
+            "media_video_fields": ["video_ref", "video_sha256"],
+            "receipt_job_field": "job_id",
+            "lease_scope_field": "allowed_write_roots",
+            "implementation_entrypoint": "external_lab.oracle:verify_job_artifact_descriptors_v1",
+        },
         "x-job-identity-derivation": {
             "algorithm": "SHA256_CANONICAL_RESOLVED_JOB_IDENTITY_PREFIX_16",
             "canonicalization": (
@@ -18349,9 +18461,11 @@ def _bind_case_execution_contracts(
             "identity_field_pointers": [
                 "/request_id",
                 "/normalized_skill_url",
+                "/skill_entrypoint_ref",
                 "/resolved_commit_sha",
                 "/resolved_git_tree_oid",
                 "/resolved_tree_sha256",
+                "/resolved_skill_entrypoint_sha256",
             ],
             "output_pointer": "/derived_job_id",
             "output_format": "JOB-UPPERCASE-FIRST-16-SHA256-HEX",
@@ -18361,7 +18475,9 @@ def _bind_case_execution_contracts(
             "RESOLUTION_RECEIPT_SHA256_MATCHES_REFERENCED_BYTES",
             "RESOLVED_TREE_SHA256_MATCHES_REFERENCED_BYTES",
             "RESULT_RESOLVED_FIELDS_EQUAL_HASH_VERIFIED_RESOLUTION_RECEIPT",
+            "RESOLVED_SKILL_ENTRYPOINT_SHA256_MATCHES_TREE_MEMBER_BYTES",
             "DERIVED_JOB_ID_EQUALS_CANONICAL_RESOLVED_IDENTITY_HASH",
+            "PASS_RESULT_HAS_VIDEO_MEDIA_ACCEPTANCE_AND_JOB_LEASE_DESCRIPTORS",
         ],
         "allOf": [
             {
@@ -18370,7 +18486,10 @@ def _bind_case_execution_contracts(
                     "required": ["status"],
                 },
                 "then": {
-                    "properties": {"oracle_decision": {"const": "PASS"}}
+                    "properties": {
+                        "oracle_decision": {"const": "PASS"},
+                        "side_effects_started": {"const": True},
+                    }
                 },
             }
         ],
@@ -18875,9 +18994,14 @@ def _bind_case_execution_contracts(
         if case_kind == "ACCEPTANCE":
             cases = _compile_acceptance_cases({"acceptance_cases": raw_cases})
         else:
-            cases = _mandatory_negative_cases(
-                {"negative_cases": raw_cases, "atoms": ir.get("atoms", [])}
-            )
+            # Preserve the frozen target/profile context when executable case
+            # fixtures are hydrated.  Reconstructing a partial Requirement IR
+            # here silently selected the default distributed assurance profile
+            # and reintroduced release-only HF28 cases into personal-local
+            # Candidates after CASE_EXECUTION_MANIFEST had already been built.
+            negative_case_ir = deepcopy(dict(ir))
+            negative_case_ir["negative_cases"] = raw_cases
+            cases = _mandatory_negative_cases(negative_case_ir)
         for case in cases:
             case_id = str(case["case_id"])
             fixture_relative = (

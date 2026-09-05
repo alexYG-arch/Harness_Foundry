@@ -5,8 +5,14 @@ from __future__ import annotations
 from copy import deepcopy
 import hashlib
 import json
+import re
 from typing import Any, Mapping
 
+from .assurance_profiles import (
+    assurance_profile_for_start_package,
+    filter_hf28_negative_case_specs,
+    resolve_hf28_negative_case_route,
+)
 from .constants import (
     DAG_WORKPACK_BINDINGS,
     DAG_WORKPACK_SEQUENCE_BINDINGS,
@@ -14,6 +20,13 @@ from .constants import (
     RELEASE_STEP_ORDER,
     RELEASE_WORKPACK_BINDINGS,
 )
+from .invariant_contracts import (
+    SUPPORTED_ALGORITHMS,
+    SUPPORTED_NUMERIC_RELATIONS,
+    validate_invariant_contract_v1,
+    registered_operator_findings,
+)
+from .mutation_contracts import canonical_recomputations
 
 
 EXPLICIT_PRODUCTION_MODE = "EXPLICIT_ARTIFACT_OBLIGATIONS"
@@ -34,9 +47,13 @@ PUBLIC_SKILL_METAMORPHIC_CASE_ID = (
     "AC-PUBLIC-SKILL-URL-NOT-IN-FROZEN-FIXTURES"
 )
 PUBLIC_SKILL_METAMORPHIC_REPOSITORY_URL = "https://github.com/openai/skills"
+PUBLIC_SKILL_METAMORPHIC_ENTRYPOINT_REF = (
+    "skills/.system/skill-creator/SKILL.md"
+)
 PUBLIC_SKILL_SOURCE_RESOLUTION_ENTRYPOINT = (
     "external_lab.sources:resolve_public_skill_source_v1"
 )
+PUBLIC_SKILL_JOB_PIPELINE_ENTRYPOINT = "external_lab.jobs:run_public_skill_job_v1"
 CASE_EXECUTION_RESULT_ROOT_REF = (
     "harness-resource://execution/evidence/cases"
 )
@@ -182,7 +199,7 @@ HF28_MANDATORY_NEGATIVE_CASE_SPECS = (
 def negative_case_specs_with_mandatory_controls(
     requirement_ir: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
-    """Return the frozen negative cases plus the non-optional HF28 controls."""
+    """Return frozen cases plus HF28 controls applicable to this threat profile."""
 
     cases = [
         deepcopy(dict(item))
@@ -198,9 +215,15 @@ def negative_case_specs_with_mandatory_controls(
         for item in requirement_ir.get("atoms", [])
         if isinstance(item, Mapping) and item.get("atom_id")
     ]
-    for case_id, description, expected_failure in HF28_MANDATORY_NEGATIVE_CASE_SPECS:
+    assurance_profile = assurance_profile_for_start_package(requirement_ir)
+    applicable_specs = filter_hf28_negative_case_specs(
+        HF28_MANDATORY_NEGATIVE_CASE_SPECS,
+        assurance_profile.profile_id,
+    )
+    for case_id, description, expected_failure in applicable_specs:
         if case_id in existing:
             continue
+        route = resolve_hf28_negative_case_route(case_id)
         cases.append(
             {
                 "case_id": case_id,
@@ -208,6 +231,9 @@ def negative_case_specs_with_mandatory_controls(
                 "description": description,
                 "expected_failure": expected_failure,
                 "origin": "HF28_LOCKED_CONTROL_CONTRACT",
+                "assurance_profile": assurance_profile.profile_id,
+                "control_id": route.control_id,
+                "applicability_rationale": route.rationale,
             }
         )
     return cases
@@ -402,6 +428,26 @@ _SCHEMA_NATIVE_INVARIANT_CASES: dict[str, dict[str, Any]] = {
 
 
 _INVARIANT_MUTATION_RECIPES: dict[str, dict[str, Any]] = {
+    "FFPROBE_INPUT_SHA256_EQUALS_VIDEO_SHA256": {
+        "strategy": "MUTATE_REFERENCED_FFPROBE_INPUT_AND_REBIND_RECEIPT",
+        "target_ref_role": "RELATION_ANCHOR_NOT_MUTATED",
+        "preserved_top_level_refs": ["/video_sha256"],
+        "referenced_document_mutation": {
+            "ref_pointer": "/ffprobe_receipt_ref",
+            "sha256_pointer": "/ffprobe_receipt_sha256",
+            "value_pointer": "/input_sha256",
+            "replacement_rule": "DIFFERENT_VALID_SHA256",
+        },
+    },
+    "RENDER_INPUT_MANIFEST_BINDS_EXACT_ASSET_REFS_AND_SHA256S": {
+        "strategy": "MUTATE_REFERENCED_ASSET_DIGEST_AND_REBIND_MANIFEST",
+        "referenced_document_mutation": {
+            "ref_pointer": "/render_input_manifest_ref",
+            "sha256_pointer": "/render_input_manifest_sha256",
+            "value_pointer": "/assets/0/asset_sha256",
+            "replacement_rule": "DIFFERENT_VALID_SHA256",
+        },
+    },
     "FROZEN_FILE_REFS_AND_HASHES_HAVE_EQUAL_CARDINALITY": {
         "strategy": "CHANGE_ARRAY_CARDINALITY_RELATIVE_TO_PARALLEL_ARRAY_WITHIN_SCHEMA",
         "comparison_ref": "/frozen_file_refs",
@@ -519,6 +565,9 @@ def _invariant_mutation_recipe(invariant_id: str) -> dict[str, Any]:
                 }
             )
         recipe["strategy"] = strategy
+    selector = _INVARIANT_BRANCH_SELECTORS.get(invariant_id)
+    if selector is not None:
+        recipe["required_base_branch"] = selector["const"]
     recipe.update(
         {
             "recipe_id": f"MUTATION-{_safe_id(invariant_id)}-V1",
@@ -551,9 +600,53 @@ INVARIANT_CONTRACT_REQUIRED_FIELDS = frozenset(
         "quantifier",
         "subject_selector",
         "operand_refs",
+        "operand_types",
+        "cardinality",
+        "join_keys",
+        "evaluation_contract_kind",
         "evaluator_entrypoint",
         "predicate_ast",
-        "predicate_sha256",
+    }
+)
+
+
+_FOR_ALL_INVARIANTS = frozenset(
+    {
+        "EVERY_FROZEN_FILE_HASH_MATCHES_REFERENCED_BYTES",
+        "EVERY_CLAIM_BINDING_RESOLVES_TO_FROZEN_FILE_AND_MATCHES_HASH",
+        "EVERY_CLAIM_HAS_FUNCTION_SCENARIO_EFFECT_AND_SOURCE_EVIDENCE",
+        "EVERY_VERIFIED_CLAIM_IS_COVERED_BY_AT_LEAST_ONE_SENTENCE",
+        "EVERY_SENTENCE_HAS_A_VISUAL_INTENT",
+        "EVERY_WORD_ANCHOR_AUDIO_SHA256_EQUALS_TOP_LEVEL_AUDIO_SHA256",
+        "EVERY_WORD_ANCHOR_START_SECONDS_IS_LESS_THAN_END_SECONDS",
+        "EVERY_OBJECT_AUDIO_ANCHOR_ID_EXISTS_IN_AUDIO_ANCHOR_IDS",
+        "EVERY_MOTION_OBJECT_BINDS_SENTENCES_CLAIMS_VISUAL_INTENT_ASSET_AND_AUDIO_ANCHOR",
+        "EVERY_SPOKEN_SENTENCE_HAS_VISIBLE_OBJECT_DURING_BOUND_AUDIO_ANCHOR",
+        "EVERY_OBJECT_WORD_TO_MOTION_ERROR_DOES_NOT_EXCEED_0_1_SECONDS",
+        "EVERY_MOTION_SEGMENT_HAS_DISTINCT_FROM_AND_TO_STATE",
+        "EVERY_ASSET_BINDS_SENTENCES_CLAIMS_AND_VISUAL_INTENT",
+        "EVERY_MATERIALIZED_ASSET_REF_HASH_MATCHES_ASSET_SHA256",
+        "EVERY_ASSET_PROVENANCE_HASH_MATCHES_REFERENCED_BYTES",
+        "EACH_DECLARED_OBJECT_HAS_NONZERO_PROBED_MOTION",
+        "EVERY_OBJECT_MOTION_PROBE_HASH_MATCHES_REFERENCED_PROBE",
+        "EVERY_ACCEPTANCE_CASE_RESULT_SHA256_MATCHES_REFERENCED_BYTES",
+        "EVERY_NEGATIVE_CASE_RESULT_SHA256_MATCHES_REFERENCED_BYTES",
+        "EVERY_FIXTURE_CASE_RESULT_SHA256_MATCHES_REFERENCED_BYTES",
+        "EVERY_FIXTURE_VIDEO_SHA256_MATCHES_REFERENCED_BYTES",
+        "EVERY_NEGATIVE_RESULT_OBSERVES_EXPECTED_FAILURE_WITHOUT_SIDE_EFFECTS",
+        "EVERY_NEGATIVE_MUTATION_VARIANT_HAS_HASH_BOUND_EXECUTION_EVIDENCE",
+        "EVERY_INVARIANT_NEGATIVE_RESULT_SHA256_MATCHES_REFERENCED_BYTES",
+        "EVERY_INVARIANT_RESULT_COVERS_EXACT_APPLICABLE_SCHEMA_SHA256S",
+        "EVERY_INVARIANT_MUTATION_PRESERVES_JSON_SCHEMA_AND_FAILS_DECLARED_INVARIANT",
+        "EVERY_SCHEMA_NATIVE_RESULT_SHA256_MATCHES_REFERENCED_BYTES",
+        "EVERY_SCHEMA_NATIVE_MUTATION_FAILS_SCHEMA_WITHOUT_ORACLE_OR_SIDE_EFFECTS",
+        "LOCAL_DETERMINISTIC_ASSET_RECIPE_AND_OUTPUT_ARE_HASH_BOUND",
+        "CODEX_IMAGEGEN_MATERIALIZATION_REQUIRES_SEPARATE_CURRENT_AUTHORIZATION",
+        "IMAGEGEN_RECEIPT_HASH_MATCHES_REFERENCED_BYTES_WHEN_MATERIALIZED",
+        "ASSET_PROVENANCE_REFS_AND_HASHES_HAVE_EQUAL_CARDINALITY",
+        "ENTER_TIME_LESS_THAN_OR_EQUAL_TO_HOLD_START",
+        "HOLD_START_LESS_THAN_HOLD_END",
+        "HOLD_END_LESS_THAN_OR_EQUAL_TO_EXIT_TIME",
     }
 )
 
@@ -573,8 +666,42 @@ _INVARIANT_BRANCH_SELECTORS: dict[str, dict[str, str]] = {
     },
 }
 
+_AUTHORIZED_GATE_INVARIANTS = frozenset({
+    "AUTHORIZED_ENVIRONMENT_MANIFEST_SHA256_EQUALS_CURRENT_ENVIRONMENT_MANIFEST_SHA256",
+    "AUTHORIZED_OUTPUT_MANIFEST_SHA256_EQUALS_CURRENT_OUTPUT_MANIFEST_SHA256",
+    "TARGET_EXECUTION_ENVIRONMENT_RECEIPT_HASH_MATCHES_REFERENCED_BYTES",
+    "TARGET_EXECUTION_OUTPUT_RECEIPT_HASH_MATCHES_REFERENCED_BYTES",
+    "TARGET_EXECUTION_RECEIPT_HASH_MATCHES_REFERENCED_BYTES",
+    "AUTHORIZED_TARGET_EXECUTION_BINDS_EXACT_JOB_COMMIT_INPUT_ENVIRONMENT_AND_OUTPUT",
+    "TARGET_EXECUTION_AUTHORIZATION_IS_CURRENT_SINGLE_USE_AND_NOT_PROGRAM_WIDE",
+})
+_INVARIANT_BRANCH_SELECTORS.update({name: {
+    "discriminator_ref": "/status", "const": "AUTHORIZED_EXECUTION_RECEIPT_VALID",
+} for name in _AUTHORIZED_GATE_INVARIANTS})
 
-def _invariant_branch_selector(invariant_id: str) -> dict[str, str]:
+
+def _invariant_branch_selector(invariant_id: str) -> dict[str, Any]:
+    asset_states = {
+        "EVERY_MATERIALIZED_ASSET_REF_HASH_MATCHES_ASSET_SHA256": [
+            "SOURCE_VERIFIED", "LOCAL_DETERMINISTIC_VERIFIED",
+            "CODEX_IMAGEGEN_AUTHORIZED_MATERIALIZED",
+        ],
+        "LOCAL_DETERMINISTIC_ASSET_RECIPE_AND_OUTPUT_ARE_HASH_BOUND": [
+            "LOCAL_DETERMINISTIC_VERIFIED"
+        ],
+        "CODEX_IMAGEGEN_MATERIALIZATION_REQUIRES_SEPARATE_CURRENT_AUTHORIZATION": [
+            "CODEX_IMAGEGEN_AUTHORIZED_MATERIALIZED"
+        ],
+        "IMAGEGEN_RECEIPT_HASH_MATCHES_REFERENCED_BYTES_WHEN_MATERIALIZED": [
+            "CODEX_IMAGEGEN_AUTHORIZED_MATERIALIZED"
+        ],
+    }
+    if invariant_id in asset_states:
+        return {
+            "mode": "REQUIRE_DISCRIMINATOR_IN",
+            "discriminator_ref": "/assets/*/materialization_state",
+            "values": asset_states[invariant_id],
+        }
     selector = _INVARIANT_BRANCH_SELECTORS.get(invariant_id)
     if selector is None:
         return {"mode": "ANY_JSON_SCHEMA_VALID_BRANCH"}
@@ -585,11 +712,9 @@ def _invariant_branch_selector(invariant_id: str) -> dict[str, str]:
 
 
 def _invariant_quantifier(invariant_id: str) -> str:
-    return (
-        "FOR_ALL"
-        if invariant_id.startswith(("EVERY_", "ALL_", "EACH_"))
-        else "SINGLE"
-    )
+    """Return the explicitly registered quantifier, never a name heuristic."""
+
+    return "FOR_ALL" if invariant_id in _FOR_ALL_INVARIANTS else "SINGLE"
 
 
 def _invariant_subject_selector(
@@ -599,6 +724,12 @@ def _invariant_subject_selector(
 
     if _invariant_quantifier(invariant_id) == "SINGLE":
         return target_ref
+    if invariant_id in {
+        "LOCAL_DETERMINISTIC_ASSET_RECIPE_AND_OUTPUT_ARE_HASH_BOUND",
+        "CODEX_IMAGEGEN_MATERIALIZATION_REQUIRES_SEPARATE_CURRENT_AUTHORIZATION",
+        "IMAGEGEN_RECEIPT_HASH_MATCHES_REFERENCED_BYTES_WHEN_MATERIALIZED",
+    }:
+        return "/assets/*"
     segments = target_ref.split("/")
     wildcarded = ["*" if segment.isdigit() else segment for segment in segments]
     selector = "/".join(wildcarded)
@@ -637,6 +768,203 @@ def _concrete_invariant_operand_refs(
     return operands or [target_ref]
 
 
+def _invariant_operand_types(
+    algorithm: str,
+    operand_refs: list[str],
+    schema: Mapping[str, Any],
+    subject_selector: str = "",
+    operand_scopes: list[str] | None = None,
+) -> list[str]:
+    """Project explicit operand types from schemas and algorithm signatures."""
+
+    if algorithm == "EXACT_ARRAY_CARDINALITY_COMPARISON_V1":
+        return ["array"] * len(operand_refs)
+    result: list[str] = []
+    for index, operand_ref in enumerate(operand_refs):
+        leaf = operand_ref.rsplit("/", 1)[-1]
+        if algorithm in {"HASH_AND_BYTE_LINEAGE_V1", "PAIRED_BYTE_HASH_LINEAGE_V1"}:
+            result.append("sha256" if "sha256" in operand_ref else "ref")
+            continue
+        node = (
+            _schema_at_json_pointer(schema, operand_ref)
+            if operand_ref.startswith("/")
+            else None
+        )
+        node_type = node.get("type") if isinstance(node, Mapping) else None
+        node_types = set(node_type) if isinstance(node_type, list) else {node_type}
+        bound_wildcards = (
+            subject_selector.count("*")
+            if operand_scopes and operand_scopes[index] == "SUBJECT" else 0
+        )
+        if ("array" in node_types or operand_ref.count("*") > bound_wildcards
+                or (node is None and leaf.endswith(("_ids", "_refs", "_sha256s")))):
+            result.append("array")
+        elif "object" in node_types:
+            result.append("object")
+        elif leaf.endswith("_ref") or leaf.endswith("_refs"):
+            result.append("ref")
+        elif leaf.endswith("_sha256") or leaf.endswith("_sha256s"):
+            result.append("sha256")
+        else:
+            result.append("scalar")
+    return result
+
+
+def _normalize_registered_operator_inputs(invariant_id, contract):
+    """Separate complete comparison inputs from a negative Case's single edit.
+
+    Domain sequence/binding rules have distinct algorithm identities; invalid
+    primitive signatures are rejected below, never demoted to external work.
+    """
+    domain_algorithms = {
+        "WORD_ANCHORS_ARE_MONOTONIC_AND_NON_OVERLAPPING": "ORDERED_NONOVERLAPPING_INTERVAL_SEQUENCE_V1",
+        "FULL_TIMELINE_CONTIGUOUS_NO_GAPS_OR_OVERLAPS": "CONTIGUOUS_TIMELINE_V1",
+        "ENTER_HOLD_EXIT_SEGMENTS_ARE_CONTIGUOUS_AND_MATCH_DECLARED_INTERVALS": "OBJECT_PHASE_INTERVAL_CONTIGUITY_V1",
+        "SOURCE_MANIFEST_ENTRY_MATCHES_REPOSITORY_COMMIT_AND_TREE": "SOURCE_MANIFEST_IDENTITY_V1",
+        "EVERY_INVARIANT_RESULT_COVERS_EXACT_APPLICABLE_SCHEMA_SHA256S": "PER_CASE_SCHEMA_COVERAGE_V1",
+    }
+    if invariant_id in domain_algorithms and contract["algorithm"] in {
+        "ORDERED_NUMERIC_PREDICATE_V1", "CANONICAL_VALUE_OR_SET_EQUALITY_V1"
+    }:
+        contract["algorithm"] = domain_algorithms[invariant_id]
+    if contract["algorithm"] == "CANONICAL_VALUE_OR_SET_EQUALITY_V1":
+        refs = contract["operand_refs"]
+        if len(refs) in {3, 4} and all(ref.endswith("/audio_sha256") for ref in refs):
+            contract["algorithm"] = "ALL_VALUES_EQUAL_V1"
+        elif len(refs) == 2 and any(ref.startswith(("dependency://", "candidate://")) for ref in refs):
+            # An ID-set comparison needs both complete collections. In contrast,
+            # a scalar audio digest comparison retains the exact scalar input.
+            if "*" in refs[1] or refs[1].endswith("_ids"):
+                refs[0] = re.sub(r"/\d+(?=/|$)", "/*", refs[0])
+                contract["quantifier"] = "SINGLE"
+                contract["subject_selector"] = refs[0].split("/*", 1)[0]
+    if contract["algorithm"] == "PER_CASE_SCHEMA_COVERAGE_V1":
+        contract["input_refs"] = ["/invariant_negative_case_results",
+            "candidate://validation/ORACLE_EVALUATOR_REGISTRY.json#/invariant_negative_case_matrix"]
+        contract["operand_refs"] = list(contract["input_refs"])
+        contract["quantifier"] = "FOR_ALL"
+        contract["subject_selector"] = "/invariant_negative_case_results/*"
+        contract["parameters"] = {"join_field": "case_id", "actual_schema_ids": "schema_instance_results/*/schema_sha256",
+                                  "expected_schema_ids": "applicable_schema_sha256s"}
+
+
+def _require_registered_operator_signature(contract):
+    findings = registered_operator_findings(contract)
+    if findings:
+        raise ValueError(f"INVARIANT_REGISTERED_OPERATOR_INVALID:{contract['algorithm_id']}:{findings[0]['failure_code']}")
+
+
+def _bind_typed_predicate_fields(
+    contract: dict[str, Any], schema: Mapping[str, Any]
+) -> None:
+    # Bind only paths in the seed's collection ancestry. Unrelated global or
+    # dependency arrays must not accidentally zip with the current subject.
+    selector = str(contract["subject_selector"])
+    seed = str(contract["target_ref"]).split("/")
+    selector_parts = selector.split("/")
+    variable_positions = [i for i, part in enumerate(selector_parts) if part == "*"]
+    operand_refs = []
+    scopes = []
+    paired_hash = contract.get("algorithm") in {"HASH_AND_BYTE_LINEAGE_V1", "PAIRED_BYTE_HASH_LINEAGE_V1"}
+    for ref in contract.get("operand_refs", []):
+        parts = ref.split("/")
+        bound = False
+        if variable_positions and ref.startswith("/"):
+            last = variable_positions[-1]
+            if len(parts) > last and len(seed) > last and all(
+                parts[i] in {seed[i], "*"} if i in variable_positions
+                else (parts[i] == seed[i] or (
+                    paired_hash and parts[i].endswith("_refs")
+                    and parts[i][:-5] + "_sha256s" == seed[i]))
+                for i in range(last + 1)
+            ):
+                for i in variable_positions:
+                    parts[i] = "*"
+                bound = True
+        operand_refs.append("/".join(parts))
+        scopes.append("SUBJECT" if bound else "GLOBAL")
+    contract["operand_refs"] = operand_refs
+    contract.setdefault("parameters", {})["operand_scopes"] = scopes
+    algorithm = str(contract.get("algorithm") or "")
+    quantifier = str(contract.get("quantifier") or "")
+    contract["operand_types"] = _invariant_operand_types(
+        algorithm, operand_refs, schema, selector, scopes
+    )
+    contract["cardinality"] = {
+        "mode": "EXACT",
+        "operand_count": len(operand_refs),
+        "subject": "MANY" if quantifier != "SINGLE" else "ONE",
+    }
+    contract["join_keys"] = deepcopy(
+        contract.get("parameters", {}).get("join_keys", [])
+        if isinstance(contract.get("parameters"), Mapping)
+        else []
+    )
+    arity = len(operand_refs)
+    valid_arity = {
+        "EXACT_EQUALITY_V1": {2},
+        "CANONICAL_VALUE_OR_SET_EQUALITY_V1": {2},
+        "SET_EQUALITY_V1": {2},
+        "HASH_AND_BYTE_LINEAGE_V1": {2},
+        "PAIRED_BYTE_HASH_LINEAGE_V1": {4, 6, 8},
+        "EXACT_ARRAY_CARDINALITY_COMPARISON_V1": {2},
+        "ORDERED_NUMERIC_PREDICATE_V1": {1, 2},
+        "DECLARED_REFERENCE_RESOLUTION_V1": {1},
+        "MATERIALIZED_ASSET_AUTHORIZATION_V1": {2},
+        "ALL_VALUES_EQUAL_V1": {3, 4},
+    }
+    parameters = contract.get("parameters", {})
+    numeric_relation_supported = bool(
+        algorithm != "ORDERED_NUMERIC_PREDICATE_V1"
+        or (
+            isinstance(parameters, Mapping)
+            and parameters.get("relation") in SUPPORTED_NUMERIC_RELATIONS
+        )
+    )
+    operand_types = tuple(contract["operand_types"])
+    type_signature_supported = bool(
+        (algorithm in {"EXACT_EQUALITY_V1", "CANONICAL_VALUE_OR_SET_EQUALITY_V1"}
+         and len(operand_types) == 2 and operand_types[0] == operand_types[1])
+        or (algorithm == "SET_EQUALITY_V1" and operand_types == ("array", "array"))
+        or (
+            algorithm == "HASH_AND_BYTE_LINEAGE_V1"
+            and set(operand_types) == {"ref", "sha256"}
+        )
+        or (
+            algorithm == "PAIRED_BYTE_HASH_LINEAGE_V1"
+            and len(operand_types) % 2 == 0
+            and all(set(operand_types[i:i+2]) == {"ref", "sha256"}
+                    for i in range(0, len(operand_types), 2))
+        )
+        or (
+            algorithm == "EXACT_ARRAY_CARDINALITY_COMPARISON_V1"
+            and operand_types == ("array", "array")
+        )
+        or (
+            algorithm == "ORDERED_NUMERIC_PREDICATE_V1"
+            and all(value == "scalar" for value in operand_types)
+        )
+        or (
+            algorithm == "DECLARED_REFERENCE_RESOLUTION_V1"
+            and operand_types == ("ref",)
+        )
+        or (algorithm == "MATERIALIZED_ASSET_AUTHORIZATION_V1" and operand_types == ("object", "scalar"))
+        or (algorithm == "ALL_VALUES_EQUAL_V1" and len(set(operand_types)) == 1)
+    )
+    kernel_eligible = bool(
+        algorithm in SUPPORTED_ALGORITHMS
+        and arity in valid_arity.get(algorithm, set())
+        and all(ref.startswith("/") for ref in operand_refs)
+        and numeric_relation_supported
+        and type_signature_supported
+    )
+    contract["evaluation_contract_kind"] = (
+        "TYPED_KERNEL_V1"
+        if kernel_eligible
+        else "EXTERNAL_EXACT_ALGORITHM_V1"
+    )
+
+
 def _assert_invariant_contract_semantics(
     schema: Mapping[str, Any],
     invariant_id: str,
@@ -659,7 +987,27 @@ def _assert_invariant_contract_semantics(
                 "INVARIANT_OPERAND_REF_UNRESOLVED:"
                 f"{invariant_id}:{operand_ref}"
             )
+    operand_types = contract.get("operand_types")
+    cardinality = contract.get("cardinality")
+    quantifier = contract.get("quantifier")
+    subject_selector = contract.get("subject_selector")
+    if (
+        not isinstance(operand_types, list)
+        or len(operand_types) != len(operands)
+        or not isinstance(cardinality, Mapping)
+        or cardinality.get("mode") != "EXACT"
+        or cardinality.get("operand_count") != len(operands)
+        or cardinality.get("subject")
+        != ("MANY" if quantifier != "SINGLE" else "ONE")
+        or not isinstance(contract.get("join_keys"), list)
+        or contract.get("evaluation_contract_kind")
+        not in {"TYPED_KERNEL_V1", "EXTERNAL_EXACT_ALGORITHM_V1"}
+        or not isinstance(subject_selector, str)
+        or ((quantifier == "SINGLE") == ("*" in subject_selector))
+    ):
+        raise ValueError(f"INVARIANT_TYPED_CONTRACT_INVALID:{invariant_id}")
     algorithm = str(contract.get("algorithm") or "")
+    _require_registered_operator_signature(contract)
     if algorithm in {
         "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
         "HASH_AND_BYTE_LINEAGE_V1",
@@ -684,6 +1032,17 @@ def _assert_invariant_contract_semantics(
             raise ValueError(
                 f"INVARIANT_NUMERIC_PARAMETERS_INCOMPLETE:{invariant_id}"
             )
+    if contract.get("evaluation_contract_kind") == "TYPED_KERNEL_V1":
+        typed_findings = validate_invariant_contract_v1(
+            contract,
+            schema=schema,
+            location=f"invariant_contract/{invariant_id}",
+        )
+        if typed_findings:
+            raise ValueError(
+                f"INVARIANT_TYPED_CONTRACT_INVALID:{invariant_id}:"
+                f"{typed_findings[0]['failure_code']}"
+            )
 
 
 def _invariant_algorithm_family(invariant_id: str) -> str:
@@ -697,7 +1056,10 @@ def _invariant_algorithm_family(invariant_id: str) -> str:
         token in invariant_id
         for token in ("RESOLVE", "EXISTS_IN", "BINDS", "REQUIRES")
     ):
-        return "DECLARED_REFERENCE_RESOLUTION_V1"
+        # A domain binding is not the primitive "a ref resolves to any value".
+        # Keep it on the explicit Lab route rather than falsely claiming that
+        # the small local reference-existence kernel implements its semantics.
+        return "DECLARED_DEPENDENCY_RELATION_V1"
     if any(
         token in invariant_id
         for token in (
@@ -765,7 +1127,7 @@ def _invariant_evaluation_contract(
             "Resolve the two arrays named by the invariant and require their "
             "integer lengths to be exactly equal."
         ),
-        "DECLARED_REFERENCE_RESOLUTION_V1": (
+        "DECLARED_DEPENDENCY_RELATION_V1": (
             "Resolve every identifier or resource reference at the target against "
             "the exact declared dependency indexes and require exactly one "
             "same-Job match with every declared byte hash verified."
@@ -872,7 +1234,6 @@ def _invariant_evaluation_contract(
         "BEFORE_AND_AFTER_HASHES_MATCH_REFERENCED_BYTES": {
             "algorithm": "PAIRED_BYTE_HASH_LINEAGE_V1",
             "input_refs": [
-                target_ref,
                 "/input_before_ref",
                 "/input_before_sha256",
                 "/output_after_ref",
@@ -1113,7 +1474,7 @@ def _invariant_evaluation_contract(
             "parameters": {"expected": "LOCAL_OFFLINE"},
         },
         "VIDEO_BYTES_INCLUDE_THE_REFERENCED_AUDIO_STREAM": {
-            "algorithm": "VIDEO_AUDIO_STREAM_BYTE_BINDING_V1",
+            "algorithm": "AUDIO_FILE_PACKET_LINEAGE_V2",
             "input_refs": [
                 target_ref,
                 "/video_ref",
@@ -1122,16 +1483,40 @@ def _invariant_evaluation_contract(
                 "/render_command_receipt_ref",
             ],
             "decision_rule": (
-                "Probe the hash-verified final video bytes, require at least one "
-                "audio stream, demux the selected stream without transcoding, and "
-                "require its canonical packet-payload SHA-256 to equal the "
-                "referenced audio stream digest; the boolean field alone is not evidence."
+                "Verify source audio file bytes against audio_sha256 and the existing "
+                "render command receipt audio_transform.input_audio_sha256. Demux the "
+                "selected final video stream and compare its packet payload bytes to an "
+                "independent replay of COPY or TRANSCODE from that source using the "
+                "recorded encoder parameters. Compare the packet digest only to "
+                "audio_transform.packet_payload_sha256, never to the source file digest. "
+                "The audio_transform object requires input_audio_ref, input_audio_sha256, "
+                "output_video_ref, packet_payload_sha256, mode, and encoder_parameters. "
+                "Record the exact encoder version, codec, filters and timing/resampling "
+                "parameters needed to replay a transcode; COPY demuxes the source. "
+                "Missing replay evidence is inconclusive, not PASS."
             ),
             "parameters": {
                 "probe": "FFPROBE_JSON",
                 "demux": "FFMPEG_COPY_NO_TRANSCODE",
                 "stream_selection": "FIRST_DEFAULT_AUDIO_ELSE_LOWEST_AUDIO_INDEX",
+                "transform_pointer": "/audio_transform",
+                "source_identity_domain": "WHOLE_AUDIO_FILE_BYTES",
+                "output_identity_domain": "SELECTED_AUDIO_PACKET_PAYLOAD_BYTES",
+                "packet_canonicalization": "CONCAT_PAYLOAD_BYTES_IN_DEMUX_ORDER_EXCLUDE_CONTAINER_AND_TIMESTAMPS",
+                "replay": "INDEPENDENT_FROM_SOURCE_WITH_RECORDED_ENCODER_PARAMETERS",
             },
+        },
+        "FFPROBE_INPUT_SHA256_EQUALS_VIDEO_SHA256": {
+            "algorithm": "REFERENCED_JSON_FIELD_EQUALITY_V1",
+            "input_refs": [target_ref, "/ffprobe_receipt_ref"],
+            "decision_rule": "Read the referenced FFprobe JSON receipt and require its input_sha256 to equal video_sha256; receipt file integrity is checked separately.",
+            "parameters": {"value_pointer": "/input_sha256"},
+        },
+        "RENDER_INPUT_MANIFEST_BINDS_EXACT_ASSET_REFS_AND_SHA256S": {
+            "algorithm": "RENDER_INPUT_ASSET_SET_EQUALITY_V1",
+            "input_refs": [target_ref, "/render_input_manifest_ref", "/asset_plan_ref"],
+            "decision_rule": "Require the referenced render manifest and asset plan to contain the same nonempty unique set of (asset_ref, asset_sha256) pairs; manifest file integrity is checked separately.",
+            "parameters": {"assets_pointer": "/assets", "member_fields": ["asset_ref", "asset_sha256"]},
         },
     }
     explicit_specs.update(
@@ -1412,17 +1797,17 @@ def _invariant_evaluation_contract(
             ),
             "ACCEPTANCE_CASE_RESULT_REFS_EQUAL_FROZEN_CASE_RESULT_REFS": typed_spec(
                 "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
-                ["candidate://validation/CASE_EXECUTION_MANIFEST.json#/acceptance_case_invocations/*/result_ref"],
+                ["candidate://validation/ACCEPTANCE_CASES.json#/cases/*/result_ref"],
                 "Require acceptance result refs to equal the frozen acceptance invocation result refs.",
             ),
             "FIXTURE_RESULT_JOB_IDS_EQUAL_FROZEN_REPOSITORY_JOB_IDS": typed_spec(
                 "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
-                ["candidate://canonical_sources/SOURCE_MANIFEST.json#/sources/*/job_id"],
+                ["candidate://validation/PUBLIC_SKILL_JOB_INTERFACE.json#/frozen_certification_fixtures/*/job_id"],
                 "Require fixture result Job IDs to equal the frozen repository Job IDs.",
             ),
             "FIXTURE_RESULT_SOURCE_IDS_EQUAL_FROZEN_REPOSITORY_SOURCE_IDS": typed_spec(
                 "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
-                ["candidate://canonical_sources/SOURCE_MANIFEST.json#/sources/*/source_id"],
+                ["candidate://validation/PUBLIC_SKILL_JOB_INTERFACE.json#/frozen_certification_fixtures/*/source_id"],
                 "Require fixture result source IDs to equal the frozen repository source IDs.",
             ),
             "NEGATIVE_CASE_RESULT_IDS_EQUAL_COMPLETE_NEGATIVE_CASE_IDS": typed_spec(
@@ -1432,7 +1817,7 @@ def _invariant_evaluation_contract(
             ),
             "NEGATIVE_CASE_RESULT_REFS_EQUAL_FROZEN_CASE_RESULT_REFS": typed_spec(
                 "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
-                ["candidate://validation/CASE_EXECUTION_MANIFEST.json#/negative_case_invocations/*/result_ref"],
+                ["candidate://validation/NEGATIVE_CASES.json#/cases/*/result_ref"],
                 "Require negative result refs to equal the frozen negative invocation result refs.",
             ),
             "INVARIANT_NEGATIVE_CASE_RESULT_IDS_EQUAL_REGISTRY_CASE_IDS": typed_spec(
@@ -1462,7 +1847,7 @@ def _invariant_evaluation_contract(
             ),
             "NEGATIVE_MUTATION_VARIANT_RESULT_IDS_EQUAL_DECLARED_VARIANT_IDS": typed_spec(
                 "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
-                ["candidate://validation/NEGATIVE_CASES.json#/cases/*/mutation_variants/*/variant_id"],
+                ["candidate://validation/NEGATIVE_CASES.json#/cases/*/input_fixture/mutation_variants/*/variant_id"],
                 "Require mutation variant result IDs to equal the declared negative Case variant IDs.",
             ),
             "WORD_ANCHORS_ARE_MONOTONIC_AND_NON_OVERLAPPING": typed_spec(
@@ -1496,13 +1881,13 @@ def _invariant_evaluation_contract(
                 "ORDERED_NUMERIC_PREDICATE_V1",
                 ["/shots/*/objects/*/hold_interval/start_seconds"],
                 "For every object require hold start to be strictly less than hold end.",
-                parameters={"relation": "GT_OTHER_OPERAND", "unit": "seconds"},
+                parameters={"relation": "GT", "unit": "seconds"},
             ),
             "HOLD_END_LESS_THAN_OR_EQUAL_TO_EXIT_TIME": typed_spec(
                 "ORDERED_NUMERIC_PREDICATE_V1",
                 ["/shots/*/objects/*/hold_interval/end_seconds"],
                 "For every object require hold end to be less than or equal to exit_time.",
-                parameters={"relation": "GTE_OTHER_OPERAND", "unit": "seconds"},
+                parameters={"relation": "GTE", "unit": "seconds"},
             ),
             "ENTER_HOLD_EXIT_SEGMENTS_ARE_CONTIGUOUS_AND_MATCH_DECLARED_INTERVALS": typed_spec(
                 "ORDERED_NUMERIC_PREDICATE_V1",
@@ -1552,7 +1937,7 @@ def _invariant_evaluation_contract(
             ),
             "EACH_DECLARED_OBJECT_HAS_NONZERO_PROBED_MOTION": typed_spec(
                 "ORDERED_NUMERIC_PREDICATE_V1",
-                ["/observed_motion_objects/*/changed_frame_count"],
+                [],
                 "For every declared object require its probed changed-frame count to be greater than zero.",
                 parameters={
                     "relation": "GT",
@@ -1579,6 +1964,36 @@ def _invariant_evaluation_contract(
     )
     if invariant_id in explicit_specs:
         contract.update(deepcopy(explicit_specs[invariant_id]))
+    if invariant_id == "CODEX_IMAGEGEN_MATERIALIZATION_REQUIRES_SEPARATE_CURRENT_AUTHORIZATION":
+        contract.update(
+            algorithm="MATERIALIZED_ASSET_AUTHORIZATION_V1",
+            input_refs=["/assets/*", "/job_id"],
+            decision_rule=(
+                "For every materialized ImageGen asset read its authorization and generation receipt. "
+                "Require a HUMAN GRANTED, single-use authorization of class CODEX_IMAGE_GENERATION_AUTHORIZATION; "
+                "match authorization ID and the complete nonempty exact scope to the receipt and current Job; "
+                "require issued_at <= receipt.executed_at < expires_at and exactly one consumption; "
+                "match receipt.output_ref/output_sha256 to the asset. Receipt integrity is checked separately."
+            ),
+        )
+    if invariant_id in {
+        "RENDERED_SEMANTIC_BINDINGS_EQUAL_MOTION_IR_OBJECT_BINDINGS",
+        "OBSERVED_MOTION_SEMANTIC_BINDINGS_EQUAL_RENDERED_AND_MOTION_BINDINGS",
+    }:
+        render = invariant_id.startswith("RENDERED_")
+        field = "/rendered_semantic_bindings" if render else "/observed_motion_objects"
+        contract.update(
+            algorithm="RENDER_OBJECT_BINDINGS_V1" if render else "OBSERVED_OBJECT_BINDINGS_V1",
+            input_refs=[field, "/motion_ir_ref" if render else "/render_receipt_ref"],
+            decision_rule=(
+                "Join the complete nonempty object collections by unique object_id. Require exact key sets "
+                "and equality of asset_id, visual_intent_id, audio_anchor_id, sentence_ids, claim_ids, "
+                "motion_segment_ids and motion_curve_ids. ID arrays compare as sets. Derive Motion IDs "
+                "from each object's motion_segments. For observed objects compare both Render and its "
+                "referenced Motion IR, not just the first visual intent."
+            ),
+            subject_selector=field,
+        )
     if invariant_id == (
         "NARRATION_BUDGET_ESTIMATE_MATCHES_CANONICAL_SENTENCE_ARRAY_AND_METHOD"
     ):
@@ -1676,28 +2091,36 @@ def _invariant_evaluation_contract(
     contract["operand_refs"] = _concrete_invariant_operand_refs(
         target_ref, list(contract["input_refs"]), schema
     )
+    if invariant_id == "LOCAL_DETERMINISTIC_ASSET_RECIPE_AND_OUTPUT_ARE_HASH_BOUND":
+        contract["algorithm"] = "PAIRED_BYTE_HASH_LINEAGE_V1"
+        contract["operand_refs"] = [
+            f"/assets/0/local_build_recipe/{field}_{suffix}"
+            for field in ("implementation", "input_manifest", "command_receipt", "output")
+            for suffix in ("sha256", "ref")
+        ]
     contract["branch_selector"] = _invariant_branch_selector(invariant_id)
+    if contract["branch_selector"]["mode"] == "REQUIRE_DISCRIMINATOR_CONST":
+        contract["branch_precondition"] = contract["branch_selector"]["const"]
+    if contract["algorithm"] == "RENDER_INPUT_ASSET_SET_EQUALITY_V1":
+        contract["operand_refs"] = ["/render_input_manifest_ref", "/asset_plan_ref"]
+    _normalize_registered_operator_inputs(invariant_id, contract)
     contract["evaluator_entrypoint"] = (
         "external_lab.invariants:evaluate_predicate_ast_v1"
     )
+    _bind_typed_predicate_fields(contract, schema)
     contract["predicate_ast"] = {
-        "operator": contract["algorithm"],
+        "algorithm": contract["algorithm"],
         "quantifier": contract["quantifier"],
         "subject_selector": contract["subject_selector"],
         "operand_refs": list(contract["operand_refs"]),
+        "operand_types": list(contract["operand_types"]),
+        "cardinality": deepcopy(contract["cardinality"]),
+        "join_keys": deepcopy(contract["join_keys"]),
         "branch_precondition": contract["branch_precondition"],
         "branch_selector": deepcopy(contract["branch_selector"]),
         "numeric_tolerance": deepcopy(contract["numeric_tolerance"]),
         "parameters": deepcopy(contract.get("parameters", {})),
     }
-    contract["predicate_sha256"] = hashlib.sha256(
-        json.dumps(
-            contract["predicate_ast"],
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    ).hexdigest()
     return contract
 
 
@@ -1714,7 +2137,42 @@ def _bind_invariant_evaluation_contracts(schema: dict[str, Any]) -> None:
         contract = _invariant_evaluation_contract(invariant_id, schema)
         existing = declared.get(invariant_id)
         if isinstance(existing, Mapping):
-            contract.update(deepcopy(dict(existing)))
+            existing = deepcopy(dict(existing))
+            # Upgrade only the known legacy Producer projections. Unknown
+            # semantic overrides remain visible to validation, not discarded.
+            legacy_algorithms = {
+                "FFPROBE_INPUT_SHA256_EQUALS_VIDEO_SHA256": "HASH_AND_BYTE_LINEAGE_V1",
+                "RENDER_INPUT_MANIFEST_BINDS_EXACT_ASSET_REFS_AND_SHA256S": "HASH_AND_BYTE_LINEAGE_V1",
+                "VIDEO_BYTES_INCLUDE_THE_REFERENCED_AUDIO_STREAM": "VIDEO_AUDIO_STREAM_BYTE_BINDING_V1",
+                "RENDERED_SEMANTIC_BINDINGS_EQUAL_MOTION_IR_OBJECT_BINDINGS": "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
+                "OBSERVED_MOTION_SEMANTIC_BINDINGS_EQUAL_RENDERED_AND_MOTION_BINDINGS": "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
+                "CODEX_IMAGEGEN_MATERIALIZATION_REQUIRES_SEPARATE_CURRENT_AUTHORIZATION": "DECLARED_REFERENCE_RESOLUTION_V1",
+            }
+            old_motion = (
+                invariant_id == "EACH_DECLARED_OBJECT_HAS_NONZERO_PROBED_MOTION"
+                and existing.get("algorithm") == "ORDERED_NUMERIC_PREDICATE_V1"
+                and existing.get("input_refs") == [
+                    "/observed_motion_objects/0/changed_frame_count",
+                    "/observed_motion_objects/*/changed_frame_count"]
+            )
+            old_demo_pairs = (invariant_id == "BEFORE_AND_AFTER_HASHES_MATCH_REFERENCED_BYTES"
+                              and existing.get("input_refs") == ["/output_after_sha256", "/input_before_ref",
+                                  "/input_before_sha256", "/output_after_ref", "/output_after_sha256"])
+            if old_motion or old_demo_pairs or (invariant_id in legacy_algorithms
+                              and existing.get("algorithm") == legacy_algorithms[invariant_id]):
+                for key in ("algorithm", "input_refs", "parameters", "decision_rule"):
+                    existing.pop(key, None)
+            if invariant_id in _AUTHORIZED_GATE_INVARIANTS:
+                existing.pop("branch_precondition", None)
+            if (existing.get("algorithm") == "DECLARED_REFERENCE_RESOLUTION_V1"
+                    and contract["algorithm"] == "DECLARED_DEPENDENCY_RELATION_V1"):
+                existing.pop("algorithm", None)
+            # Preserve explicit semantic overrides, but never resurrect an old
+            # compiler projection of bindings or the interpreter wire format.
+            contract.update(deepcopy({key: value for key, value in existing.items()
+                if key not in {"quantifier", "subject_selector", "operand_refs",
+                               "operand_types", "cardinality", "predicate_ast",
+                               "evaluation_contract_kind", "branch_selector"}}))
             contract["operand_refs"] = _concrete_invariant_operand_refs(
                 str(contract["target_ref"]),
                 list(contract["input_refs"]),
@@ -1723,11 +2181,26 @@ def _bind_invariant_evaluation_contracts(schema: dict[str, Any]) -> None:
             contract["branch_selector"] = _invariant_branch_selector(
                 invariant_id
             )
+            if contract["algorithm"] == "RENDER_INPUT_ASSET_SET_EQUALITY_V1":
+                contract["operand_refs"] = ["/render_input_manifest_ref", "/asset_plan_ref"]
+            if invariant_id == "LOCAL_DETERMINISTIC_ASSET_RECIPE_AND_OUTPUT_ARE_HASH_BOUND":
+                contract["algorithm"] = "PAIRED_BYTE_HASH_LINEAGE_V1"
+                contract["operand_refs"] = [
+                    f"/assets/0/local_build_recipe/{field}_{suffix}"
+                    for field in ("implementation", "input_manifest", "command_receipt", "output")
+                    for suffix in ("sha256", "ref")
+                ]
+            _normalize_registered_operator_inputs(invariant_id, contract)
+            _bind_typed_predicate_fields(contract, schema)
+            _require_registered_operator_signature(contract)
             contract["predicate_ast"] = {
-                "operator": contract["algorithm"],
+                "algorithm": contract["algorithm"],
                 "quantifier": contract["quantifier"],
                 "subject_selector": contract["subject_selector"],
                 "operand_refs": list(contract["operand_refs"]),
+                "operand_types": list(contract["operand_types"]),
+                "cardinality": deepcopy(contract["cardinality"]),
+                "join_keys": deepcopy(contract["join_keys"]),
                 "branch_precondition": contract["branch_precondition"],
                 "branch_selector": deepcopy(contract["branch_selector"]),
                 "numeric_tolerance": deepcopy(
@@ -1735,14 +2208,6 @@ def _bind_invariant_evaluation_contracts(schema: dict[str, Any]) -> None:
                 ),
                 "parameters": deepcopy(contract.get("parameters", {})),
             }
-            contract["predicate_sha256"] = hashlib.sha256(
-                json.dumps(
-                    contract["predicate_ast"],
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ).encode("utf-8")
-            ).hexdigest()
         _assert_invariant_contract_semantics(
             schema, invariant_id, contract
         )
@@ -1789,7 +2254,6 @@ def schema_invariant_contracts_are_complete(schema: Any) -> bool:
             != _INVARIANT_MUTATION_TARGETS.get(str(invariant_id))
             or not isinstance(contract.get("input_refs"), list)
             or not contract["input_refs"]
-            or contract["input_refs"][0] != contract.get("target_ref")
             or not all(
                 isinstance(contract.get(field), str) and contract.get(field)
                 for field in (
@@ -1812,7 +2276,7 @@ def schema_invariant_contracts_are_complete(schema: Any) -> bool:
             or contract.get("evaluator_entrypoint")
             != "external_lab.invariants:evaluate_predicate_ast_v1"
             or not isinstance(contract.get("predicate_ast"), Mapping)
-            or contract.get("predicate_ast", {}).get("operator")
+            or contract.get("predicate_ast", {}).get("algorithm")
             != contract.get("algorithm")
             or contract.get("predicate_ast", {}).get("quantifier")
             != contract.get("quantifier")
@@ -1824,17 +2288,14 @@ def schema_invariant_contracts_are_complete(schema: Any) -> bool:
             != contract.get("branch_precondition")
             or contract.get("predicate_ast", {}).get("branch_selector")
             != contract.get("branch_selector")
-            or contract.get("predicate_sha256")
-            != hashlib.sha256(
-                json.dumps(
-                    contract.get("predicate_ast"),
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ).encode("utf-8")
-            ).hexdigest()
+            or contract.get("predicate_ast", {}).get("operand_types")
+            != contract.get("operand_types")
+            or contract.get("predicate_ast", {}).get("cardinality")
+            != contract.get("cardinality")
+            or contract.get("predicate_ast", {}).get("join_keys")
+            != contract.get("join_keys")
             or (
-                str(invariant_id).startswith(("EVERY_", "ALL_", "EACH_"))
+                str(invariant_id) in _FOR_ALL_INVARIANTS
                 and (
                     contract.get("quantifier") != "FOR_ALL"
                     or "*" not in contract.get("subject_selector", "")
@@ -1977,6 +2438,7 @@ def public_skill_job_interface(
         "request_id": "METAMORPHIC-PUBLIC-SKILL-URL-001",
         "skill_url": sample_url,
         "requested_revision": "main",
+        "skill_entrypoint_ref": PUBLIC_SKILL_METAMORPHIC_ENTRYPOINT_REF,
         "language": "zh-CN",
         "duration_target_seconds": 180,
         "output_video_count": 1,
@@ -1990,11 +2452,14 @@ def public_skill_job_interface(
             "request_id",
             "skill_url",
             "requested_revision",
+            "skill_entrypoint_ref",
             "normalized_skill_url",
             "resolved_commit_sha",
             "resolved_git_tree_oid",
             "resolved_tree_ref",
             "resolved_tree_sha256",
+            "resolved_skill_entrypoint_ref",
+            "resolved_skill_entrypoint_sha256",
             "resolution_command_receipt_ref",
             "resolution_command_receipt_sha256",
             "repository_readable",
@@ -2005,6 +2470,9 @@ def public_skill_job_interface(
             "skill_url": {"const": sample_url},
             "requested_revision": {
                 "const": sample_request["requested_revision"]
+            },
+            "skill_entrypoint_ref": {
+                "const": sample_request["skill_entrypoint_ref"]
             },
             "normalized_skill_url": {"const": normalized_skill_url},
             "resolved_commit_sha": {
@@ -2017,6 +2485,13 @@ def public_skill_job_interface(
             },
             "resolved_tree_ref": {"type": "string", "minLength": 1},
             "resolved_tree_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$",
+            },
+            "resolved_skill_entrypoint_ref": {
+                "const": sample_request["skill_entrypoint_ref"]
+            },
+            "resolved_skill_entrypoint_sha256": {
                 "type": "string",
                 "pattern": "^[0-9a-f]{64}$",
             },
@@ -2037,6 +2512,10 @@ def public_skill_job_interface(
                 "sha256_pointer": "/resolved_tree_sha256",
             },
             {
+                "ref_pointer": "/resolved_skill_entrypoint_ref",
+                "sha256_pointer": "/resolved_skill_entrypoint_sha256",
+            },
+            {
                 "ref_pointer": "/resolution_command_receipt_ref",
                 "sha256_pointer": "/resolution_command_receipt_sha256",
             },
@@ -2053,14 +2532,6 @@ def public_skill_job_interface(
             {
                 "atom_id": str(atom_id),
                 "artifact_kind": str(profile.get("artifact_kind") or ""),
-                "schema_sha256": hashlib.sha256(
-                    json.dumps(
-                        profile.get("schema"),
-                        ensure_ascii=False,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    ).encode("utf-8")
-                ).hexdigest(),
             }
             for atom_id, profile in (
                 catalog.items() if isinstance(catalog, Mapping) else []
@@ -2094,6 +2565,10 @@ def public_skill_job_interface(
                     "type": "string",
                     "minLength": 1,
                 },
+                "skill_entrypoint_ref": {
+                    "type": "string",
+                    "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?:[^/]+/)*SKILL\\.md$",
+                },
                 "language": {"const": "zh-CN"},
                 "duration_target_seconds": {
                     "type": "number",
@@ -2113,9 +2588,11 @@ def public_skill_job_interface(
             "job_identity_fields": [
                 "request_id",
                 "normalized_skill_url",
+                "skill_entrypoint_ref",
                 "resolved_commit_sha",
                 "resolved_git_tree_oid",
                 "resolved_tree_sha256",
+                "resolved_skill_entrypoint_sha256",
             ],
             "mutable_request_fields_excluded_from_final_identity": [
                 "requested_revision"
@@ -2136,6 +2613,25 @@ def public_skill_job_interface(
             "source_resolution_receipt_bytes_must_hash_match": True,
             "resolved_tree_bytes_must_hash_match": True,
             "schema_template_bindings": template_bindings,
+            "template_binding_role": "INPUT_CATALOG_NOT_COMPLETE_OUTPUT_ARTIFACT_SET",
+            "artifact_derivation_contract": {
+                "algorithm": "RECOMPILE_FROZEN_CATALOG_WITH_SINGLE_RESOLVED_JOB_V1",
+                "input": "HASH_VERIFIED_SOURCE_RESOLUTION_AND_DERIVED_JOB_ID",
+                "supplemental_artifacts": {
+                    "LOCAL_TTS_RECEIPT": ["NARRATION_SCRIPT"],
+                    "OBJECT_MOTION_IR": ["ASSET_BINDING_RECEIPT"],
+                },
+                "stage_order": list(RESUMABLE_STAGE_ORDER),
+                "dependency_rule": "REUSE_COMPLETE_ARTIFACT_DEPENDENCY_COMPILER_FOR_ONE_JOB",
+                "renderer_binding": "PRESERVE_FROZEN_RENDERER_SEPARATE_FROM_DYNAMIC_CONTENT_SOURCE",
+                "write_root_rule": "EXECUTION_JOBS_DERIVED_JOB_ID_ONLY",
+                "execution_enabled": False,
+            },
+            "job_pipeline_entrypoint": PUBLIC_SKILL_JOB_PIPELINE_ENTRYPOINT,
+            "schema_catalog_ref": (
+                "harness-resource://candidate/canonical_sources/"
+                "FROZEN_REQUIREMENT_IR.json#/target/artifact_schema_catalog"
+            ),
             "schema_binding_rule": (
                 "DEEP_COPY_GENERIC_TEMPLATE_THEN_BIND_ONLY_JOB_SOURCE_PIN_AND_"
                 "PINNED_RENDERER_FIELDS"
@@ -2167,8 +2663,9 @@ def public_skill_job_interface(
             "steps": [
                 "VALIDATE_JOB_REQUEST_SCHEMA",
                 "NORMALIZE_URL_AND_RESOLVE_REQUESTED_REVISION",
+                "RESOLVE_AND_HASH_EXACT_SKILL_ENTRYPOINT_WITHIN_TREE",
                 "DERIVE_ONE_JOB_ID_AND_BIND_GENERIC_ARTIFACT_SCHEMAS",
-                "REQUIRE_ONE_INDEPENDENT_VIDEO_OUTPUT_CONTRACT",
+                "REQUIRE_ONE_VIDEO_AND_MEDIA_ACCEPTANCE_ARTIFACT_UNDER_JOB_LEASE",
             ],
             "expected": {
                 "input_skill_count": 1,
@@ -2181,6 +2678,10 @@ def public_skill_job_interface(
                 ),
                 "source_is_frozen_before_analysis": True,
                 "source_resolution_receipt_required": True,
+                "skill_entrypoint_identity_required": True,
+                "video_artifact_descriptor_required": True,
+                "media_acceptance_artifact_descriptor_required": True,
+                "job_artifact_lease_descriptor_required": True,
                 "target_skill_execution_enabled": False,
             },
             "oracle": {
@@ -2192,8 +2693,9 @@ def public_skill_job_interface(
                 "decision_rule": (
                     "HASH_RESOLUTION_RECEIPT_AND_RESOLVED_TREE_BYTES_THEN_DERIVE_"
                     "JOB_ID_FROM_REQUEST_ID_NORMALIZED_URL_COMMIT_TREE_OID_AND_"
-                    "TREE_SHA256_AND_REQUIRE_ONE_DYNAMIC_SCHEMA_BINDING_SET_AND_"
-                    "ONE_VIDEO_OUTPUT_FOR_THE_UNLISTED_PUBLIC_SKILL_URL"
+                    "TREE_SHA256_SKILL_ENTRYPOINT_AND_ENTRYPOINT_SHA256_AND_"
+                    "REQUIRE_ONE_DYNAMIC_SCHEMA_BINDING_SET_ONE_HASH_VERIFIED_"
+                    "VIDEO_MEDIA_ACCEPTANCE_RECEIPT_AND_JOB_ARTIFACT_LEASE"
                 ),
                 "side_effects_allowed_during_authoring": False,
             },
@@ -2356,6 +2858,20 @@ def oracle_evaluator_registry(
             case_id = f"NEG-INV-{_safe_id(kind)}-{_safe_id(invariant_id)}"
             negative_case_ids.append(case_id)
             mutation_recipe = _invariant_mutation_recipe(invariant_id)
+            recomputation_variants = [
+                canonical_recomputations(schema, target_ref)
+                for schema in schemas_by_kind.get(kind, {}).values()
+            ]
+            if any(value != recomputation_variants[0] for value in recomputation_variants):
+                raise ValueError(f"mutation derivations differ across schemas: {invariant_id}")
+            mutation_recipe["derived_field_recomputations"] = recomputation_variants[0]
+            mutation_recipe["result_classification"] = {
+                "success": "SCHEMA_PASS_AND_EXACT_TARGET_INVARIANT_FAILURE",
+                "timeout_or_runner_error": "INCONCLUSIVE",
+                "schema_rejection": "NOT_INVARIANT_EVIDENCE",
+                "missing_counterexample": "INCONCLUSIVE_NOT_PASS",
+                "recomputation_order": "AFTER_MUTATION_BEFORE_SCHEMA_AND_ALL_ORACLES",
+            }
             schema_instances = []
             for schema_sha256, current_schema in sorted(
                 schemas_by_kind.get(kind, {}).items()
@@ -3424,6 +3940,9 @@ def _strengthen_artifact_schema(
         }
 
     elif artifact_kind == "ASSET_PLAN":
+        properties.setdefault("job_id", {"type": "string", "minLength": 1})
+        if "job_id" not in schema.setdefault("required", []):
+            schema["required"].append("job_id")
         if (
             {
                 "assets",
@@ -3435,6 +3954,9 @@ def _strengthen_artifact_schema(
             and "ASSET_MANIFEST_SHA256_MATCHES_CANONICAL_ASSET_ARRAY"
             in schema.get("x-invariants", [])
         ):
+            # Shape normalization is idempotent; evaluator projections still
+            # need rebuilding when the Producer/interpreter contract changes.
+            _bind_invariant_evaluation_contracts(schema)
             return schema
         item_properties = deepcopy(properties)
         item_required = [
@@ -3627,12 +4149,14 @@ def _strengthen_artifact_schema(
             "additionalProperties": False,
             "required": [
                 "assets",
+                "job_id",
                 "asset_object_ids",
                 "motion_object_ids",
                 "asset_manifest_sha256",
                 "status",
             ],
             "properties": {
+                "job_id": {"type": "string", "minLength": 1},
                 "assets": {
                     "type": "array",
                     "minItems": 1,
@@ -5856,6 +6380,8 @@ def explicit_production_enabled(requirement_ir: Mapping[str, Any]) -> bool:
 
 def compile_declared_production_contracts(
     requirement_ir: Mapping[str, Any],
+    *,
+    resolved_job: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Hydrate exact contracts from frozen Atoms and a declared schema catalog.
 
@@ -5905,7 +6431,17 @@ def compile_declared_production_contracts(
             acceptance_by_atom.setdefault(str(atom_id), []).append(
                 str(case["case_id"])
             )
-    repository_jobs = repository_job_bindings(compiled)
+    renderer_jobs = repository_job_bindings(compiled)
+    repository_jobs = renderer_jobs
+    if resolved_job is not None:
+        # A pure specialization input, not an authority or a root override.
+        # Callers resolve/freeze bytes before entering this compiler.
+        required_job_fields = {"job_id", "source_id", "repository_url", "commit_sha", "git_tree_oid", "tree_sha256"}
+        if not required_job_fields.issubset(resolved_job) or any(not resolved_job[field] for field in required_job_fields):
+            raise ValueError("dynamic specialization requires an exact resolved Job")
+        if any(character not in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-" for character in resolved_job["job_id"]):
+            raise ValueError("dynamic Job ID must be path-safe")
+        repository_jobs = [dict(resolved_job)]
     acceptance_cases = [
         item
         for item in compiled.get("acceptance_cases", [])
@@ -6064,7 +6600,7 @@ def compile_declared_production_contracts(
                         current_schema,
                         job,
                         current_kind,
-                        repository_jobs,
+                        renderer_jobs,
                     )
                 evaluator_id = _artifact_evaluator_id(current_kind)
                 phase_incompatible_error_codes = (
@@ -6950,6 +7486,7 @@ def task_bundle_for_workpack(
             "required_source_resolution_entrypoint": (
                 PUBLIC_SKILL_SOURCE_RESOLUTION_ENTRYPOINT
             ),
+            "required_job_pipeline_entrypoint": PUBLIC_SKILL_JOB_PIPELINE_ENTRYPOINT,
             "assertion_operators": [
                 "VALIDATED_RECEIPT_EXISTS",
                 "SET_EQUALS",
@@ -6972,6 +7509,7 @@ def task_bundle_for_workpack(
                 "LAB-CLI": [
                     "Expose all seven required subcommands with their declared parameter contracts.",
                     "Implement and invoke external_lab.sources:resolve_public_skill_source_v1 from run-metamorphic-case before content analysis.",
+                    "Implement external_lab.jobs:run_public_skill_job_v1 to specialize the complete artifact graph, acquire the existing one-Job lease, run the declared stages, and verify Job descriptor bytes and identity; the Case caller writes only Case receipts.",
                     "Write hash-bound command and side-effect receipts for every invocation.",
                 ],
                 "LAB-FIXTURES": [

@@ -246,7 +246,6 @@ class FactoryService:
                 ),
             }
         )
-        self._export_program_views(program_id)
         return response
 
     def readback(self, program_id: str) -> dict[str, Any]:
@@ -275,7 +274,6 @@ class FactoryService:
                 "capabilities_not_proven", []
             ),
         }
-        self._export_program_views(program_id)
         return response
 
     def requirement_readback(self, program_id: str) -> dict[str, Any]:

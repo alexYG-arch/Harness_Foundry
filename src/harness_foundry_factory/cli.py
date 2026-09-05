@@ -188,9 +188,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             request = ChatRequest.from_dict(_load_request(request_location))
             result = _service(args, program_id=request.program_id).handle_chat_turn(request)
         elif args.command == "status":
-            result = _service(args, program_id=args.program_id).status(args.program_id)
+            result = _service(args, program_id=args.program_id, read_only_store=True).status(args.program_id)
         elif args.command == "readback":
-            result = _service(args, program_id=args.program_id).readback(args.program_id)
+            result = _service(args, program_id=args.program_id, read_only_store=True).readback(args.program_id)
         elif args.command == "requirement-readback":
             result = _service(
                 args,
