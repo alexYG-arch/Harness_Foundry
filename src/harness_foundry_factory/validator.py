@@ -27,6 +27,10 @@ from .artifact_descriptors import (
     diagnose_candidate_hash_projections,
 )
 from .invariant_contracts import validate_invariant_contract_v1, registered_operator_findings
+from .semantic_operator_catalog import (
+    semantic_projection_errors, LOCAL_OUTPUT_BINDING, MUTATION_FAILURE_DEPENDENCIES,
+    failure_set_schema_errors,
+)
 from .media_evidence_contracts import media_contract_errors
 from .contract_references import resolve_candidate_operand
 from .constants import (
@@ -2368,10 +2372,29 @@ def _oracle_registry_is_independently_consistent(
             or case.get("base_precondition", {}).get("required_branch") != selector.get("const")
         ):
             return False
+        if selector.get("mode") == "REQUIRE_DISCRIMINATOR_IN" and recipe.get("required_base_subject_branch") != {
+            "discriminator_ref": selector["discriminator_ref"].replace("/*", "/0"),
+            "values": selector["values"],
+        }:
+            return False
         # Independent projection from schema-defined derivations, not from the
         # Producer recipe. Only non-target canonical parents may be rebuilt.
         expected_recomputations = []
         peer_contracts = schemas_by_kind[pair[0]][0].get("x-invariant-contracts", {})
+        expected_failure_set, pending = set(), [pair[1]]
+        while pending:
+            current = pending.pop()
+            if current not in expected_failure_set:
+                expected_failure_set.add(current)
+                pending.extend(MUTATION_FAILURE_DEPENDENCIES.get(current, ()))
+        if not expected_failure_set.issubset(peer_contracts):
+            return False
+        expected_failures = sorted(expected_failure_set)
+        if (recipe.get("mutation_class") != ("DEPENDENCY_CLOSURE" if len(expected_failures) > 1 else "INDEPENDENT_INVARIANT")
+                or recipe.get("acceptance_predicate") != {
+                    "full_artifact_json_schema": "PASS", "required_failed_invariant_ids": [pair[1]],
+                    "allowed_failed_invariant_ids": expected_failures, "outside_allowed_failure_set": "PASS"}):
+            return False
         for peer in peer_contracts.values():
             source = peer.get("parameters", {}).get("canonical_value_ref")
             target = peer.get("target_ref")
@@ -2405,14 +2428,15 @@ def _oracle_registry_is_independently_consistent(
             return False
         if (recipe.get("derived_field_recomputations") != sorted(expected_recomputations, key=lambda item: item["target_ref"])
                 or recipe.get("result_classification") != {
-                    "success": "SCHEMA_PASS_AND_EXACT_TARGET_INVARIANT_FAILURE",
+                    "success": "SCHEMA_PASS_AND_DECLARED_FAILURE_SET",
                     "timeout_or_runner_error": "INCONCLUSIVE",
                     "schema_rejection": "NOT_INVARIANT_EVIDENCE",
                     "missing_counterexample": "INCONCLUSIVE_NOT_PASS",
                     "recomputation_order": "AFTER_MUTATION_BEFORE_SCHEMA_AND_ALL_ORACLES",
                 }
-                or mutation.get("post_mutation_failed_invariant_ids") != [pair[1]]
-                or mutation.get("all_other_invariant_ids_expected") != "PASS"):
+                or mutation.get("post_mutation_required_failed_invariant_ids") != [pair[1]]
+                or mutation.get("post_mutation_allowed_failed_invariant_ids") != expected_failures
+                or mutation.get("outside_allowed_failure_set_expected") != "PASS"):
             return False
         if (
             case.get("evaluator_id") != evaluator_id
@@ -12920,6 +12944,10 @@ def _independent_invariant_contract_findings(
     }
     if not invariants:
         return findings
+    findings.extend(_finding(code, artifact_id) for code in failure_set_schema_errors(schema))
+    if ("LOCAL_DETERMINISTIC_ASSET_RECIPE_AND_OUTPUT_ARE_HASH_BOUND" in invariants
+            and LOCAL_OUTPUT_BINDING not in invariants):
+        findings.append(_finding("INVARIANT_LOCAL_OUTPUT_BINDING_MISSING", artifact_id))
     contracts = schema.get("x-invariant-contracts")
     required_fields = {
         "algorithm_id",
@@ -13135,6 +13163,8 @@ def _independent_invariant_contract_findings(
                             )
                         )
             algorithm = str(contract.get("algorithm") or "")
+            findings.extend(_finding(code, f"{artifact_id}:{invariant_id}")
+                            for code in semantic_projection_errors(invariant_id, contract))
             expected_media_algorithm = {
                 "RENDERED_SEMANTIC_BINDINGS_EQUAL_MOTION_IR_OBJECT_BINDINGS": "RENDER_OBJECT_BINDINGS_V1",
                 "OBSERVED_MOTION_SEMANTIC_BINDINGS_EQUAL_RENDERED_AND_MOTION_BINDINGS": "OBSERVED_OBJECT_BINDINGS_V1",
@@ -13216,6 +13246,7 @@ def _independent_invariant_contract_findings(
                 {"mode": "ANY_JSON_SCHEMA_VALID_BRANCH"},
             )
             asset_state_expectations = {
+                LOCAL_OUTPUT_BINDING: ["LOCAL_DETERMINISTIC_VERIFIED"],
                 "EVERY_MATERIALIZED_ASSET_REF_HASH_MATCHES_ASSET_SHA256": [
                     "SOURCE_VERIFIED", "LOCAL_DETERMINISTIC_VERIFIED",
                     "CODEX_IMAGEGEN_AUTHORIZED_MATERIALIZED",

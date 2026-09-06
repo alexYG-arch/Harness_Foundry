@@ -21,12 +21,14 @@ from .constants import (
     RELEASE_WORKPACK_BINDINGS,
 )
 from .invariant_contracts import (
-    SUPPORTED_ALGORITHMS,
-    SUPPORTED_NUMERIC_RELATIONS,
     validate_invariant_contract_v1,
     registered_operator_findings,
 )
-from .mutation_contracts import canonical_recomputations
+from .mutation_contracts import canonical_recomputations, invariant_failure_closure
+from .semantic_operator_catalog import (
+    ALGORITHM_FAMILIES, COLLECTION_PROJECTIONS, LOCAL_OUTPUT_BINDING,
+    semantic_projection_errors, failure_set_schema_errors,
+)
 
 
 EXPLICIT_PRODUCTION_MODE = "EXPLICIT_ARTIFACT_OBLIGATIONS"
@@ -305,6 +307,7 @@ _INVARIANT_MUTATION_TARGETS = {
     "ASSET_PROVENANCE_REFS_AND_HASHES_HAVE_EQUAL_CARDINALITY": "/assets/0/provenance_sha256s",
     "EVERY_ASSET_PROVENANCE_HASH_MATCHES_REFERENCED_BYTES": "/assets/0/provenance_sha256s/0",
     "LOCAL_DETERMINISTIC_ASSET_RECIPE_AND_OUTPUT_ARE_HASH_BOUND": "/assets/0/local_build_recipe/implementation_sha256",
+    LOCAL_OUTPUT_BINDING: "/assets/0/local_build_recipe/output_ref",
     "CODEX_IMAGEGEN_MATERIALIZATION_REQUIRES_SEPARATE_CURRENT_AUTHORIZATION": "/assets/0/generation_authorization_ref",
     "IMAGEGEN_RECEIPT_HASH_MATCHES_REFERENCED_BYTES_WHEN_MATERIALIZED": "/assets/0/generation_receipt_sha256",
     "DEMO_CLAIM_IDS_RESOLVE_TO_SAME_JOB_CLAIM_MATRIX": "/claim_ids",
@@ -568,14 +571,23 @@ def _invariant_mutation_recipe(invariant_id: str) -> dict[str, Any]:
     selector = _INVARIANT_BRANCH_SELECTORS.get(invariant_id)
     if selector is not None:
         recipe["required_base_branch"] = selector["const"]
+    branch = _invariant_branch_selector(invariant_id)
+    if branch["mode"] == "REQUIRE_DISCRIMINATOR_IN":
+        # Negative recipes edit the registered concrete seed, not an arbitrary
+        # passing member on a different materialization branch.
+        recipe["required_base_subject_branch"] = {
+            "discriminator_ref": branch["discriminator_ref"].replace("/*", "/0"),
+            "values": list(branch["values"]),
+        }
     recipe.update(
         {
             "recipe_id": f"MUTATION-{_safe_id(invariant_id)}-V1",
             "base_selection": "FULL_ARTIFACT_SCHEMA_AND_ALL_ORACLES_PASS",
             "acceptance_predicate": {
                 "full_artifact_json_schema": "PASS",
-                "failed_invariant_ids": [invariant_id],
-                "all_other_invariant_ids": "PASS",
+                "required_failed_invariant_ids": [invariant_id],
+                "allowed_failed_invariant_ids": invariant_failure_closure(invariant_id),
+                "outside_allowed_failure_set": "PASS",
             },
             "failure_if_unsatisfied": "EXACT_COUNTEREXAMPLE_NOT_FOUND",
         }
@@ -682,6 +694,7 @@ _INVARIANT_BRANCH_SELECTORS.update({name: {
 
 def _invariant_branch_selector(invariant_id: str) -> dict[str, Any]:
     asset_states = {
+        LOCAL_OUTPUT_BINDING: ["LOCAL_DETERMINISTIC_VERIFIED"],
         "EVERY_MATERIALIZED_ASSET_REF_HASH_MATCHES_ASSET_SHA256": [
             "SOURCE_VERIFIED", "LOCAL_DETERMINISTIC_VERIFIED",
             "CODEX_IMAGEGEN_AUTHORIZED_MATERIALIZED",
@@ -714,7 +727,7 @@ def _invariant_branch_selector(invariant_id: str) -> dict[str, Any]:
 def _invariant_quantifier(invariant_id: str) -> str:
     """Return the explicitly registered quantifier, never a name heuristic."""
 
-    return "FOR_ALL" if invariant_id in _FOR_ALL_INVARIANTS else "SINGLE"
+    return "FOR_ALL" if invariant_id in _FOR_ALL_INVARIANTS or invariant_id == LOCAL_OUTPUT_BINDING else "SINGLE"
 
 
 def _invariant_subject_selector(
@@ -722,6 +735,10 @@ def _invariant_subject_selector(
 ) -> str:
     """Separate a mutation seed from the complete evaluated subject set."""
 
+    if invariant_id in COLLECTION_PROJECTIONS:
+        return COLLECTION_PROJECTIONS[invariant_id][0]
+    if invariant_id == LOCAL_OUTPUT_BINDING:
+        return "/assets/*"
     if _invariant_quantifier(invariant_id) == "SINGLE":
         return target_ref
     if invariant_id in {
@@ -900,67 +917,12 @@ def _bind_typed_predicate_fields(
         if isinstance(contract.get("parameters"), Mapping)
         else []
     )
-    arity = len(operand_refs)
-    valid_arity = {
-        "EXACT_EQUALITY_V1": {2},
-        "CANONICAL_VALUE_OR_SET_EQUALITY_V1": {2},
-        "SET_EQUALITY_V1": {2},
-        "HASH_AND_BYTE_LINEAGE_V1": {2},
-        "PAIRED_BYTE_HASH_LINEAGE_V1": {4, 6, 8},
-        "EXACT_ARRAY_CARDINALITY_COMPARISON_V1": {2},
-        "ORDERED_NUMERIC_PREDICATE_V1": {1, 2},
-        "DECLARED_REFERENCE_RESOLUTION_V1": {1},
-        "MATERIALIZED_ASSET_AUTHORIZATION_V1": {2},
-        "ALL_VALUES_EQUAL_V1": {3, 4},
-    }
-    parameters = contract.get("parameters", {})
-    numeric_relation_supported = bool(
-        algorithm != "ORDERED_NUMERIC_PREDICATE_V1"
-        or (
-            isinstance(parameters, Mapping)
-            and parameters.get("relation") in SUPPORTED_NUMERIC_RELATIONS
-        )
-    )
-    operand_types = tuple(contract["operand_types"])
-    type_signature_supported = bool(
-        (algorithm in {"EXACT_EQUALITY_V1", "CANONICAL_VALUE_OR_SET_EQUALITY_V1"}
-         and len(operand_types) == 2 and operand_types[0] == operand_types[1])
-        or (algorithm == "SET_EQUALITY_V1" and operand_types == ("array", "array"))
-        or (
-            algorithm == "HASH_AND_BYTE_LINEAGE_V1"
-            and set(operand_types) == {"ref", "sha256"}
-        )
-        or (
-            algorithm == "PAIRED_BYTE_HASH_LINEAGE_V1"
-            and len(operand_types) % 2 == 0
-            and all(set(operand_types[i:i+2]) == {"ref", "sha256"}
-                    for i in range(0, len(operand_types), 2))
-        )
-        or (
-            algorithm == "EXACT_ARRAY_CARDINALITY_COMPARISON_V1"
-            and operand_types == ("array", "array")
-        )
-        or (
-            algorithm == "ORDERED_NUMERIC_PREDICATE_V1"
-            and all(value == "scalar" for value in operand_types)
-        )
-        or (
-            algorithm == "DECLARED_REFERENCE_RESOLUTION_V1"
-            and operand_types == ("ref",)
-        )
-        or (algorithm == "MATERIALIZED_ASSET_AUTHORIZATION_V1" and operand_types == ("object", "scalar"))
-        or (algorithm == "ALL_VALUES_EQUAL_V1" and len(set(operand_types)) == 1)
-    )
-    kernel_eligible = bool(
-        algorithm in SUPPORTED_ALGORITHMS
-        and arity in valid_arity.get(algorithm, set())
-        and all(ref.startswith("/") for ref in operand_refs)
-        and numeric_relation_supported
-        and type_signature_supported
-    )
+    # Use the kernel's one signature definition for construction and validation.
+    # External reference resolution remains external; it cannot excuse an
+    # invalid signature of a registered operator.
     contract["evaluation_contract_kind"] = (
         "TYPED_KERNEL_V1"
-        if kernel_eligible
+        if not validate_invariant_contract_v1(contract)
         else "EXTERNAL_EXACT_ALGORITHM_V1"
     )
 
@@ -1046,39 +1008,26 @@ def _assert_invariant_contract_semantics(
 
 
 def _invariant_algorithm_family(invariant_id: str) -> str:
-    if "CARDINALITY" in invariant_id:
-        return "EXACT_ARRAY_CARDINALITY_COMPARISON_V1"
-    if "SHA256" in invariant_id or "HASH" in invariant_id:
-        return "HASH_AND_BYTE_LINEAGE_V1"
-    if "ARE_UNIQUE" in invariant_id:
-        return "CANONICAL_MEMBER_UNIQUENESS_V1"
-    if any(
-        token in invariant_id
-        for token in ("RESOLVE", "EXISTS_IN", "BINDS", "REQUIRES")
-    ):
-        # A domain binding is not the primitive "a ref resolves to any value".
-        # Keep it on the explicit Lab route rather than falsely claiming that
-        # the small local reference-existence kernel implements its semantics.
-        return "DECLARED_DEPENDENCY_RELATION_V1"
-    if any(
-        token in invariant_id
-        for token in (
-            "LESS_THAN",
-            "DOES_NOT_EXCEED",
-            "NONZERO",
-            "MONOTONIC",
-            "CONTIGUOUS",
-        )
-    ):
-        return "ORDERED_NUMERIC_PREDICATE_V1"
-    if "EQUAL" in invariant_id or "MATCHES" in invariant_id:
-        return "CANONICAL_VALUE_OR_SET_EQUALITY_V1"
-    if any(
-        token in invariant_id
-        for token in ("NO_SIDE_EFFECT", "NOT_REPLAYED", "IS_NOT", "WAS_NOT")
-    ):
-        return "POLICY_STATE_PREDICATE_V1"
-    return "EXACT_NAMED_PREDICATE_V1"
+    try:
+        return ALGORITHM_FAMILIES[invariant_id]
+    except KeyError as exc:
+        raise ValueError(f"INVARIANT_ALGORITHM_NOT_REGISTERED:{invariant_id}") from exc
+
+
+def _apply_catalog_projection(invariant_id, contract):
+    projection = COLLECTION_PROJECTIONS.get(invariant_id)
+    if projection is not None:
+        root, values = projection
+        if contract["algorithm"] != "CANONICAL_MEMBER_UNIQUENESS_V1":
+            raise ValueError(f"INVARIANT_COLLECTION_ALGORITHM_CONFLICT:{invariant_id}")
+        contract.update(input_refs=[values], operand_refs=[values],
+                        subject_selector=root, quantifier="SINGLE", parameters={})
+    if invariant_id == LOCAL_OUTPUT_BINDING:
+        refs = ["/assets/*/local_build_recipe/output_ref", "/assets/*/asset_ref"]
+        contract.update(algorithm="EXACT_EQUALITY_V1", input_refs=refs, operand_refs=list(refs),
+                        subject_selector="/assets/*", quantifier="FOR_ALL", parameters={},
+                        decision_rule="For each local deterministic asset require its recipe output_ref to equal asset_ref. "
+                        "The existing recipe and materialized-asset byte checks establish the digest equality without another hash.")
 
 
 def _invariant_evaluation_contract(
@@ -1113,6 +1062,7 @@ def _invariant_evaluation_contract(
                 input_refs.append(value)
     family = _invariant_algorithm_family(invariant_id)
     decision_rules = {
+        "EXACT_EQUALITY_V1": "Require exact canonical equality of the two declared values.",
         "HASH_AND_BYTE_LINEAGE_V1": (
             "Resolve the reference paired by the artifact schema or declared "
             "dependency manifest, hash its exact bytes with SHA-256, and require "
@@ -1346,8 +1296,10 @@ def _invariant_evaluation_contract(
             "decision_rule": (
                 "For every registry invariant and applicable schema Hash require "
                 "a passing base instance; apply the bound mutation; require JSON "
-                "Schema PASS, exactly the declared invariant FAIL, all other "
-                "invariants PASS, and zero side effects."
+                "Schema PASS and the target invariant FAIL. Replay every peer oracle; "
+                "require the observed failed_invariant_ids to contain the target and "
+                "be a subset of the registry's predeclared allowed failure closure. "
+                "All invariants outside that closure must PASS; require zero side effects."
             ),
         },
         "EVERY_MOTION_SEGMENT_HAS_DISTINCT_FROM_AND_TO_STATE": {
@@ -2104,6 +2056,7 @@ def _invariant_evaluation_contract(
     if contract["algorithm"] == "RENDER_INPUT_ASSET_SET_EQUALITY_V1":
         contract["operand_refs"] = ["/render_input_manifest_ref", "/asset_plan_ref"]
     _normalize_registered_operator_inputs(invariant_id, contract)
+    _apply_catalog_projection(invariant_id, contract)
     contract["evaluator_entrypoint"] = (
         "external_lab.invariants:evaluate_predicate_ast_v1"
     )
@@ -2164,6 +2117,9 @@ def _bind_invariant_evaluation_contracts(schema: dict[str, Any]) -> None:
                     existing.pop(key, None)
             if invariant_id in _AUTHORIZED_GATE_INVARIANTS:
                 existing.pop("branch_precondition", None)
+            if (invariant_id == "EVERY_INVARIANT_MUTATION_PRESERVES_JSON_SCHEMA_AND_FAILS_DECLARED_INVARIANT"
+                    and "exactly the declared invariant FAIL, all other" in str(existing.get("decision_rule", ""))):
+                existing.pop("decision_rule", None)
             if (existing.get("algorithm") == "DECLARED_REFERENCE_RESOLUTION_V1"
                     and contract["algorithm"] == "DECLARED_DEPENDENCY_RELATION_V1"):
                 existing.pop("algorithm", None)
@@ -2191,6 +2147,7 @@ def _bind_invariant_evaluation_contracts(schema: dict[str, Any]) -> None:
                     for suffix in ("sha256", "ref")
                 ]
             _normalize_registered_operator_inputs(invariant_id, contract)
+            _apply_catalog_projection(invariant_id, contract)
             _bind_typed_predicate_fields(contract, schema)
             _require_registered_operator_signature(contract)
             contract["predicate_ast"] = {
@@ -2208,11 +2165,18 @@ def _bind_invariant_evaluation_contracts(schema: dict[str, Any]) -> None:
                 ),
                 "parameters": deepcopy(contract.get("parameters", {})),
             }
+        _require_registered_operator_signature(contract)
         _assert_invariant_contract_semantics(
             schema, invariant_id, contract
         )
+        projection_errors = semantic_projection_errors(invariant_id, contract)
+        if projection_errors:
+            raise ValueError(f"{projection_errors[0]}:{invariant_id}")
         contracts[invariant_id] = contract
     schema["x-invariant-contracts"] = contracts
+    evidence_errors = failure_set_schema_errors(schema)
+    if evidence_errors:
+        raise ValueError(evidence_errors[0])
 
 
 def schema_invariant_contracts_are_complete(schema: Any) -> bool:
@@ -2858,6 +2822,12 @@ def oracle_evaluator_registry(
             case_id = f"NEG-INV-{_safe_id(kind)}-{_safe_id(invariant_id)}"
             negative_case_ids.append(case_id)
             mutation_recipe = _invariant_mutation_recipe(invariant_id)
+            allowed_failures = invariant_failure_closure(invariant_id)
+            if not set(allowed_failures).issubset(invariant_ids):
+                raise ValueError(f"mutation failure dependency is not declared: {invariant_id}")
+            mutation_recipe["mutation_class"] = (
+                "DEPENDENCY_CLOSURE" if len(allowed_failures) > 1 else "INDEPENDENT_INVARIANT"
+            )
             recomputation_variants = [
                 canonical_recomputations(schema, target_ref)
                 for schema in schemas_by_kind.get(kind, {}).values()
@@ -2866,7 +2836,7 @@ def oracle_evaluator_registry(
                 raise ValueError(f"mutation derivations differ across schemas: {invariant_id}")
             mutation_recipe["derived_field_recomputations"] = recomputation_variants[0]
             mutation_recipe["result_classification"] = {
-                "success": "SCHEMA_PASS_AND_EXACT_TARGET_INVARIANT_FAILURE",
+                "success": "SCHEMA_PASS_AND_DECLARED_FAILURE_SET",
                 "timeout_or_runner_error": "INCONCLUSIVE",
                 "schema_rejection": "NOT_INVARIANT_EVIDENCE",
                 "missing_counterexample": "INCONCLUSIVE_NOT_PASS",
@@ -2932,8 +2902,9 @@ def oracle_evaluator_registry(
                         "schema_instances": schema_instances,
                         "post_mutation_json_schema_expected": "PASS",
                         "post_mutation_oracle_expected": "FAIL",
-                        "post_mutation_failed_invariant_ids": [invariant_id],
-                        "all_other_invariant_ids_expected": "PASS",
+                        "post_mutation_required_failed_invariant_ids": [invariant_id],
+                        "post_mutation_allowed_failed_invariant_ids": allowed_failures,
+                        "outside_allowed_failure_set_expected": "PASS",
                         "proof_status": "REQUIRES_EXTERNAL_LAB_REPLAY",
                         "failure_if_counterexample_not_found": (
                             "EXACT_COUNTEREXAMPLE_NOT_FOUND"
@@ -3956,6 +3927,11 @@ def _strengthen_artifact_schema(
         ):
             # Shape normalization is idempotent; evaluator projections still
             # need rebuilding when the Producer/interpreter contract changes.
+            if LOCAL_OUTPUT_BINDING not in schema["x-invariants"]:
+                schema["x-invariants"].insert(
+                    schema["x-invariants"].index("LOCAL_DETERMINISTIC_ASSET_RECIPE_AND_OUTPUT_ARE_HASH_BOUND") + 1,
+                    LOCAL_OUTPUT_BINDING,
+                )
             _bind_invariant_evaluation_contracts(schema)
             return schema
         item_properties = deepcopy(properties)
@@ -4193,6 +4169,7 @@ def _strengthen_artifact_schema(
                 "ASSET_PROVENANCE_REFS_AND_HASHES_HAVE_EQUAL_CARDINALITY",
                 "EVERY_ASSET_PROVENANCE_HASH_MATCHES_REFERENCED_BYTES",
                 "LOCAL_DETERMINISTIC_ASSET_RECIPE_AND_OUTPUT_ARE_HASH_BOUND",
+                LOCAL_OUTPUT_BINDING,
                 "CODEX_IMAGEGEN_MATERIALIZATION_REQUIRES_SEPARATE_CURRENT_AUTHORIZATION",
                 "IMAGEGEN_RECEIPT_HASH_MATCHES_REFERENCED_BYTES_WHEN_MATERIALIZED",
             ],
@@ -5435,6 +5412,7 @@ def _strengthen_artifact_schema(
                                         "base_schema_pass",
                                         "base_oracle_pass",
                                         "mutated_schema_pass",
+                                        "failed_invariant_ids",
                                         "observed_failure_code",
                                         "side_effects_started",
                                         "status",
@@ -5457,6 +5435,10 @@ def _strengthen_artifact_schema(
                                         },
                                         "base_oracle_pass": {
                                             "type": "boolean"
+                                        },
+                                        "failed_invariant_ids": {
+                                            "type": "array", "minItems": 1, "uniqueItems": True,
+                                            "items": {"type": "string", "minLength": 1},
                                         },
                                         "mutated_schema_pass": {
                                             "type": "boolean"

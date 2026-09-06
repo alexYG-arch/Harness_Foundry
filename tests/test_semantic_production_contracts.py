@@ -4389,11 +4389,11 @@ class SemanticProductionContractTests(unittest.TestCase):
             )
             self.assertTrue(row["mutation"]["derivation_recipe"]["strategy"])
             self.assertEqual(
-                row["mutation"]["post_mutation_failed_invariant_ids"],
+                row["mutation"]["post_mutation_required_failed_invariant_ids"],
                 [row["invariant_id"]],
             )
             self.assertEqual(
-                row["mutation"]["all_other_invariant_ids_expected"],
+                row["mutation"]["outside_allowed_failure_set_expected"],
                 "PASS",
             )
             self.assertEqual(

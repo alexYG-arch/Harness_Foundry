@@ -6,6 +6,18 @@ import json
 import re
 
 from .contract_references import pointer_values
+from .semantic_operator_catalog import MUTATION_FAILURE_DEPENDENCIES
+
+
+def invariant_failure_closure(invariant_id):
+    """Resolve the predeclared invariant dependency relation, not observed output."""
+    closure, pending = set(), [invariant_id]
+    while pending:
+        current = pending.pop()
+        if current not in closure:
+            closure.add(current)
+            pending.extend(MUTATION_FAILURE_DEPENDENCIES.get(current, ()))
+    return sorted(closure)
 
 
 def canonical_recomputations(schema, mutation_target):
@@ -42,15 +54,21 @@ def prepare_mutated_document(document, mutation_target, recomputations):
     return result
 
 
-def classify_mutation_result(target_id, *, schema_passed, failed_invariants, execution_status):
+def classify_mutation_result(target_id, *, schema_passed, failed_invariants, execution_status,
+                             allowed_failure_ids=None):
     if execution_status != "COMPLETED":
         return "INCONCLUSIVE"
     if not schema_passed:
         return "SCHEMA_REJECTED_NOT_INVARIANT_EVIDENCE"
-    if set(failed_invariants) == {target_id}:
-        return "EXPECTED_INVARIANT_REJECTION"
+    allowed = {target_id} if allowed_failure_ids is None else set(allowed_failure_ids)
+    if target_id not in allowed:
+        return "INCONCLUSIVE"
+    if allowed_failure_ids is not None and sorted(allowed) != invariant_failure_closure(target_id):
+        return "INCONCLUSIVE"
     if target_id not in failed_invariants:
         return "TARGET_INVARIANT_NOT_REJECTED"
+    if set(failed_invariants).issubset(allowed):
+        return "EXPECTED_INVARIANT_REJECTION"
     return "NON_TARGET_INVARIANT_FAILURE"
 
 

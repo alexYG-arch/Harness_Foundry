@@ -89,8 +89,10 @@ def _asset_set(document, parameters):
         if not isinstance(ref, str) or not ref:
             raise ValueError("asset reference is missing")
         pairs.append((ref, _digest(digest)))
-    if len({ref for ref, _ in pairs}) != len(pairs):
-        raise ValueError("asset references must be unique")
+    # Object rows may reuse a materialized asset. A set deduplicates identical
+    # identities; only conflicting identities for the same reference are invalid.
+    if len({ref for ref, _ in pairs}) != len(set(pairs)):
+        raise ValueError("one asset reference has conflicting digests")
     return set(pairs)
 
 

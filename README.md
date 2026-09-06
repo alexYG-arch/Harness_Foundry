@@ -111,4 +111,9 @@ python3 tools/hffactory.py project-core-evidence --json
 
 版本、核心编译和诊断入口只要求 Python 3.11+。旧 Candidate 签名、生成与验证路径若被单独使用，需要显式安装 `.[security]`；此可选依赖不属于默认本地启动前置条件。
 
+完整源码回归需要在开发虚拟环境安装 `.[test,security]` 后运行
+`PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py' -v`。
+`test` extra 提供完整 Draft 2020-12 实例验证，仅用于开发测试，不增加产品默认运行依赖。
+算子族和负例依赖修复的范围、验收边界见 [epoch 26 源码修复记录](docs/FOUNDRY_EPOCH26_OPERATOR_FAMILY_REPAIR_20260906.md)。
+
 CLI 是 Codex 的工程接口，普通用户不需要手动组织请求。完整 Envelope 与恢复规则见 [Chat 使用说明](docs/CHAT_USAGE.md)；架构见 [Architecture](docs/ARCHITECTURE.md)。

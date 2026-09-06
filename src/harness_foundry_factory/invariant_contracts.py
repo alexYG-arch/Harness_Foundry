@@ -32,6 +32,7 @@ SUPPORTED_ALGORITHMS = frozenset(
         "DECLARED_REFERENCE_RESOLUTION_V1",
         "MATERIALIZED_ASSET_AUTHORIZATION_V1",
         "ALL_VALUES_EQUAL_V1",
+        "CANONICAL_MEMBER_UNIQUENESS_V1",
     }
 )
 SUPPORTED_NUMERIC_RELATIONS = frozenset({"LT", "LTE", "EQ", "NE", "GTE", "GT", "ABS_LTE"})
@@ -481,6 +482,7 @@ def validate_invariant_contract_v1(
         "DECLARED_REFERENCE_RESOLUTION_V1": {1},
         "MATERIALIZED_ASSET_AUTHORIZATION_V1": {2},
         "ALL_VALUES_EQUAL_V1": {3, 4},
+        "CANONICAL_MEMBER_UNIQUENESS_V1": {1},
     }
     if algorithm in arity_by_algorithm and len(operand_refs) not in arity_by_algorithm[algorithm]:
         findings.append(
@@ -515,6 +517,8 @@ def validate_invariant_contract_v1(
         type_mismatch = types != ("object", "scalar")
     elif algorithm == "ALL_VALUES_EQUAL_V1":
         type_mismatch = len(set(types)) != 1
+    elif algorithm == "CANONICAL_MEMBER_UNIQUENESS_V1":
+        type_mismatch = types != ("array",)
     if type_mismatch:
         findings.append(
             _finding(
@@ -773,6 +777,13 @@ def _evaluate_values(
         return actual == str(values[digest_index]).lower(), None
     if algorithm == "ALL_VALUES_EQUAL_V1":
         return all(_canonical_json(value) == _canonical_json(values[0]) for value in values[1:]), None
+    if algorithm == "CANONICAL_MEMBER_UNIQUENESS_V1":
+        if not isinstance(values[0], list):
+            return False, "INVARIANT_RUNTIME_OPERAND_TYPE_MISMATCH"
+        # Empty-domain admissibility belongs to the artifact Schema. This
+        # operator checks uniqueness, not an unrelated minimum item count.
+        members = [_canonical_json(value) for value in values[0]]
+        return len(members) == len(set(members)), None
     if algorithm == "PAIRED_BYTE_HASH_LINEAGE_V1":
         for index in range(0, len(values), 2):
             passed, error = _evaluate_values(
