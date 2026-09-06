@@ -174,6 +174,76 @@ published Candidate still has its original 297 files and content binding, and
 the Execution Root still contains only its runtime binding file. These results
 close this delivery prerequisite, not the remaining production build chain.
 
+### Local offline process receiver
+
+`local_process.py` now supplies a finite-command receiver using the installed
+Codex CLI's permission-profile sandbox. It is not an authorizer, a model client,
+or an implicit replacement for the public CLI's test-only adapter route. Its
+caller must first bind the Job's approved read/write leases to the actual local
+resources. The receiver retains the original executable invocation (including
+venv selection), applies a fresh inline profile with the documented `:minimal`
+runtime baseline plus those explicit roots, and disables command networking.
+It neither creates a global profile file nor silently adds writable temp roots.
+Codex's own host-side startup/configuration is separate from workload scope.
+
+The installed CLI uses flat `codex sandbox` syntax, not the old platform
+subcommand examples. The receiver verifies that interface and probes the same
+policy before workload dispatch. An unavailable interface, managed-policy
+rejection or nested-sandbox failure cannot fall back to unrestricted execution.
+Capability-probe output has its own bound so a small workload-output limit does
+not hide required CLI options. Real exit codes, bounded output excerpts and
+timeout state remain separate from artifact acceptance. Capture spills to
+temporary files, bounding retained memory but **not** providing a disk quota.
+POSIX process groups are cleaned up on exit/timeout; intentionally detached
+daemons/new sessions are outside this finite-command route's supported workload.
+A timeout with possible partial effects is not a retryable pre-effect failure.
+
+The implementation reuses [Codex's documented permission profiles](https://learn.chatgpt.com/docs/permissions)
+instead of maintaining custom SBPL. [Apple DTS's explanation](https://developer.apple.com/forums/thread/661939)
+notes that custom SBPL is not a supported third-party API. These are dependency
+choices, not a claim that Foundry has independently certified the host sandbox.
+The observed host is macOS with Codex CLI 0.153.0; other hosts still need their
+own real receiver tests. This receiver does not run `codex exec` or make model
+requests. Model-service transport must remain distinct from the offline tools'
+network policy in the later build connector.
+
+`tests/test_local_process.py` separates ordinary contract/failure tests from an
+opt-in real sandbox suite. The latter uses temporary inputs and output roots,
+not a published Candidate or the target Execution Root. Run it with
+`HFFACTORY_TEST_CODEX_SANDBOX` bound to the installed CLI and, when needed,
+`HFFACTORY_TEST_PYTHON_READ_ROOTS` containing a JSON array of explicit host-local
+interpreter dependency paths. Neither binding is portable project authority.
+The tested Homebrew venv needed both its loader/link metadata tree and the
+corresponding Python installation tree; a canonical Python executable worked
+with narrower reads, but substituting it changed venv identity. The receiver
+therefore preserves argv and requires the caller's complete dependency binding;
+it does not guess broader installation roots after a failure.
+
+Real tests cover input reads, output writes, unchanged venv identity, rejected
+input/sibling/metadata writes and sibling reads, rejected local socket binding,
+nonzero exit despite printed `PASS`, bounded output, timeout/normal-exit process
+group cleanup and durable-kernel recovery without repeating a real side effect.
+That recovery test stores the actual receiver result, including exit code and
+output, in the existing SQLite command-result observation. A finite foreground
+command PASS is still not a project test, Oracle or Workpack PASS.
+
+Remaining serial integration: bind normal Workpack commands and transitive Job
+read leases through one authoritative runtime controller; reconcile pending
+process outcomes; preserve the target's null Architecture/Control epochs; expose
+the production CLI only after those bindings and an ordinary full build-path
+fixture are covered. The existing `workpack_runtime._run_command` is not yet
+replaced by this receiver, and the public test-adapter guard remains. No formal
+Candidate, Parent authority, execution state or completed delegation is changed
+by this receiver implementation or its temporary tests.
+
+Verification (2026-09-07): the explicit local receiver run passed all 15 tests
+(7 contract tests and 8 real sandbox tests) in 6.191 seconds. The complete suite
+then ran 583 tests in 479.853 seconds: 575 passed and those 8 opt-in real sandbox
+tests were skipped in the ordinary restricted runner, not relabelled PASS.
+`verify-spec`, `validate_skill.py` and the whitespace checks passed. The formal
+Program remained revision 191, and its Execution Root still contained only
+the original runtime binding file. No models or formal Workpacks were run.
+
 ## Reproduced gap
 
 The normal producer declares `SHARED_CONTROL_BASELINE_LOCK` but previously
