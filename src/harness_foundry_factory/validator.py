@@ -19,6 +19,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from .assurance_profiles import (
     DISTRIBUTED_RELEASE_ADVERSARIAL,
+    LOCAL_EXEC_UNTRUSTED_INPUT,
     assurance_profile_for_start_package,
     filter_hf28_negative_case_ids,
 )
@@ -28,6 +29,7 @@ from .artifact_descriptors import (
 )
 from .invariant_contracts import validate_invariant_contract_v1, registered_operator_findings
 from .case_read_plans import REGISTRY_READ_PROTOCOL
+from .startup_contracts import shared_control_default
 from .registry_evidence import RESULT_SCHEMA_REF, RECEIPT_SCHEMA_REF, REGISTRY_CASE_RESULT_SCHEMA, REGISTRY_CASE_EXECUTION_RECEIPT_SCHEMA
 from .semantic_operator_catalog import (
     semantic_projection_errors, LOCAL_OUTPUT_BINDING, MUTATION_FAILURE_DEPENDENCIES,
@@ -5057,8 +5059,15 @@ def _check_shared_control_baseline_executable_contract(
         if isinstance(target, Mapping)
         else None
     )
+    if execution_contract is None:
+        dag = _read_json(root / "ENGINEERING_PROJECT_DAG.json", findings)
+        if not isinstance(dag, Mapping) or not any(
+            node.get("node_id") == "SHARED_CONTROL_BASELINE_LOCK" for node in dag.get("nodes", [])
+        ):
+            return findings
+        execution_contract = shared_control_default()["execution_contract"]
     if not isinstance(execution_contract, Mapping):
-        return findings
+        return [*findings, _finding("SHARED_CONTROL_BASELINE_CONTRACT_INVALID", "execution contract must be an object")]
     expected_refs = {
         "implementation_ref": "tools/shared_control_baseline.py",
         "result_schema_ref": "contracts/SHARED_CONTROL_BASELINE_RESULT.schema.json",
@@ -5302,13 +5311,44 @@ def _check_shared_control_baseline_executable_contract(
     return findings
 
 
+def _control_startup_profile_ref(root: Path, findings: list[dict[str, Any]]) -> str | None:
+    legacy_ref = "EPOCH38_GENERATION_PROFILE.json"
+    if (root / legacy_ref).is_file():
+        return legacy_ref
+    frozen = _read_json(root / "canonical_sources/FROZEN_REQUIREMENT_IR.json", findings)
+    if not isinstance(frozen, Mapping):
+        return None
+    target = frozen.get("target", {})
+    applicable = (
+        target.get("architecture_epoch") in (None, 0)
+        and target.get("control_plane_epoch") in (None, 0)
+        and assurance_profile_for_start_package(frozen).profile_id == LOCAL_EXEC_UNTRUSTED_INPUT
+    )
+    ref = "validation/CONTROL_STARTUP_PROFILE.json"
+    if not applicable:
+        if (root / ref).exists():
+            findings.append(_finding("CONTROL_STARTUP_PROFILE_INVALID", "local startup profile does not match frozen Requirement"))
+        return None
+    profile = _read_json(root / ref, findings)
+    if profile != {
+        "schema_version": "1.0",
+        "start_package_assurance_profile": LOCAL_EXEC_UNTRUSTED_INPUT,
+        "assurance_profile": "SELF_USE_LOCAL_TRUSTED_OPERATOR",
+        "profile_source": "FROZEN_REQUIREMENT_ASSURANCE_RESOLUTION",
+        "execution_authorized": False,
+    }:
+        findings.append(_finding("CONTROL_STARTUP_PROFILE_INVALID", "local startup profile is missing or differs from frozen Requirement"))
+    return ref
+
+
 def _check_control_plane_registration_executable_closure(
     root: Path,
 ) -> list[dict[str, Any]]:
-    """Require a real, Hash-bound registration action on the Epoch 4 route."""
+    """Require the declared local registration provider, including normal authoring."""
 
     findings: list[dict[str, Any]] = []
-    if not (root / "EPOCH38_GENERATION_PROFILE.json").is_file():
+    profile_ref = _control_startup_profile_ref(root, findings)
+    if profile_ref is None:
         return findings
     refs = {
         "implementation": "tools/control_plane_registration.py",
@@ -5341,6 +5381,8 @@ def _check_control_plane_registration_executable_closure(
     schema = _read_json(paths["schema"], findings)
     if not isinstance(contract, dict) or not isinstance(schema, dict):
         return findings
+    if contract.get("generation_profile_ref", "EPOCH38_GENERATION_PROFILE.json") != profile_ref:
+        findings.append(_finding("CONTROL_PLANE_REGISTRATION_CONTRACT_INVALID", "profile source binding differs"))
     module_hashes = {ref: _file_hash(root / ref) for ref in runtime_refs}
     execution = contract.get("execution_contract")
     runtime_inputs = contract.get("runtime_input_contract")
@@ -5659,7 +5701,7 @@ def _check_control_plane_registration_executable_closure(
                 )
             )
     negatives = _read_json(root / "validation/NEGATIVE_CASES.json", findings)
-    if isinstance(negatives, dict):
+    if isinstance(negatives, dict) and profile_ref == "EPOCH38_GENERATION_PROFILE.json":
         registration_cases = {
             str(case.get("case_id")): case
             for case in negatives.get("cases", [])
@@ -5710,7 +5752,8 @@ def _check_program_driver_runtime_verification_executable_closure(
     """Require a portable, local-profile, read-only Driver verifier."""
 
     findings: list[dict[str, Any]] = []
-    if not (root / "EPOCH38_GENERATION_PROFILE.json").is_file():
+    profile_ref = _control_startup_profile_ref(root, findings)
+    if profile_ref is None:
         return findings
     refs = {
         "implementation": "tools/program_driver_runtime_verification.py",
@@ -5735,6 +5778,15 @@ def _check_program_driver_runtime_verification_executable_closure(
     schema = _read_json(paths["schema"], findings)
     if not isinstance(contract, dict) or not isinstance(schema, dict):
         return findings
+    if contract.get("generation_profile_ref", "EPOCH38_GENERATION_PROFILE.json") != profile_ref:
+        findings.append(_finding("PROGRAM_DRIVER_RUNTIME_VERIFICATION_CONTRACT_INVALID", "profile source binding differs"))
+    dag = _read_json(root / "ENGINEERING_PROJECT_DAG.json", findings)
+    driver_nodes = [node for node in (dag or {}).get("nodes", [])
+                    if isinstance(node, Mapping) and node.get("node_id") == "PROGRAM_DRIVER_RUNTIME_VERIFIED"]
+    successors = driver_nodes[0].get("allowed_next_nodes") if len(driver_nodes) == 1 else None
+    if not isinstance(successors, list) or len(successors) != 1:
+        return [*findings, _finding("PROGRAM_DRIVER_RUNTIME_VERIFICATION_DAG_BINDING_INVALID", "one explicit successor is required")]
+    successor_node_id = successors[0]
     probe_commands = ["status", "plan-next", "validate-transition"]
     runtime_internal_write_refs = [
         "harness-resource://execution/.harness-foundry/control/PROGRAM_CONTROL_STATE.json",
@@ -5837,7 +5889,7 @@ def _check_program_driver_runtime_verification_executable_closure(
         or execution.get("required_predecessor_node_id")
         != "CONTROL_PLANE_REGISTRATION"
         or execution.get("successor_node_id")
-        != "MAIN_EXECUTION_PACKAGE_MATERIALIZED"
+        != successor_node_id
         or execution.get("read_only_probe_commands") != probe_commands
         or execution.get("driver_start_allowed") is not False
         or execution.get("workpack_start_allowed") is not False
@@ -5894,7 +5946,7 @@ def _check_program_driver_runtime_verification_executable_closure(
         or not isinstance(properties, Mapping)
         or set(properties) != set(required)
         or properties.get("next_node", {}).get("const")
-        != "MAIN_EXECUTION_PACKAGE_MATERIALIZED"
+        != successor_node_id
         or properties.get("driver_started", {}).get("const") is not False
         or properties.get("workpack_started", {}).get("const") is not False
         or properties.get("side_effects_allowed", {}).get("const") is not False
@@ -6063,7 +6115,7 @@ def _check_program_driver_runtime_verification_executable_closure(
                 )
             )
     negatives = _read_json(root / "validation/NEGATIVE_CASES.json", findings)
-    if isinstance(negatives, Mapping):
+    if isinstance(negatives, Mapping) and profile_ref == "EPOCH38_GENERATION_PROFILE.json":
         cases = {
             str(case.get("case_id")): case
             for case in negatives.get("cases", [])

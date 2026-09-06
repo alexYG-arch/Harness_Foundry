@@ -39,6 +39,8 @@ from .constants import (
     default_spec_root,
 )
 from .control_kernel import AUTHORITY_PRECEDENCE
+from .assurance_profiles import assurance_profile_for_start_package, LOCAL_EXEC_UNTRUSTED_INPUT
+from .startup_contracts import shared_control_default
 from .artifact_descriptors import JOB_ARTIFACT_DESCRIPTOR_SCHEMA
 from .case_read_plans import REGISTRY_READ_PROTOCOL, registry_schema_read_plans
 from .registry_evidence import RESULT_SCHEMA_REF, RECEIPT_SCHEMA_REF, REGISTRY_CASE_RESULT_SCHEMA, REGISTRY_CASE_EXECUTION_RECEIPT_SCHEMA
@@ -99,6 +101,7 @@ CORRECTION_VALIDATION_REFS = (
 )
 FACTORY_IMPLEMENTATION_PATHS = (
     "src/harness_foundry_factory/compiler.py",
+    "src/harness_foundry_factory/startup_contracts.py",
     "src/harness_foundry_factory/validator.py",
     "src/harness_foundry_factory/control_kernel.py",
     "src/harness_foundry_factory/requirement_completion.py",
@@ -1392,6 +1395,20 @@ def compile_start_package(
         )
     else:
         _write_shared_control_baseline_contract(staging, ir)
+        if assurance_profile_for_start_package(ir).profile_id == LOCAL_EXEC_UNTRUSTED_INPUT:
+            # Operational capability is selected by the declared local profile,
+            # not by the epoch number of Foundry's historical self-upgrade.
+            profile_ref = "validation/CONTROL_STARTUP_PROFILE.json"
+            _write_json(staging / profile_ref, {
+                "schema_version": "1.0",
+                "start_package_assurance_profile": LOCAL_EXEC_UNTRUSTED_INPUT,
+                "assurance_profile": "SELF_USE_LOCAL_TRUSTED_OPERATOR",
+                "profile_source": "FROZEN_REQUIREMENT_ASSURANCE_RESOLUTION",
+                "execution_authorized": False,
+            })
+            _write_epoch4_runtime_store_dependency_closure(staging)
+            _write_control_plane_registration_contract(staging, profile_ref=profile_ref)
+            _write_program_driver_runtime_verification_contract(staging, profile_ref=profile_ref)
     _write_validation_report(staging, context)
     _bind_case_execution_contracts(staging, ir)
 
@@ -12100,8 +12117,14 @@ def _write_shared_control_baseline_contract(
     if not isinstance(target, Mapping):
         return
     execution_contract = target.get("shared_control_baseline_execution_contract")
+    default_protocol = shared_control_default()
+    if execution_contract is None:
+        dag = json.loads((staging / "ENGINEERING_PROJECT_DAG.json").read_text(encoding="utf-8"))
+        if not any(node.get("node_id") == "SHARED_CONTROL_BASELINE_LOCK" for node in dag.get("nodes", [])):
+            return
+        execution_contract = default_protocol["execution_contract"]
     if not isinstance(execution_contract, Mapping):
-        return
+        raise ValueError("Shared Control Baseline execution contract must be an object")
     implementation_ref = str(execution_contract.get("implementation_ref") or "")
     schema_ref = str(execution_contract.get("result_schema_ref") or "")
     action_contract_ref = str(execution_contract.get("action_contract_ref") or "")
@@ -12190,7 +12213,7 @@ def _write_shared_control_baseline_contract(
         "epoch_domain_contract": deepcopy(dict(epoch_domain_contract)),
         "execution_contract": deepcopy(dict(execution_contract)),
         "test_contract": deepcopy(
-            dict(target.get("shared_control_baseline_test_contract") or {})
+            dict(target.get("shared_control_baseline_test_contract") or default_protocol["test_contract"])
         ),
         "runtime_input_contract": {
             "command_manifest_location": "EXECUTION_ROOT_LOCAL_EXPLICIT_PATH",
@@ -12476,7 +12499,9 @@ def _control_plane_registration_result_schema() -> dict[str, Any]:
     }
 
 
-def _write_control_plane_registration_contract(staging: Path) -> None:
+def _write_control_plane_registration_contract(
+    staging: Path, *, profile_ref: str = "EPOCH38_GENERATION_PROFILE.json"
+) -> None:
     """Bind the CONTROL_PLANE_REGISTRATION node to a real one-shot action."""
 
     implementation_ref = "tools/control_plane_registration.py"
@@ -12486,7 +12511,7 @@ def _write_control_plane_registration_contract(staging: Path) -> None:
     result_schema_ref = (
         "contracts/CONTROL_PLANE_REGISTRATION_RESULT.schema.json"
     )
-    profile_path = staging / "EPOCH38_GENERATION_PROFILE.json"
+    profile_path = staging / profile_ref
     profile = json.loads(profile_path.read_text(encoding="utf-8"))
     assurance_profile = str(profile.get("assurance_profile") or "")
     if assurance_profile != "SELF_USE_LOCAL_TRUSTED_OPERATOR":
@@ -12660,6 +12685,7 @@ def _write_control_plane_registration_contract(staging: Path) -> None:
         "node_id": execution_contract["node_id"],
         "action_kind": execution_contract["action_kind"],
         "implementation_ref": implementation_ref,
+        "generation_profile_ref": profile_ref,
         "executor_implementation_sha256": _file_hash(implementation_path),
         "result_schema_ref": result_schema_ref,
         "result_schema_sha256": _file_hash(schema_path),
@@ -12881,7 +12907,9 @@ def _write_control_plane_registration_contract(staging: Path) -> None:
         },
     ]
     cases.extend(
-        case for case in registration_cases if case["case_id"] not in existing_case_ids
+        case for case in registration_cases
+        if profile_ref == "EPOCH38_GENERATION_PROFILE.json"
+        and case["case_id"] not in existing_case_ids
     )
     negative["cases"] = cases
     _write_json(negative_path, negative)
@@ -12908,7 +12936,9 @@ The action neither starts the Program Driver nor executes a Workpack.
     )
 
 
-def _program_driver_runtime_verification_result_schema() -> dict[str, Any]:
+def _program_driver_runtime_verification_result_schema(
+    successor_node_id: str = "MAIN_EXECUTION_PACKAGE_MATERIALIZED",
+) -> dict[str, Any]:
     required = [
         "schema_version",
         "result_id",
@@ -12969,7 +12999,7 @@ def _program_driver_runtime_verification_result_schema() -> dict[str, Any]:
             },
             "next_node": {
                 "type": "string",
-                "const": "MAIN_EXECUTION_PACKAGE_MATERIALIZED",
+                "const": successor_node_id,
             },
             "status": {"type": "string", "const": "PASS"},
             "execution_mode": {
@@ -13020,7 +13050,9 @@ def _program_driver_runtime_verification_result_schema() -> dict[str, Any]:
     }
 
 
-def _write_program_driver_runtime_verification_contract(staging: Path) -> None:
+def _write_program_driver_runtime_verification_contract(
+    staging: Path, *, profile_ref: str = "EPOCH38_GENERATION_PROFILE.json"
+) -> None:
     """Bind PROGRAM_DRIVER_RUNTIME_VERIFIED to a real read-only action."""
 
     implementation_ref = "tools/program_driver_runtime_verification.py"
@@ -13031,6 +13063,13 @@ def _write_program_driver_runtime_verification_contract(staging: Path) -> None:
     result_schema_ref = (
         "contracts/PROGRAM_DRIVER_RUNTIME_VERIFICATION_RESULT.schema.json"
     )
+    dag = json.loads((staging / "ENGINEERING_PROJECT_DAG.json").read_text(encoding="utf-8"))
+    driver_nodes = [node for node in dag.get("nodes", [])
+                    if node.get("node_id") == "PROGRAM_DRIVER_RUNTIME_VERIFIED"]
+    successors = driver_nodes[0].get("allowed_next_nodes") if len(driver_nodes) == 1 else None
+    if not isinstance(successors, list) or len(successors) != 1:
+        raise ValueError("Program Driver verifier requires one explicit DAG successor")
+    successor_node_id = successors[0]
     resources = Path(__file__).resolve().parent / "resources"
     for source_name, destination_ref in (
         ("program_driver.py", entrypoint_ref),
@@ -13047,10 +13086,10 @@ def _write_program_driver_runtime_verification_contract(staging: Path) -> None:
 
     schema_path = staging / result_schema_ref
     _write_json(
-        schema_path, _program_driver_runtime_verification_result_schema()
+        schema_path, _program_driver_runtime_verification_result_schema(successor_node_id)
     )
     profile = json.loads(
-        (staging / "EPOCH38_GENERATION_PROFILE.json").read_text(
+        (staging / profile_ref).read_text(
             encoding="utf-8"
         )
     )
@@ -13174,7 +13213,7 @@ def _write_program_driver_runtime_verification_contract(staging: Path) -> None:
         "action_id": "VERIFY-PORTABLE-PROGRAM-DRIVER-RUNTIME",
         "node_id": "PROGRAM_DRIVER_RUNTIME_VERIFIED",
         "action_kind": "PROJECT_VALIDATION",
-        "successor_node_id": "MAIN_EXECUTION_PACKAGE_MATERIALIZED",
+        "successor_node_id": successor_node_id,
         "required_predecessor_node_id": "CONTROL_PLANE_REGISTRATION",
         "required_predecessor_result_ref": (
             "harness-resource://execution/evidence/engineering_dag/"
@@ -13182,7 +13221,7 @@ def _write_program_driver_runtime_verification_contract(staging: Path) -> None:
         ),
         "produced_capabilities": ["PROGRAM_DRIVER_RUNTIME_VERIFIED_PASS"],
         "required_result_fields": (
-            _program_driver_runtime_verification_result_schema()["required"]
+            _program_driver_runtime_verification_result_schema(successor_node_id)["required"]
         ),
         "read_only_probe_commands": probe_commands,
         "driver_start_allowed": False,
@@ -13208,6 +13247,7 @@ def _write_program_driver_runtime_verification_contract(staging: Path) -> None:
         "node_id": execution_contract["node_id"],
         "action_kind": execution_contract["action_kind"],
         "implementation_ref": implementation_ref,
+        "generation_profile_ref": profile_ref,
         "executor_implementation_sha256": _file_hash(
             staging / implementation_ref
         ),
@@ -13419,7 +13459,9 @@ def _write_program_driver_runtime_verification_contract(staging: Path) -> None:
         },
     ]
     cases.extend(
-        case for case in verification_cases if case["case_id"] not in existing
+        case for case in verification_cases
+        if profile_ref == "EPOCH38_GENERATION_PROFILE.json"
+        and case["case_id"] not in existing
     )
     negative["cases"] = cases
     _write_json(negative_path, negative)

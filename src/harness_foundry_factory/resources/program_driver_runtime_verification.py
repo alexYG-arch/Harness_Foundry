@@ -47,7 +47,6 @@ registration = _load_module(
 
 ACTION_ID = "VERIFY-PORTABLE-PROGRAM-DRIVER-RUNTIME"
 NODE_ID = "PROGRAM_DRIVER_RUNTIME_VERIFIED"
-NEXT_NODE_ID = "MAIN_EXECUTION_PACKAGE_MATERIALIZED"
 PREDECESSOR_NODE_ID = "CONTROL_PLANE_REGISTRATION"
 IMPLEMENTATION_REF = "tools/program_driver_runtime_verification.py"
 DRIVER_ENTRYPOINT_REF = "tools/program_driver.py"
@@ -138,12 +137,17 @@ def _required_result_fields(contract: Mapping[str, Any]) -> list[str]:
 
 
 def validate_static_contract(candidate_root: Path) -> dict[str, Any]:
+    contract = read_json(candidate_root / ACTION_CONTRACT_REF,
+                         "PROGRAM_DRIVER_RUNTIME_VERIFICATION_CONTRACT_INVALID")
+    profile_ref = contract.get("generation_profile_ref", GENERATION_PROFILE_REF)
+    if profile_ref not in (GENERATION_PROFILE_REF, "validation/CONTROL_STARTUP_PROFILE.json"):
+        raise ContractError("PROGRAM_DRIVER_RUNTIME_VERIFICATION_CONTRACT_INVALID", "undeclared profile ref")
     refs = (
         IMPLEMENTATION_REF,
         DRIVER_ENTRYPOINT_REF,
         ACTION_CONTRACT_REF,
         RESULT_SCHEMA_REF,
-        GENERATION_PROFILE_REF,
+        profile_ref,
         AUTHORIZATION_POLICY_REF,
         "tools/shared_control_baseline.py",
         "tools/control_plane_registration.py",
@@ -163,7 +167,7 @@ def validate_static_contract(candidate_root: Path) -> dict[str, Any]:
         "PROGRAM_DRIVER_RUNTIME_VERIFICATION_RESULT_SCHEMA_INVALID",
     )
     profile = read_json(
-        paths[GENERATION_PROFILE_REF],
+        paths[profile_ref],
         "PROGRAM_DRIVER_RUNTIME_VERIFICATION_CONTRACT_INVALID",
     )
     policy = read_json(
@@ -203,6 +207,14 @@ def validate_static_contract(candidate_root: Path) -> dict[str, Any]:
         else set()
     )
     required = _required_result_fields(contract)
+    dag = read_json(candidate_root / "ENGINEERING_PROJECT_DAG.json", "ENGINEERING_PROJECT_DAG_INVALID")
+    nodes = [node for node in dag.get("nodes", []) if node.get("node_id") == NODE_ID]
+    successors = nodes[0].get("allowed_next_nodes") if len(nodes) == 1 else None
+    successor = contract.get("execution_contract", {}).get("successor_node_id")
+    if not isinstance(successor, str) or successors != [successor]:
+        raise ContractError("PROGRAM_DRIVER_RUNTIME_VERIFICATION_CONTRACT_INVALID", "DAG successor binding differs")
+    if schema.get("properties", {}).get("next_node", {}).get("const") != successor:
+        raise ContractError("PROGRAM_DRIVER_RUNTIME_VERIFICATION_CONTRACT_INVALID", "result successor binding differs")
     if (
         contract.get("action_id") != ACTION_ID
         or contract.get("node_id") != NODE_ID
@@ -306,7 +318,7 @@ def validate_result_document(
             )
     require_equal(
         result.get("next_node"),
-        NEXT_NODE_ID,
+        contract.get("execution_contract", {}).get("successor_node_id"),
         "PROGRAM_DRIVER_RUNTIME_VERIFICATION_RESULT_INVALID",
         "next_node",
     )
@@ -855,7 +867,7 @@ def execute_action(
         "result_id": f"{NODE_ID}-{runtime['idempotency_key'][:16]}",
         "program_id": runtime["inputs"]["program_id"],
         "node_id": NODE_ID,
-        "next_node": NEXT_NODE_ID,
+        "next_node": runtime["contract"]["execution_contract"]["successor_node_id"],
         "status": "PASS",
         "execution_mode": "PROJECT_VALIDATION",
         "control_plane_epoch": runtime["inputs"]["execution_control_plane_epoch"],
@@ -906,7 +918,7 @@ def execute_action(
         {
             "revision": int(runtime["state"].get("revision", 0)) + 1,
             "last_completed_node": NODE_ID,
-            "next_node": NEXT_NODE_ID,
+            "next_node": result["next_node"],
             "authorization_status": "CONSUMED",
             "active_authorization_id": None,
             "remaining_transition_budget": 0,

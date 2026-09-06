@@ -91,7 +91,11 @@ def validate_static_contract(candidate_root: Path) -> dict[str, Any]:
     action_path = candidate_root / IMPLEMENTATION_REF
     contract_path = candidate_root / ACTION_CONTRACT_REF
     schema_path = candidate_root / RESULT_SCHEMA_REF
-    profile_path = candidate_root / GENERATION_PROFILE_REF
+    contract = read_json(contract_path, "CONTROL_PLANE_REGISTRATION_CONTRACT_INVALID")
+    profile_ref = contract.get("generation_profile_ref", GENERATION_PROFILE_REF)
+    if profile_ref not in (GENERATION_PROFILE_REF, "validation/CONTROL_STARTUP_PROFILE.json"):
+        raise ContractError("CONTROL_PLANE_REGISTRATION_CONTRACT_INVALID", "undeclared profile ref")
+    profile_path = candidate_root / profile_ref
     policy_path = candidate_root / AUTHORIZATION_POLICY_REF
     for path in (
         action_path,
