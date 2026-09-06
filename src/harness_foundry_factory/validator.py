@@ -6169,7 +6169,18 @@ def _check_controlled_workpack_runtime_executable_closure(
 
     findings: list[dict[str, Any]] = []
     node_id = "MAIN_EXECUTION_PACKAGE_MATERIALIZED"
-    workpack_id = "WP-HARNESS-FOUNDRY-V2-9-CHAT-FACTORY-G0-001"
+    dag = _read_json(root / "ENGINEERING_PROJECT_DAG.json", findings)
+    node_matches = [item for item in (dag or {}).get("nodes", [])
+                    if isinstance(item, Mapping) and item.get("node_id") == node_id]
+    if len(node_matches) != 1:
+        return findings + [_finding("CONTROLLED_WORKPACK_RUNTIME_CONTRACT_INVALID", "materialization node must resolve uniquely")]
+    workpack_id = node_matches[0].get("workpack_id")
+    if not isinstance(workpack_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", workpack_id):
+        return findings + [_finding("CONTROLLED_WORKPACK_RUNTIME_CONTRACT_INVALID", "invalid materialization Workpack id")]
+    profile_ref = _control_startup_profile_ref(root, findings)
+    legacy = profile_ref == "EPOCH38_GENERATION_PROFILE.json"
+    if profile_ref is None:
+        return findings + [_finding("CONTROLLED_WORKPACK_RUNTIME_CONTRACT_INVALID", "no applicable runtime profile")]
     refs = {
         "provider": "tools/harness_foundry_runtime/workpack_runtime.py",
         "entrypoint": "tools/workpack_runtime.py",
@@ -6177,7 +6188,7 @@ def _check_controlled_workpack_runtime_executable_closure(
         "commands": f"commands/{workpack_id}.commands.json",
         "capsule": f"capsules/{workpack_id}.capsule.json",
         "index": "WORKPACK_INDEX.json",
-        "profile": "EPOCH38_GENERATION_PROFILE.json",
+        "profile": profile_ref,
     }
     paths = {name: root / relative for name, relative in refs.items()}
     if any(not path.is_file() for path in paths.values()):
@@ -6189,7 +6200,6 @@ def _check_controlled_workpack_runtime_executable_closure(
             )
         ]
     contract = _read_json(paths["contract"], findings)
-    dag = _read_json(root / "ENGINEERING_PROJECT_DAG.json", findings)
     manifest = _read_json(
         root / "THREE_PROJECT_PROGRAM_MANIFEST.json", findings
     )
@@ -6235,17 +6245,24 @@ def _check_controlled_workpack_runtime_executable_closure(
     hydration = contract.get("hydration_contract")
     execution = contract.get("execution_contract")
     if (
-        contract.get("contract_id") != "EPOCH45_CONTROLLED_WORKPACK_RUNTIME_V1"
+        contract.get("contract_id") != (
+            "EPOCH45_CONTROLLED_WORKPACK_RUNTIME_V1" if legacy
+            else "LOCAL_CONTROLLED_WORKPACK_RUNTIME_V1"
+        )
         or isinstance(contract_active_epoch, bool)
         or not isinstance(contract_active_epoch, int)
-        or contract_active_epoch < 45
+        or contract_active_epoch < (45 if legacy else 0)
         or (
             active_requirement_epoch is not None
             and contract_active_epoch != active_requirement_epoch
         )
-        or contract.get("profile_origin_requirement_epoch") != 38
-        or profile.get("profile_origin_requirement_epoch") != 38
-        or profile.get("active_requirement_epoch") != contract_active_epoch
+        or (legacy and (
+            workpack_id != "WP-HARNESS-FOUNDRY-V2-9-CHAT-FACTORY-G0-001"
+            or contract.get("profile_origin_requirement_epoch") != 38
+            or profile.get("profile_origin_requirement_epoch") != 38
+            or profile.get("active_requirement_epoch") != contract_active_epoch
+        ))
+        or (not legacy and "profile_origin_requirement_epoch" in contract)
         or contract.get("assurance_profile")
         != "SELF_USE_LOCAL_TRUSTED_OPERATOR"
         or contract.get("node_id") != node_id
@@ -6311,6 +6328,7 @@ def _check_controlled_workpack_runtime_executable_closure(
         )
 
     required_functions = {
+        "plan_workpack_node",
         "candidate_identity",
         "verify_codex_cli_schema",
         "hydrate_workpack_runtime",
@@ -6443,7 +6461,7 @@ def _check_controlled_workpack_runtime_executable_closure(
             )
 
     negatives = _read_json(root / "validation/NEGATIVE_CASES.json", findings)
-    if isinstance(negatives, Mapping):
+    if legacy and isinstance(negatives, Mapping):
         cases = {
             str(case.get("case_id")): case
             for case in negatives.get("cases", [])
@@ -10732,7 +10750,16 @@ def _validate_candidate(
         ),
     )
     controlled_runtime_findings: list[dict[str, Any]] = []
-    if raw_authority_epoch >= 45 and not authority_claims_controlled_runtime:
+    local_runtime_profile = _control_startup_profile_ref(candidate, controlled_runtime_findings)
+    local_runtime_applicable = local_runtime_profile == "validation/CONTROL_STARTUP_PROFILE.json"
+    if local_runtime_applicable:
+        controlled_runtime_findings.extend(
+            _check_controlled_workpack_runtime_executable_closure(
+                candidate,
+                active_requirement_epoch=raw_authority_epoch if authority_ir_hash_matches else None,
+            )
+        )
+    elif raw_authority_epoch >= 45 and not authority_claims_controlled_runtime:
         controlled_runtime_findings.append(
             _finding(
                 "CONTROLLED_WORKPACK_RUNTIME_FACTORY_AUTHORITY_PROVENANCE_INVALID",
@@ -10759,7 +10786,9 @@ def _validate_candidate(
             "status": "FAIL" if controlled_runtime_findings else "PASS",
             "findings": controlled_runtime_findings,
             "validation_basis": (
-                "FACTORY_AUTHORITY_PROVENANCE_REQUIREMENT_EPOCH"
+                "FROZEN_REQUIREMENT_LOCAL_RUNTIME_PROFILE"
+                if local_runtime_applicable
+                else "FACTORY_AUTHORITY_PROVENANCE_REQUIREMENT_EPOCH"
                 if authority_claims_controlled_runtime
                 else (
                     "FACTORY_AUTHORITY_PROVENANCE_INVALID"
@@ -10770,7 +10799,7 @@ def _validate_candidate(
         }
     )
     package_validation_findings: list[dict[str, Any]] = []
-    if raw_authority_epoch >= 49 and not authority_claims_controlled_runtime:
+    if raw_authority_epoch >= 49 and not authority_claims_controlled_runtime and not local_runtime_applicable:
         package_validation_findings.append(
             _finding(
                 "MAIN_EXECUTION_PACKAGE_VALIDATION_FACTORY_AUTHORITY_PROVENANCE_INVALID",
@@ -10797,7 +10826,9 @@ def _validate_candidate(
             "status": "FAIL" if package_validation_findings else "PASS",
             "findings": package_validation_findings,
             "validation_basis": (
-                "FACTORY_AUTHORITY_PROVENANCE_REQUIREMENT_EPOCH"
+                "OUTSIDE_HISTORICAL_PACKAGE_VALIDATION_PROFILE"
+                if local_runtime_applicable
+                else "FACTORY_AUTHORITY_PROVENANCE_REQUIREMENT_EPOCH"
                 if authority_claims_controlled_runtime and raw_authority_epoch >= 49
                 else (
                     "FACTORY_AUTHORITY_PROVENANCE_INVALID"

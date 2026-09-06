@@ -1406,9 +1406,13 @@ def compile_start_package(
                 "profile_source": "FROZEN_REQUIREMENT_ASSURANCE_RESOLUTION",
                 "execution_authorized": False,
             })
-            _write_epoch4_runtime_store_dependency_closure(staging)
+            _write_epoch4_runtime_store_dependency_closure(staging, include_workpack_runtime=True)
             _write_control_plane_registration_contract(staging, profile_ref=profile_ref)
             _write_program_driver_runtime_verification_contract(staging, profile_ref=profile_ref)
+            _write_controlled_workpack_runtime_contract(
+                staging, context, active_requirement_epoch=frozen_requirement_epoch,
+                profile_ref=profile_ref,
+            )
     _write_validation_report(staging, context)
     _bind_case_execution_contracts(staging, ir)
 
@@ -13491,14 +13495,16 @@ def _write_controlled_workpack_runtime_contract(
     context: Mapping[str, str],
     *,
     active_requirement_epoch: int,
+    profile_ref: str = "EPOCH38_GENERATION_PROFILE.json",
 ) -> None:
     """Package the real sibling-Runtime provider for the first Workpack."""
 
     node_id = "MAIN_EXECUTION_PACKAGE_MATERIALIZED"
-    if active_requirement_epoch < 45:
+    legacy = profile_ref == "EPOCH38_GENERATION_PROFILE.json"
+    if legacy and active_requirement_epoch < 45:
         return
-    workpack_id = "WP-HARNESS-FOUNDRY-V2-9-CHAT-FACTORY-G0-001"
-    if context.get("first_workpack_id") != workpack_id:
+    workpack_id = context["first_workpack_id"]
+    if legacy and workpack_id != "WP-HARNESS-FOUNDRY-V2-9-CHAT-FACTORY-G0-001":
         raise ValueError("Epoch 45 controlled Runtime Workpack identity drifted")
     provider_ref = "tools/harness_foundry_runtime/workpack_runtime.py"
     entrypoint_ref = "tools/workpack_runtime.py"
@@ -13555,7 +13561,10 @@ def _write_controlled_workpack_runtime_contract(
         "expires_at",
     ]
     authorization_profile = {
-        "schema_id": "EPOCH45_LOCAL_PROJECT_BOOTSTRAP_A3_V1",
+        "schema_id": (
+            "EPOCH45_LOCAL_PROJECT_BOOTSTRAP_A3_V1" if legacy
+            else "LOCAL_PROJECT_MATERIALIZATION_A3_V1"
+        ),
         "assurance_profile": "SELF_USE_LOCAL_TRUSTED_OPERATOR",
         "authorization_class": "A3_PROGRAM_BOUNDED",
         "issuer_role": "LOCAL_TRUSTED_OPERATOR",
@@ -13581,8 +13590,10 @@ def _write_controlled_workpack_runtime_contract(
     }
     contract = {
         "schema_version": "1.0",
-        "contract_id": "EPOCH45_CONTROLLED_WORKPACK_RUNTIME_V1",
-        "profile_origin_requirement_epoch": 38,
+        "contract_id": (
+            "EPOCH45_CONTROLLED_WORKPACK_RUNTIME_V1" if legacy
+            else "LOCAL_CONTROLLED_WORKPACK_RUNTIME_V1"
+        ),
         "active_requirement_epoch": active_requirement_epoch,
         "assurance_profile": "SELF_USE_LOCAL_TRUSTED_OPERATOR",
         "node_id": node_id,
@@ -13652,6 +13663,8 @@ def _write_controlled_workpack_runtime_contract(
         "external_runtime_state_reuse_allowed": False,
         "contract_sha256": "",
     }
+    if legacy:
+        contract["profile_origin_requirement_epoch"] = 38
     contract["contract_sha256"] = _hash_without_field(
         contract, "contract_sha256"
     )
@@ -13811,7 +13824,7 @@ def _write_controlled_workpack_runtime_contract(
             "origin": "EPOCH45_CONTROLLED_RUNTIME_WORKPACK_EXECUTABLE_CLOSURE",
         },
     ]
-    cases.extend(case for case in runtime_cases if case["case_id"] not in existing)
+    cases.extend(case for case in runtime_cases if legacy and case["case_id"] not in existing)
     negative["cases"] = cases
     _write_json(negative_path, negative)
 
@@ -13830,6 +13843,12 @@ Hashes, Codex `exec` CLI schema, two declared write roots, one transition, one
 bounded loop round, no network, and no target install. Hydration does not grant
 or consume A3 and does not execute the Workpack. The Factory cannot invoke the
 provider; only a separately authorized sibling Execution Runtime may do so.
+
+The entrypoint also exposes `plan --candidate-root . --node-id LAB_BOOTSTRAP`
+for read-only inspection of the DAG's ordered Workpacks, commands and native
+task bundles. Planning does not hydrate or execute Lab, Linkage or Main, and
+does not grant execution authority. It suppresses Python bytecode writes even
+when the Candidate directory is physically writable.
 """,
     )
 

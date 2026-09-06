@@ -1,4 +1,4 @@
-"""Controlled sibling-runtime provider for the first v2.9 Workpack.
+"""Candidate-derived Workpack plans and controlled materialization provider.
 
 The Factory packages this module into a Candidate, but never invokes its
 side-effecting entrypoint.  A separately authorized Execution Runtime may use
@@ -19,6 +19,8 @@ from typing import Any, Mapping, Sequence
 
 
 NODE_ID = "MAIN_EXECUTION_PACKAGE_MATERIALIZED"
+# Legacy constants remain for compatibility; live Workpack identity and
+# predecessor selection below come from the Candidate DAG and its own index.
 WORKPACK_ID = "WP-HARNESS-FOUNDRY-V2-9-CHAT-FACTORY-G0-001"
 AUTHORIZATION_CLASS = "A3_PROGRAM_BOUNDED"
 ASSURANCE_PROFILE = "SELF_USE_LOCAL_TRUSTED_OPERATOR"
@@ -202,47 +204,131 @@ def _manifest_file_hash(candidate_root: Path, relative: str) -> str:
     return actual
 
 
+def _candidate_ref(base: Path, ref: Any) -> str:
+    _require(isinstance(ref, str) and bool(ref), "WORKPACK_PLAN_INVALID", "missing Candidate ref")
+    path = Path(ref)
+    _require(not path.is_absolute() and ".." not in path.parts and "://" not in ref,
+             "WORKPACK_PLAN_INVALID", "Workpack refs must remain relative to their Candidate package")
+    return (base / path).as_posix()
+
+
+def _load_workpack_plan(candidate_root: Path, node_id: str) -> dict[str, Any]:
+    """Resolve root and project Workpacks through their declared DAG ownership.
+
+    Keep the complete unit and command contracts, including per-Job leases and
+    task bundles. Resolution is not hydration, acceptance or execution authority.
+    """
+    source_refs = {DAG_REF}
+
+    def load(ref: str) -> dict[str, Any]:
+        source_refs.add(ref)
+        _manifest_file_hash(candidate_root, ref)
+        return read_json(candidate_root / ref, "WORKPACK_PLAN_INVALID")
+
+    dag = load(DAG_REF)
+    nodes = [item for item in dag.get("nodes", [])
+             if isinstance(item, Mapping) and item.get("node_id") == node_id]
+    _require(len(nodes) == 1, "WORKPACK_PLAN_INVALID", "DAG node must resolve uniquely")
+    node = nodes[0]
+    sequence = node.get("project_workpack_sequence") or (
+        [node["workpack_id"]] if node.get("workpack_id") else []
+    )
+    _require(isinstance(sequence, list) and bool(sequence)
+             and all(isinstance(item, str) for item in sequence)
+             and len(sequence) == len(set(sequence)),
+             "WORKPACK_PLAN_INVALID", "node has no unique ordered Workpack set")
+    index_ref = _candidate_ref(Path(), node.get("project_workpack_index_ref"))
+    base = Path(index_ref).parent
+    index = load(index_ref)
+    _require(index.get("project_id", node.get("project_id")) == node.get("project_id"),
+             "WORKPACK_PLAN_INVALID", "index belongs to another project")
+    units = []
+    for workpack_id in sequence:
+        matches = [item for item in index.get("workpacks", [])
+                   if isinstance(item, Mapping) and item.get("workpack_id") == workpack_id]
+        _require(len(matches) == 1, "WORKPACK_PLAN_INVALID", f"ambiguous or missing Workpack: {workpack_id}")
+        workpack = matches[0]
+        _require(workpack.get("status") == "PLANNED_NOT_ACTIVE"
+                 and workpack.get("execution_authorization_ref") is None
+                 and workpack.get("auto_start") is False
+                 and workpack.get("project_id", index.get("project_id")) == node.get("project_id")
+                 and workpack.get("program_control_node_id", node_id) == node_id,
+                 "WORKPACK_PLAN_INVALID", f"Workpack is active or belongs to another node/project: {workpack_id}")
+        command_ref = _candidate_ref(base, workpack.get("command_manifest_ref"))
+        capsule_ref = _candidate_ref(base, workpack.get("capsule_ref"))
+        manifest, capsule = load(command_ref), load(capsule_ref)
+        commands = manifest.get("commands")
+        order = workpack.get("command_execution_order")
+        _require(isinstance(commands, list) and all(isinstance(item, Mapping) for item in commands)
+                 and isinstance(order, list) and bool(order)
+                 and all(isinstance(item, str) for item in order)
+                 and len(order) == len(set(order))
+                 and len(commands) == len(order)
+                 and {item.get("command_id") for item in commands} == set(order)
+                 and workpack.get("command_ids") == order
+                 and manifest.get("workpack_id") == workpack_id
+                 and manifest.get("program_id") == index.get("program_id")
+                 and manifest.get("execution_started") is False
+                 and capsule.get("workpack_id") == workpack_id
+                 and capsule.get("program_id") == index.get("program_id")
+                 and capsule.get("project_id", node.get("project_id")) == node.get("project_id")
+                 and capsule.get("execution_authorization_ref") is None
+                 and capsule.get("hydration_complete") is False
+                 and capsule.get("execution_authorized", False) is False,
+                 "WORKPACK_PLAN_INVALID", f"Workpack commands or capsule differ from index: {workpack_id}")
+        command_by_id = {item["command_id"]: item for item in commands}
+        task_ref = workpack.get("task_bundle_ref")
+        task_ref = _candidate_ref(base, task_ref) if task_ref else None
+        task_bundle = load(task_ref) if task_ref else None
+        if task_bundle is not None:
+            _require(task_bundle.get("workpack_id") == workpack_id
+                     and task_bundle.get("project_id") == node.get("project_id")
+                     and task_bundle.get("program_id") == index.get("program_id"),
+                     "WORKPACK_PLAN_INVALID", "task bundle belongs to another Workpack/project/Program")
+        units.append({
+            "workpack_id": workpack_id, "project_id": node.get("project_id"),
+            "workpack": dict(workpack), "command_manifest_ref": command_ref,
+            "command_manifest": manifest, "capsule_ref": capsule_ref, "capsule": capsule,
+            "commands": [dict(command_by_id[command_id]) for command_id in order],
+            "task_bundle_ref": task_ref, "task_bundle": task_bundle,
+        })
+    return {"dag": dag, "node": dict(node), "index": index, "index_ref": index_ref,
+            "units": units, "source_refs": sorted(source_refs)}
+
+
+def plan_workpack_node(candidate_root: Path, node_id: str) -> dict[str, Any]:
+    """Expose the declared ordered plan without creating any execution state."""
+    _require(not candidate_root.is_symlink(), "WORKPACK_PLAN_INVALID", "Candidate root is a symlink")
+    candidate = candidate_root.resolve()
+    identity = candidate_identity(candidate)
+    plan = _load_workpack_plan(candidate, node_id)
+    return {
+        "status": "DECLARED_WORKPACK_PLAN", "candidate_tree_sha256": identity,
+        "node_id": node_id, "program_id": plan["index"].get("program_id"),
+        "required_predecessor_nodes": plan["node"].get("required_predecessor_nodes"),
+        "units": plan["units"], "source_refs": plan["source_refs"],
+        "execution_authorized": False, "writes_performed": False,
+    }
+
+
 def _load_candidate_contracts(candidate_root: Path) -> dict[str, Any]:
-    dag = read_json(candidate_root / DAG_REF, "ENGINEERING_PROJECT_DAG_INVALID")
-    nodes = dag.get("nodes")
-    node = next(
-        (
-            item
-            for item in nodes or []
-            if isinstance(item, Mapping) and item.get("node_id") == NODE_ID
-        ),
-        None,
-    )
-    _require(
-        isinstance(node, Mapping),
-        "ENGINEERING_PROJECT_DAG_INVALID",
-        f"{NODE_ID} is missing",
-    )
-    index = read_json(candidate_root / WORKPACK_INDEX_REF, "WORKPACK_INDEX_INVALID")
-    workpack = next(
-        (
-            item
-            for item in index.get("workpacks") or []
-            if isinstance(item, Mapping) and item.get("workpack_id") == WORKPACK_ID
-        ),
-        None,
-    )
-    _require(
-        isinstance(workpack, Mapping),
-        "WORKPACK_INDEX_INVALID",
-        f"{WORKPACK_ID} is missing",
-    )
-    command_manifest = read_json(
-        candidate_root / COMMAND_MANIFEST_REF, "COMMAND_MANIFEST_INVALID"
-    )
-    capsule = read_json(candidate_root / CAPSULE_REF, "CAPSULE_INVALID")
+    plan = _load_workpack_plan(candidate_root, NODE_ID)
+    _require(len(plan["units"]) == 1, "WORKPACK_PLAN_INVALID", "materialization requires one root Workpack")
+    unit = plan["units"][0]
+    dag, node, index = plan["dag"], plan["node"], plan["index"]
+    workpack, command_manifest, capsule = unit["workpack"], unit["command_manifest"], unit["capsule"]
+    workpack_id = unit["workpack_id"]
+    runtime_contract = read_json(candidate_root / RUNTIME_CONTRACT_REF, "WORKPACK_RUNTIME_SOURCE_STATE_INVALID")
+    _require(runtime_contract.get("node_id") == NODE_ID
+             and runtime_contract.get("workpack_id") == workpack_id,
+             "WORKPACK_RUNTIME_SOURCE_STATE_INVALID", "runtime contract differs from DAG Workpack binding")
     commands = command_manifest.get("commands")
     command_ids = [
         item.get("command_id") for item in commands or [] if isinstance(item, Mapping)
     ]
     _require(
         command_ids == list(COMMAND_IDS)
-        and command_manifest.get("workpack_id") == WORKPACK_ID
+        and command_manifest.get("workpack_id") == workpack_id
         and command_manifest.get("execution_started") is False,
         "COMMAND_MANIFEST_INVALID",
         "planned Workpack commands are not exact",
@@ -251,12 +337,12 @@ def _load_candidate_contracts(candidate_root: Path) -> dict[str, Any]:
         workpack.get("status") == "PLANNED_NOT_ACTIVE"
         and workpack.get("execution_authorization_ref") is None
         and workpack.get("validation_scope") == VALIDATION_SCOPE
-        and node.get("workpack_id") == WORKPACK_ID
+        and node.get("workpack_id") == workpack_id
         and node.get("required_execution_mode") == "WORKPACK_EXECUTION"
         and node.get("required_authorization_scope")
         == "PROJECT_BOOTSTRAP_AUTHORIZATION"
         and node.get("validation_scope") == VALIDATION_SCOPE
-        and capsule.get("workpack_id") == WORKPACK_ID
+        and capsule.get("workpack_id") == workpack_id
         and capsule.get("execution_authorized") is False
         and capsule.get("execution_authorization_ref") is None
         and capsule.get("hydration_complete") is False,
@@ -265,9 +351,9 @@ def _load_candidate_contracts(candidate_root: Path) -> dict[str, Any]:
     )
     refs = (
         DAG_REF,
-        WORKPACK_INDEX_REF,
-        COMMAND_MANIFEST_REF,
-        CAPSULE_REF,
+        plan["index_ref"],
+        unit["command_manifest_ref"],
+        unit["capsule_ref"],
         PROVIDER_IMPLEMENTATION_REF,
         RUNTIME_ENTRYPOINT_REF,
         RUNTIME_CONTRACT_REF,
@@ -313,35 +399,47 @@ def _validate_control_binding(
     candidate_root: Path,
     execution_root: Path,
     candidate_sha256: str,
+    contracts: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    contracts = contracts or _load_candidate_contracts(candidate_root)
+    predecessors = contracts["node"].get("required_predecessor_nodes")
+    _require(isinstance(predecessors, list) and len(predecessors) == 1
+             and isinstance(predecessors[0], str)
+             and re.fullmatch(r"[A-Za-z0-9_-]+", predecessors[0]) is not None,
+             "WORKPACK_PLAN_INVALID", "materialization must have one declared predecessor")
+    predecessor_id = predecessors[0]
     state_path = execution_root / CONTROL_STATE_REF
     event_path = execution_root / CONTROL_EVENTS_REF
-    predecessor_path = execution_root / PREDECESSOR_RESULT_REF
+    predecessor_path = execution_root / f"evidence/engineering_dag/{predecessor_id}/result.json"
     state = read_json(state_path, "PROGRAM_CONTROL_STATE_INVALID")
-    predecessor = read_json(
-        predecessor_path, "PROGRAM_DRIVER_RUNTIME_VERIFICATION_RESULT_INVALID"
-    )
     event_tip = _read_event_tip(event_path)
     _require(
         state.get("state_sha256") == hash_without(state, "state_sha256")
         and state.get("last_event_hash") == event_tip
-        and state.get("last_completed_node") == "PROGRAM_DRIVER_RUNTIME_VERIFIED"
+        and state.get("last_completed_node") == predecessor_id
         and state.get("next_node") == NODE_ID
+        and state.get("program_id") == contracts["index"].get("program_id")
         and state.get("driver_started") is False
         and state.get("active_workpack") is None
         and state.get("authorization_status") == "CONSUMED"
         and state.get("remaining_transition_budget") == 0,
         "PROGRAM_CONTROL_STATE_INVALID",
-        "current control state is not the post-verification gate",
+        "current control state is not the declared predecessor gate",
     )
+    predecessor_code = (
+        "PROGRAM_DRIVER_RUNTIME_VERIFICATION_RESULT_INVALID"
+        if predecessor_id == "PROGRAM_DRIVER_RUNTIME_VERIFIED"
+        else "WORKPACK_PREDECESSOR_RESULT_INVALID"
+    )
+    predecessor = read_json(predecessor_path, predecessor_code)
     _require(
         predecessor.get("status") == "PASS"
-        and predecessor.get("node_id") == "PROGRAM_DRIVER_RUNTIME_VERIFIED"
+        and predecessor.get("node_id") == predecessor_id
         and predecessor.get("candidate_tree_sha256") == candidate_sha256
         and predecessor.get("next_node") == NODE_ID
         and predecessor.get("driver_started") is False
         and predecessor.get("workpack_started") is False,
-        "PROGRAM_DRIVER_RUNTIME_VERIFICATION_RESULT_INVALID",
+        predecessor_code,
         "predecessor result is not bound to this Candidate and node",
     )
     return {
@@ -491,14 +589,14 @@ def hydrate_workpack_runtime(
     candidate, execution = _resolved_roots(candidate_root, execution_root)
     candidate_sha256 = candidate_identity(candidate)
     contracts = _load_candidate_contracts(candidate)
-    control = _validate_control_binding(candidate, execution, candidate_sha256)
+    control = _validate_control_binding(candidate, execution, candidate_sha256, contracts)
     repository_root = execution / REPOSITORY_REF
     evidence_root = execution / NODE_EVIDENCE_REF
     expected_write_roots = {repository_root, evidence_root}
     _require(
         overlay.get("schema_version") == "1.0"
         and overlay.get("node_id") == NODE_ID
-        and overlay.get("workpack_id") == WORKPACK_ID
+        and overlay.get("workpack_id") == contracts["workpack"]["workpack_id"]
         and overlay.get("candidate_tree_sha256") == candidate_sha256
         and overlay.get("max_transitions") == MAX_TRANSITIONS
         and overlay.get("max_loop_rounds") == MAX_LOOP_ROUNDS
@@ -547,7 +645,7 @@ def hydrate_workpack_runtime(
         "assurance_profile": ASSURANCE_PROFILE,
         "program_id": control["program_id"],
         "node_id": NODE_ID,
-        "workpack_id": WORKPACK_ID,
+        "workpack_id": contracts["workpack"]["workpack_id"],
         "candidate_tree_sha256": candidate_sha256,
         "candidate_source_sha256s": contracts["source_sha256s"],
         "provider_implementation_ref": PROVIDER_IMPLEMENTATION_REF,
@@ -630,7 +728,7 @@ def validate_a3_authorization(
         "one_shot": True,
         "program_id": hydration.get("program_id"),
         "node_id": NODE_ID,
-        "workpack_id": WORKPACK_ID,
+        "workpack_id": hydration.get("workpack_id"),
         "candidate_tree_sha256": hydration.get("candidate_tree_sha256"),
         "hydration_sha256": hydration.get("hydration_sha256"),
         "resolved_command_sha256s": hydration.get("resolved_command_sha256s"),
@@ -813,10 +911,11 @@ def execute_hydrated_workpack(
     # prepared, not that the control state or executable bytes are still current.
     contracts = _load_candidate_contracts(candidate)
     control = _validate_control_binding(
-        candidate, execution, hydration["candidate_tree_sha256"]
+        candidate, execution, hydration["candidate_tree_sha256"], contracts
     )
     _require(
         contracts["source_sha256s"] == hydration.get("candidate_source_sha256s")
+        and contracts["workpack"]["workpack_id"] == hydration.get("workpack_id")
         and control == hydration.get("control_binding"),
         "RUNTIME_HYDRATION_STALE",
         "Candidate contracts or control state changed after hydration; prepare again",
@@ -928,7 +1027,7 @@ def execute_hydrated_workpack(
         "status": status,
         "program_id": hydration.get("program_id"),
         "node_id": NODE_ID,
-        "workpack_id": WORKPACK_ID,
+        "workpack_id": contracts["workpack"]["workpack_id"],
         "candidate_tree_sha256": hydration.get("candidate_tree_sha256"),
         "hydration_sha256": hydration.get("hydration_sha256"),
         "authorization_id": authorization.get("authorization_id"),
@@ -973,6 +1072,7 @@ __all__ = [
     "candidate_identity",
     "execute_hydrated_workpack",
     "hydrate_workpack_runtime",
+    "plan_workpack_node",
     "validate_a3_authorization",
     "verify_codex_cli_schema",
 ]

@@ -14,6 +14,9 @@ from pathlib import Path
 import sys
 
 
+# Loading a packaged provider must not write caches into an immutable Candidate,
+# including on personal-local filesystems where read-only modes are best effort.
+sys.dont_write_bytecode = True
 TOOLS_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(TOOLS_ROOT))
 
@@ -24,6 +27,7 @@ _runtime = importlib.import_module("harness_foundry_runtime.workpack_runtime")
 RuntimeContractError = _runtime.RuntimeContractError
 execute_hydrated_workpack = _runtime.execute_hydrated_workpack
 hydrate_workpack_runtime = _runtime.hydrate_workpack_runtime
+plan_workpack_node = _runtime.plan_workpack_node
 read_json = _runtime.read_json
 validate_a3_authorization = _runtime.validate_a3_authorization
 
@@ -31,6 +35,9 @@ validate_a3_authorization = _runtime.validate_a3_authorization
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
+    plan = subparsers.add_parser("plan")
+    plan.add_argument("--candidate-root", type=Path, required=True)
+    plan.add_argument("--node-id", required=True)
     hydrate = subparsers.add_parser("hydrate")
     hydrate.add_argument("--candidate-root", type=Path, required=True)
     hydrate.add_argument("--execution-root", type=Path, required=True)
@@ -46,7 +53,9 @@ def main(argv: list[str] | None = None) -> int:
     execute.add_argument("--timeout-seconds", type=int, default=1800)
     args = parser.parse_args(argv)
     try:
-        if args.command == "hydrate":
+        if args.command == "plan":
+            result = plan_workpack_node(args.candidate_root, args.node_id)
+        elif args.command == "hydrate":
             result = hydrate_workpack_runtime(
                 args.candidate_root,
                 args.execution_root,
@@ -83,7 +92,9 @@ def main(argv: list[str] | None = None) -> int:
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
     # A completed provider call can still report a failed Workpack. Propagate
     # that outcome to the caller instead of treating JSON serialization as PASS.
-    return 0 if result.get("status") in {"PASS", "READY_FOR_A3_PREPARATION"} else 1
+    return 0 if result.get("status") in {
+        "PASS", "READY_FOR_A3_PREPARATION", "DECLARED_WORKPACK_PLAN",
+    } else 1
 
 
 if __name__ == "__main__":

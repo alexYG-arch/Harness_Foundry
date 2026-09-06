@@ -57,6 +57,72 @@ seconds and the complete 544-test suite in 442.048 seconds (2026-09-07).
 Program stayed at revision 191, `PREBUILD_APPROVED_EXECUTION_NOT_AUTHORIZED`;
 this source-validation checkpoint grants no production execution authority.
 
+### Ordinary-project Workpack routing
+
+The normal local profile now packages the materialization provider without a
+Foundry-only target ID or historical epoch threshold. The provider reads its
+Workpack ID, command/capsule refs and actual predecessor from the Candidate DAG
+and index. A second ordinary project at Requirement epoch 73 no longer gets
+misclassified as a historical self-upgrade validation profile. The independent
+Validator still requires the normal provider and its exact projections.
+
+The same module exposes a read-only `plan --candidate-root ... --node-id ...`
+command. It resolves ordered root/project Workpacks and retains complete command
+contracts, native task bundles and Job lease fields. It creates no directories,
+grants no authorization and is not execution. A read-only check of the actual
+epoch 29 Candidate resolved its 10 Workpack-bearing engineering nodes into 13
+ordered Workpacks, with all Candidate bytes unchanged. This covers that
+engineering DAG, not additional release-pipeline Workpacks.
+
+Normal compilation tests use no compiler/Validator mocks. They exercise the
+packaged plan CLI, project/Workpack binding failures, the real three startup
+actions stopping before Lab, and a real local process through the ordinary Main
+materialization provider. The last test uses explicit test-only predecessor and
+process fixtures; it does not claim that Lab, Linkage or Codex have run.
+
+The packaged CLI test removes the test suite's bytecode environment variable
+and uses a physically writable temporary Candidate copy. It reproduced import
+cache writes that broke the portable inventory check. The entrypoint now
+disables bytecode writes before loading its provider; the same test checks the
+entire temporary tree remains unchanged. Permission modes are not relied on to
+make a read-only command read-only.
+
+This slice passed 40 focused tests in 27.374 seconds and the full 554-test suite
+in 442.978 seconds (2026-09-07). `verify-spec`, `validate_skill.py` and
+`git diff --check` passed. A fresh read-only check of the formal Program still
+reported revision 191, `PREBUILD_APPROVED_EXECUTION_NOT_AUTHORIZED`; its existing
+Execution Root contains only the runtime binding file. No formal execution or
+Candidate lifecycle transition occurred during this source repair.
+
+This removes the root provider's self-upgrade identity/predecessor coupling.
+Executing Lab/Linkage/project Workpack sequences and connecting production
+adapters to the authoritative controller remain open. Neither a declared plan
+nor a structural Main package closes the target's behavioral/media acceptance.
+
+### Next serial integration boundary
+
+The current public `runtime-advance-until-gate` and `resume` paths still require
+`TEST_ONLY_IDEMPOTENT_ADAPTERS`. The packaged Program Driver is also explicitly
+a read-only pre-verification interface. Removing either guard alone is not a
+production adapter implementation. The next integration must consume the native
+plans above, bind verified executable invocations, retain Job leases, and route
+actual process outcomes through the existing transition engine.
+
+The generic engine owns its SQLite event stream, while the compatibility startup
+providers currently commit a JSONL/state-file transaction. These must not become
+two independently writable controllers for one Program. Integration needs one
+authoritative event stream and reconstructible projections, plus command-attempt
+recovery that cannot blindly replay a side effect after a crash. The existing
+kernel crash tests assume idempotent adapters; they do not establish that an
+arbitrary production process is idempotent.
+
+The generic runtime currently also requires positive Architecture/Control Plane
+epochs. The target's frozen values are null (portable compatibility sentinel
+zero). Preserve that distinction: neither inventing a lock nor converting zero
+to one can close this binding. Cover the chosen compatibility representation,
+real process failure/reentry and the first project Workpack in an ordinary
+temporary build-path test before requesting another formal Candidate epoch.
+
 ## Reproduced gap
 
 The normal producer declares `SHARED_CONTROL_BASELINE_LOCK` but previously
