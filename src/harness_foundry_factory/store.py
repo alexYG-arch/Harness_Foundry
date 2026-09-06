@@ -726,8 +726,13 @@ class ControlEventStore:
         idempotency_key: str,
         created_at: str,
         expected_previous_event_hash: str | None = None,
+        require_new: bool = False,
     ) -> list[dict[str, Any]]:
-        """Atomically append a Hash-chained batch exactly once."""
+        """Atomically append a Hash-chained batch exactly once.
+
+        ``require_new`` is for reserving a side effect: an idempotent replay is
+        not another caller's permission to perform the reserved command.
+        """
 
         if self.read_only:
             raise RequestValidationError(
@@ -762,6 +767,10 @@ class ControlEventStore:
                 (program_id, idempotency_key),
             ).fetchone()
             if replay is not None:
+                if require_new:
+                    raise StateConflictError(
+                        "control batch was already reserved; re-read before taking action"
+                    )
                 if str(replay["request_sha256"]) != request_sha256:
                     raise IdempotencyConflictError(
                         "control idempotency key was reused with different content",

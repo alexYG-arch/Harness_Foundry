@@ -68,6 +68,7 @@ class InjectedKernelCrash(RuntimeError):
 CommandAdapter = Callable[[Mapping[str, Any]], Mapping[str, Any]]
 TransitionResolver = Callable[[str], Mapping[str, Any] | None]
 TransitionExecutor = Callable[[Mapping[str, Any]], Mapping[str, Any]]
+DURABLE_DELIVERY_MODE = "DURABLE_SINGLE_ATTEMPT"
 
 
 def evaluator_implementation_sha256() -> str:
@@ -492,6 +493,58 @@ def rebuild_control_projections(events: list[Mapping[str, Any]]) -> dict[str, An
     }
 
 
+def _durable_attempt(
+    events: list[Mapping[str, Any]],
+    transition: Mapping[str, Any],
+    parent_id: str,
+    inputs: Mapping[str, Any],
+    *,
+    completed: bool = False,
+) -> dict[str, Any] | None:
+    """Recover an intent/observation from the existing authoritative stream.
+
+    An incomplete attempt excludes another dispatch in this Program. A known
+    terminal failure remains terminal within its Parent; a new Parent is not
+    permitted to bypass an unresolved earlier side effect.
+    """
+    grants: dict[str, Mapping[str, Any]] = {}
+    attempts: dict[str, dict[str, Any]] = {}
+    last_decision: Mapping[str, Any] = {}
+    for event in events:
+        payload = event["payload"]
+        kind = event["event_type"]
+        grant_id = payload.get("grant_id")
+        if kind == "DECISION_RECORDED":
+            last_decision = payload["decision_receipt"]
+        elif kind == "DERIVED_GRANT_ISSUED":
+            grant = payload["grant"]
+            grants[grant["grant_id"]] = grant
+        elif kind == "TRANSITION_ATTEMPT_STARTED" and payload.get("delivery_mode") == DURABLE_DELIVERY_MODE:
+            attempts[grant_id] = {"intent": payload, "grant": grants[grant_id],
+                                  "input_sha256": last_decision["input_sha256"],
+                                  "result": None, "outcome": None}
+        elif kind == "COMMAND_RESULT_OBSERVED" and grant_id in attempts:
+            attempts[grant_id]["result"] = payload["result"]
+        elif kind == "DERIVED_GRANT_CONSUMED" and grant_id in attempts:
+            attempts[grant_id]["outcome"] = payload["outcome"]
+    pending = [item for item in attempts.values() if item["outcome"] is None]
+    if pending and not completed:
+        if len(pending) != 1 or pending[0]["intent"]["transition_id"] != transition["transition_id"]:
+            raise ControlKernelError("COMMAND_ATTEMPT_PENDING", "another command attempt is unresolved in this Program")
+        selected = pending[0]
+    else:
+        selected = next((item for item in reversed(list(attempts.values()))
+                         if item["intent"]["transition_id"] == transition["transition_id"]
+                         and (completed or item["grant"]["parent_authorization_id"] == parent_id)), None)
+    if selected is not None and (
+        (not completed and selected["grant"]["parent_authorization_id"] != parent_id)
+        or selected["grant"]["transition_contract_sha256"] != content_sha256(transition)
+        or selected["input_sha256"] != content_sha256(inputs)
+    ):
+        raise ControlKernelError("DURABLE_COMMAND_BINDING_CHANGED", "pending command input or contract changed")
+    return selected
+
+
 class GenericTransitionEngine:
     """Run every declared node kind through one data-bound implementation."""
 
@@ -653,13 +706,17 @@ class GenericTransitionEngine:
     ) -> dict[str, Any]:
         _validate_transition_contract(transition)
         transition_id = str(transition["transition_id"])
-        projections = rebuild_control_projections(
-            self.event_store.list_events(program_id)
-        )
+        durable = transition["command_contract"].get("delivery_mode") == DURABLE_DELIVERY_MODE
+        events = self.event_store.list_events(program_id)
+        projections = rebuild_control_projections(events)
         committed = projections["program_control_state"]["completed_transitions"].get(
             transition_id
         )
+        retained = _durable_attempt(events, transition, parent_authorization_id, inputs,
+                                    completed=committed is not None)
         if committed is not None:
+            if durable and retained is None:
+                raise ControlKernelError("DURABLE_COMMAND_HISTORY_MISSING", "completed transition has no durable command observation")
             return {"status": "ALREADY_COMMITTED", **committed}
         parent = projections["grant_ledger"]["parents"].get(
             parent_authorization_id
@@ -720,26 +777,55 @@ class GenericTransitionEngine:
         while True:
             events = self.event_store.list_events(program_id)
             projections = rebuild_control_projections(events)
+            retained = _durable_attempt(events, transition, parent_authorization_id, inputs)
+            # Refresh the Parent at every attempt, including after a retry.
+            parent = projections["grant_ledger"]["parents"].get(parent_authorization_id)
+            if not isinstance(parent, Mapping) or parent.get("status") not in {"GRANTED", "ACTIVE"}:
+                raise ControlKernelError("PARENT_AUTHORIZATION_NOT_ACTIVE", "command has no active Parent Risk Envelope")
             attempt_previous_event_hash = (
                 str(events[-1]["event_hash"]) if events else None
             )
             usage = _parent_usage(projections, parent_authorization_id)
-            attempt_number = usage["attempts"] + 1
-            attempt_id = f"{transition_id}-ATTEMPT-{attempt_number}"
-            grant = derive_attempt_grant(
-                parent,
-                transition,
-                attempt_id=attempt_id,
-                input_state_sha256=content_sha256(
-                    projections["program_control_state"]
-                ),
-                fencing_token=attempt_number,
-                usage=usage,
-                now=created_at,
-            )
+            if retained is not None and retained["outcome"] in {"VALIDATION_FAILED", "UNKNOWN_SIDE_EFFECT"}:
+                return {
+                    "status": "STOPPED", "transition_id": transition_id,
+                    "attempt_id": retained["grant"]["attempt_id"],
+                    "grant_id": retained["grant"]["grant_id"],
+                    "stop_reason": "DETERMINISTIC_VALIDATION_FAILURE" if retained["outcome"] == "VALIDATION_FAILED" else "UNKNOWN_SIDE_EFFECT",
+                    "reason_code": retained["result"].get("reason_code"),
+                    "artifact_id": retained["result"].get("artifact_id"),
+                }
+            if retained is not None and retained["outcome"] == "TEMPORARY_FAILURE" and usage["retries"] > max_retries:
+                return {"status": "STOPPED", "transition_id": transition_id,
+                        "stop_reason": "DECLARED_STOP_GATE", "reason_code": "RETRY_BUDGET_EXHAUSTED"}
+            recovering = retained is not None and retained["outcome"] is None
+            if recovering:
+                if retained["result"] is None:
+                    # Another caller may still be running. Do not write a stop
+                    # event that would invalidate its result-commit CAS, infer
+                    # process death, or turn an observation gap into authority.
+                    return {
+                        "status": "STOPPED", "transition_id": transition_id,
+                        "attempt_id": retained["grant"]["attempt_id"],
+                        "grant_id": retained["grant"]["grant_id"],
+                        "stop_reason": "COMMAND_OUTCOME_PENDING",
+                        "reason_code": "COMMAND_OUTCOME_UNRESOLVED",
+                        "may_still_be_running": True, "automatic_replay_allowed": False,
+                        "human_authority_required": False, "writes_performed": False,
+                    }
+                grant = dict(retained["grant"])
+                attempt_id = grant["attempt_id"]
+            else:
+                attempt_number = usage["attempts"] + 1
+                attempt_id = f"{transition_id}-ATTEMPT-{attempt_number}"
+                grant = derive_attempt_grant(
+                    parent, transition, attempt_id=attempt_id,
+                    input_state_sha256=content_sha256(projections["program_control_state"]),
+                    fencing_token=attempt_number, usage=usage, now=created_at,
+                )
             command_class = str(transition["command_contract"]["command_class"])
             command = self.command_adapters.get(command_class)
-            if command is None:
+            if command is None and not recovering:
                 raise ControlKernelError(
                     "COMMAND_ADAPTER_UNAVAILABLE", command_class
                 )
@@ -754,20 +840,6 @@ class GenericTransitionEngine:
                 "inputs": dict(inputs),
                 "resume": resume,
             }
-            result = dict(command(command_context))
-            if inject_crash_after_command:
-                raise InjectedKernelCrash("AFTER_COMMAND_BEFORE_EVENT_COMMIT")
-            status = result.get("status")
-            if status not in {
-                "PASS",
-                "VALIDATION_FAILED",
-                "TEMPORARY_FAILURE",
-                "UNKNOWN_SIDE_EFFECT",
-            }:
-                raise ControlKernelError(
-                    "COMMAND_RESULT_INVALID", "command returned an unsupported status"
-                )
-            _validate_result_schema(result, transition["result_schema"])
             common_events = [
                 {
                     "event_type": "DECISION_RECORDED",
@@ -786,6 +858,41 @@ class GenericTransitionEngine:
                     },
                 },
             ]
+            if durable:
+                command_context["command_contract"] = dict(transition["command_contract"])
+                if recovering:
+                    result = dict(retained["result"])
+                else:
+                    # The preceding Decision Receipt already binds the input;
+                    # retain that evidence rather than writing another digest.
+                    common_events[-1]["payload"]["delivery_mode"] = DURABLE_DELIVERY_MODE
+                    reserved = self.event_store.append_batch(
+                        program_id, common_events, idempotency_key=f"COMMAND-INTENT:{grant['grant_id']}",
+                        created_at=created_at, expected_previous_event_hash=attempt_previous_event_hash,
+                        require_new=True,
+                    )
+                    attempt_previous_event_hash = reserved[-1]["event_hash"]
+                    result = dict(command(command_context))
+                common_events = []
+            else:
+                result = dict(command(command_context))
+                if inject_crash_after_command:
+                    raise InjectedKernelCrash("AFTER_COMMAND_BEFORE_EVENT_COMMIT")
+            status = result.get("status")
+            if status not in {"PASS", "VALIDATION_FAILED", "TEMPORARY_FAILURE", "UNKNOWN_SIDE_EFFECT"}:
+                raise ControlKernelError("COMMAND_RESULT_INVALID", "command returned an unsupported status")
+            _validate_result_schema(result, transition["result_schema"])
+            if durable and not recovering:
+                observed = self.event_store.append_batch(
+                    program_id, [{"event_type": "COMMAND_RESULT_OBSERVED", "payload": {
+                        "transition_id": transition_id, "attempt_id": attempt_id,
+                        "grant_id": grant["grant_id"], "result": result,
+                    }}], idempotency_key=f"COMMAND-RESULT:{grant['grant_id']}",
+                    created_at=created_at, expected_previous_event_hash=attempt_previous_event_hash,
+                )
+                attempt_previous_event_hash = observed[-1]["event_hash"]
+            if durable and inject_crash_after_command:
+                raise InjectedKernelCrash("AFTER_OBSERVATION_BEFORE_TRANSITION_COMMIT")
             if status == "VALIDATION_FAILED":
                 batch = common_events + [
                     {
@@ -2073,6 +2180,8 @@ def _validate_transition_contract(transition: Mapping[str, Any]) -> None:
         transition["command_contract"].get("command_class"), str
     ):
         raise ControlKernelError("TRANSITION_CONTRACT_INVALID", "command class")
+    if transition["command_contract"].get("delivery_mode") not in (None, DURABLE_DELIVERY_MODE):
+        raise ControlKernelError("TRANSITION_CONTRACT_INVALID", "unsupported command delivery mode")
     if not isinstance(transition.get("retry_policy"), Mapping) or not isinstance(
         transition["retry_policy"].get("max_retries"), int
     ):

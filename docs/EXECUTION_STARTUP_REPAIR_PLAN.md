@@ -123,6 +123,57 @@ to one can close this binding. Cover the chosen compatibility representation,
 real process failure/reentry and the first project Workpack in an ordinary
 temporary build-path test before requesting another formal Candidate epoch.
 
+### Durable command delivery prerequisite
+
+The generic kernel now accepts the explicit command-contract mode
+`DURABLE_SINGLE_ATTEMPT`. Before invoking that command, it atomically reserves
+the attempt in the existing SQLite control event stream. After validating the
+returned result against its declared schema, it records `COMMAND_RESULT_OBSERVED`
+before finalizing the transition. There is no second result database or new
+authorization class. The store's `require_new` reservation option prevents an
+idempotent insert replay from becoming a second caller's permission to execute.
+Input identity reuses the existing Decision Receipt digest in the same atomic
+intent batch; it does not add a duplicate command-input digest field.
+
+Reentry finalizes an already observed result without calling an adapter or
+issuing another grant. An intent without a recorded result returns the read-only
+`COMMAND_OUTCOME_PENDING` / `COMMAND_OUTCOME_UNRESOLVED` state; it cannot silently
+rerun the same command or advance another node. It does not write a stop event
+over the active caller's event tip, assume that process has terminated, or add a
+Human Gate merely because the outcome is not yet observed. A production adapter
+must inspect its actual process handle, wait if still live, and reconcile a
+proven lost outcome before attempting any new side effect. Deterministic failure remains terminal
+within the same Parent, while a declared pre-effect temporary failure retains
+the existing bounded retry policy. Reentry can still return an earlier completed
+node while a successor is pending. Contract/input changes and revoked authority
+do not cause a pending command to be redispatched.
+
+The new test module uses independent kernel client processes and a genuinely
+non-idempotent local child process. It covers process death before observation,
+death after observation, real exit-code failure, competing atomic reservations,
+declared retry and public Runtime-advance recovery with no adapter available.
+This is execution-delivery evidence, not production adapter, sandbox, Codex,
+Lab/Linkage or target Harness evidence. It does not claim general exactly-once
+external effects: a process whose outcome was not observed still needs explicit
+reconciliation. The old implicit-idempotent fixture route is unchanged; it must
+not be selected for production processes. The public CLI's test-adapter guard
+remains in place until production scope enforcement and routing are implemented.
+
+The existing Workpack runner labels resolved commands `network=DENY`, but its
+`_run_command` only supplies a small environment to `subprocess.run`. That code
+alone is not evidence of receiver-side network or filesystem enforcement,
+especially for the Python postflight process. A production connector must bind
+the receiver's actual enforcement capabilities (or stop when they are absent),
+not infer them from environment filtering, CLI token presence or extra hashes.
+
+The final durable-delivery slice adds 14 tests and passed the 41-test focused
+control/recovery run in 7.886 seconds, followed by the complete 568-test suite
+in 475.901 seconds (2026-09-07). `verify-spec`, `validate_skill.py` and
+`git diff --check` passed. The formal Program remains at revision 191; the
+published Candidate still has its original 297 files and content binding, and
+the Execution Root still contains only its runtime binding file. These results
+close this delivery prerequisite, not the remaining production build chain.
+
 ## Reproduced gap
 
 The normal producer declares `SHARED_CONTROL_BASELINE_LOCK` but previously
