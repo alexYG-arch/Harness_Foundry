@@ -12,6 +12,12 @@ from datetime import datetime
 from hashlib import sha256
 import json
 from typing import Any, Callable, Mapping, Sequence
+from .registry_evidence import EXECUTION_MANIFEST_REF, registry_execution_evidence_is_valid
+
+from .collection_relations import (
+    ALGORITHM as COLLECTION_ALGORITHM, collection_contract_errors,
+    evaluate_collection_relation, collection_query_pointers,
+)
 
 
 SUPPORTED_OPERAND_TYPES = frozenset(
@@ -22,6 +28,7 @@ SUPPORTED_QUANTIFIERS = frozenset(
 )
 SUPPORTED_ALGORITHMS = frozenset(
     {
+        COLLECTION_ALGORITHM,
         "EXACT_EQUALITY_V1",
         "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
         "SET_EQUALITY_V1",
@@ -33,6 +40,8 @@ SUPPORTED_ALGORITHMS = frozenset(
         "MATERIALIZED_ASSET_AUTHORIZATION_V1",
         "ALL_VALUES_EQUAL_V1",
         "CANONICAL_MEMBER_UNIQUENESS_V1",
+        "ORDERED_PHASE_INTERVAL_PARTITION_V1",
+        "REGISTRY_MUTATION_RESULT_EVIDENCE_V1",
     }
 )
 SUPPORTED_NUMERIC_RELATIONS = frozenset({"LT", "LTE", "EQ", "NE", "GTE", "GT", "ABS_LTE"})
@@ -61,10 +70,14 @@ def registered_operator_findings(contract, *, location="invariant_contract"):
     it must not suppress arity, type, or numeric-relation errors of that kernel's
     registered operators.
     """
+    if contract.get("algorithm") == COLLECTION_ALGORITHM:
+        return [_finding(code, location, "invalid collection relation")
+                for code in collection_contract_errors(contract)]
     if contract.get("algorithm") not in SUPPORTED_ALGORITHMS:
         return []
     codes = {"INVARIANT_OPERAND_ARITY_INVALID", "INVARIANT_ALGORITHM_TYPE_MISMATCH",
-             "INVARIANT_NUMERIC_PARAMETERS_INCOMPLETE", "INVARIANT_THRESHOLD_OPERAND_CONFLICT"}
+             "INVARIANT_NUMERIC_PARAMETERS_INCOMPLETE", "INVARIANT_THRESHOLD_OPERAND_CONFLICT",
+             "INVARIANT_PHASE_PARAMETERS_INVALID", "INVARIANT_REGISTRY_RESULT_PARAMETERS_INVALID"}
     return [finding for finding in validate_invariant_contract_v1(contract, location=location)
             if finding["failure_code"] in codes]
 
@@ -266,6 +279,17 @@ def validate_invariant_contract_v1(
         return findings
 
     algorithm = contract.get("algorithm")
+    if algorithm == COLLECTION_ALGORITHM:
+        findings.extend(_finding(code, location, "invalid collection relation")
+                        for code in collection_contract_errors(contract))
+        if schema is not None and not findings:
+            for query in contract["parameters"]["queries"]:
+                if query["source"] != "artifact://self":
+                    continue
+                for ref in collection_query_pointers(query):
+                    if _schema_at_pointer(schema, ref) is None:
+                        findings.append(_finding("INVARIANT_OPERAND_REF_UNRESOLVED", location, ref))
+        return findings
     if algorithm not in SUPPORTED_ALGORITHMS:
         findings.append(
             _finding(
@@ -483,6 +507,7 @@ def validate_invariant_contract_v1(
         "MATERIALIZED_ASSET_AUTHORIZATION_V1": {2},
         "ALL_VALUES_EQUAL_V1": {3, 4},
         "CANONICAL_MEMBER_UNIQUENESS_V1": {1},
+        "REGISTRY_MUTATION_RESULT_EVIDENCE_V1": {2},
     }
     if algorithm in arity_by_algorithm and len(operand_refs) not in arity_by_algorithm[algorithm]:
         findings.append(
@@ -495,6 +520,24 @@ def validate_invariant_contract_v1(
 
     types = tuple(operand_types)
     type_mismatch = False
+    if algorithm == "REGISTRY_MUTATION_RESULT_EVIDENCE_V1":
+        if (parameters.get("case_kind") not in {"INVARIANT", "SCHEMA_NATIVE"}
+                or parameters.get("execution_manifest_ref") != EXECUTION_MANIFEST_REF):
+            findings.append(_finding("INVARIANT_REGISTRY_RESULT_PARAMETERS_INVALID", location,
+                                     "registry evidence requires INVARIANT or SCHEMA_NATIVE"))
+        type_mismatch = types != ("array", "ref")
+    if algorithm == "ORDERED_PHASE_INTERVAL_PARTITION_V1":
+        phases = parameters.get("phases")
+        if (not isinstance(phases, list) or not phases
+                or any(not isinstance(p, str) or not p for p in phases)
+                or len(set(p for p in phases if isinstance(p, str))) != len(phases)
+                or parameters.get("unit") != "seconds"):
+            findings.append(_finding("INVARIANT_PHASE_PARAMETERS_INVALID", location,
+                                     "phase partition requires ordered unique phase labels and seconds"))
+        elif len(operand_refs) != len(phases) + 2:
+            findings.append(_finding("INVARIANT_OPERAND_ARITY_INVALID", location,
+                                     "phase array requires one more boundary than phases"))
+        type_mismatch = not types or types != ("array",) + ("scalar",) * (len(types) - 1)
     if algorithm == "EXACT_EQUALITY_V1" and len(types) == 2:
         type_mismatch = types[0] != types[1]
     elif algorithm == "CANONICAL_VALUE_OR_SET_EQUALITY_V1" and len(types) == 2:
@@ -737,6 +780,71 @@ def _runtime_type_matches(value: Any, declared_type: str) -> bool:
     return not isinstance(value, (list, Mapping))
 
 
+def _registry_mutation_result_evidence(rows, registry_ref, case_kind, manifest_ref, resolver):
+    """Read finite result records; never apply mutations or invoke peer Oracles.
+
+    Existing byte-lineage predicates independently validate result/registry
+    digests. This predicate checks exact identities, complete schema instances,
+    semantic outcomes and equality to their referenced result-byte projections.
+    """
+    if resolver is None:
+        return False, "INVARIANT_REFERENCE_RESOLVER_REQUIRED"
+    try:
+        def read(ref):
+            value = resolver(ref)
+            if not isinstance(value, bytes):
+                raise ValueError("result evidence must be bytes")
+            return json.loads(value)
+        invariant = case_kind == "INVARIANT"
+        matrix_field = "invariant_negative_case_matrix" if invariant else "schema_native_negative_case_matrix"
+        identity = "invariant_id" if invariant else "constraint_id"
+        matrix = read(registry_ref)[matrix_field]
+        invocations = read(manifest_ref)["registry_case_invocations"]
+        by_result = {entry["result_ref"]: entry for entry in invocations}
+        if len(by_result) != len(invocations):
+            return False, None
+        cases = {case["case_id"]: case for case in matrix}
+        if (len(cases) != len(matrix) or len(rows) != len(cases)
+                or {row["case_id"] for row in rows} != set(cases)):
+            return False, None
+        for row in rows:
+            case = cases[row["case_id"]]
+            identity_fields = ("case_id", "artifact_kind", identity) + (("evaluator_id",) if invariant else ())
+            if any(row[field] != case[field] for field in identity_fields):
+                return False, None
+            instances = row["schema_instance_results"]
+            expected_schemas = case["applicable_schema_sha256s"]
+            if (len(instances) != len(expected_schemas)
+                    or {item["schema_sha256"] for item in instances} != set(expected_schemas)):
+                return False, None
+            for item in instances:
+                if (item["base_schema_pass"] is not True or item["side_effects_started"] is not False
+                        or item["status"] != "PASS" or item["observed_failure_code"] != case["expected_failure"]):
+                    return False, None
+                if invariant:
+                    failed = item["failed_invariant_ids"]
+                    allowed = case["mutation"]["post_mutation_allowed_failed_invariant_ids"]
+                    if (item["base_oracle_pass"] is not True or item["mutated_schema_pass"] is not True
+                            or not isinstance(failed, list) or len(set(failed)) != len(failed)
+                            or case[identity] not in failed or not set(failed) <= set(allowed)):
+                        return False, None
+                elif item["mutated_schema_pass"] is not False or item["oracle_started"] is not False:
+                    return False, None
+                # The standalone record excludes its own digest/ref. Do not
+                # require a self-hash or recursively verify its baseline.
+                expected = {key: value for key, value in item.items() if key not in {"result_ref", "result_sha256"}}
+                expected.update({key: row[key] for key in identity_fields})
+                expected["case_kind"] = case_kind
+                result = read(item["result_ref"])
+                if _canonical_json({key: result[key] for key in expected}) != _canonical_json(expected):
+                    return False, None
+                if not registry_execution_evidence_is_valid(result, by_result[item["result_ref"]], resolver):
+                    return False, None
+        return True, None
+    except (KeyError, IndexError, TypeError, ValueError):
+        return False, "INVARIANT_REGISTRY_RESULT_EVIDENCE_INVALID"
+
+
 def _evaluate_values(
     algorithm: str,
     values: Sequence[Any],
@@ -752,6 +860,8 @@ def _evaluate_values(
         return False, "INVARIANT_RUNTIME_OPERAND_TYPE_MISMATCH"
     if algorithm == "EXACT_EQUALITY_V1":
         return _canonical_json(values[0]) == _canonical_json(values[1]), None
+    if algorithm == "REGISTRY_MUTATION_RESULT_EVIDENCE_V1":
+        return _registry_mutation_result_evidence(values[0], values[1], parameters["case_kind"], parameters["execution_manifest_ref"], resolver)
     if algorithm == "CANONICAL_VALUE_OR_SET_EQUALITY_V1":
         if types[0] == "array":
             return _canonical_set(values[0], join_keys, side="left") == _canonical_set(
@@ -784,6 +894,25 @@ def _evaluate_values(
         # operator checks uniqueness, not an unrelated minimum item count.
         members = [_canonical_json(value) for value in values[0]]
         return len(members) == len(set(members)), None
+    if algorithm == "ORDERED_PHASE_INTERVAL_PARTITION_V1":
+        # The selected subject owns the whole ordered segment array. Never
+        # flatten multiple subjects or inspect only a mutation seed's label.
+        segments, *raw_boundaries = values
+        phases = parameters["phases"]
+        if len(segments) != len(phases):
+            return False, None
+        try:
+            boundaries = [_decimal(value) for value in raw_boundaries]
+            intervals = [(_decimal(segment["start_seconds"]), _decimal(segment["end_seconds"]))
+                         for segment in segments]
+            labels = [segment["phase"] for segment in segments]
+        except (InvalidOperation, KeyError, TypeError, ValueError):
+            return False, "INVARIANT_RUNTIME_OPERAND_TYPE_MISMATCH"
+        if not all(v.is_finite() for v in boundaries + [v for pair in intervals for v in pair]):
+            return False, "INVARIANT_RUNTIME_OPERAND_TYPE_MISMATCH"
+        return (labels == phases and all(
+            start == boundaries[i] and end == boundaries[i+1] and start <= end
+            for i, (start, end) in enumerate(intervals))), None
     if algorithm == "PAIRED_BYTE_HASH_LINEAGE_V1":
         for index in range(0, len(values), 2):
             passed, error = _evaluate_values(
@@ -860,6 +989,8 @@ def evaluate_predicate_ast_v1(
     the returned bytes itself; it never accepts a producer-reported PASS flag.
     """
 
+    if isinstance(predicate_ast, Mapping) and predicate_ast.get("algorithm") == COLLECTION_ALGORITHM:
+        return evaluate_collection_relation(predicate_ast, document, resolver)
     findings = validate_invariant_contract_v1(predicate_ast)
     if findings:
         return _evaluation_result(

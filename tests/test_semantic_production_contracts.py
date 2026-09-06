@@ -3595,6 +3595,30 @@ class SemanticProductionContractTests(unittest.TestCase):
             for scope in partition_runner["job_artifact_read_scopes"]
         }
         self.assertEqual(actual_job_roots, expected_job_roots)
+        registry_runner = next(c for c in certification["commands"] if c["command_id"] == "LAB-RUN-REGISTRY-CASE")
+        self.assertTrue(registry_runner["job_artifact_lease_required"])
+        self.assertEqual(registry_runner["job_artifact_write_scopes"], [])
+        registry_scopes = {s["job_id"]: s["allowed_read_roots"] for s in registry_runner["job_artifact_read_scopes"]}
+        self.assertEqual(set(registry_scopes), set(expected_job_roots))
+        self.assertTrue(case_manifest["registry_case_invocations"])
+        for row in case_manifest["registry_case_invocations"]:
+            self.assertEqual(row["executor_argv"][-2:], ["--read-plan-ref", row["read_plan_ref"]])
+            self.assertEqual(row["baseline_root_ref"], row["result_ref"].removesuffix(".result.json") + "/inputs")
+            self.assertEqual(row["command_receipt_ref"], row["result_ref"].removesuffix(".result.json") + ".command.json")
+            for key in ("result_schema_ref", "command_receipt_schema_ref"):
+                schema_path = self.candidate / row[key].removeprefix("harness-resource://candidate/")
+                self.assertTrue(schema_path.is_file(), key)
+            for partition in row["read_plan"]["job_read_partitions"]:
+                self.assertIn(partition["job_id"], registry_scopes)
+                for ref in partition["artifact_refs"]:
+                    self.assertTrue(any(ref.startswith(root + "/") for root in registry_scopes[partition["job_id"]]))
+        aggregate_tests = [row for row in case_manifest["registry_case_invocations"]
+                           if fixture_id in row["read_plan"]["base_artifact_ids"]]
+        self.assertTrue(aggregate_tests)
+        for row in aggregate_tests:
+            self.assertNotIn(fixture["artifact_ref"], row["read_plan"]["shared_artifact_refs"])
+            self.assertIn(fixture_id, [item["artifact_id"] for item in row["read_plan"]["fixture_artifacts"]])
+            self.assertIn(row["result_ref"], case_manifest["expected_case_result_refs"])
         self.assertTrue(
             expected_shared_roots.issubset(set(runner["allowed_read_roots"]))
         )
@@ -3636,6 +3660,27 @@ class SemanticProductionContractTests(unittest.TestCase):
         frozen_path = (
             self.candidate / "canonical_sources/FROZEN_REQUIREMENT_IR.json"
         )
+        case_path = self.candidate / "validation/CASE_EXECUTION_MANIFEST.json"
+        original_cases = case_path.read_text(encoding="utf-8")
+        damaged_cases = json.loads(original_cases)
+        row = next(r for r in damaged_cases["registry_case_invocations"] if r["read_plan"]["job_read_partitions"])
+        row["read_plan"]["job_read_partitions"] = []
+        case_path.write_text(json.dumps(damaged_cases), encoding="utf-8")
+        self.assertIn("REGISTRY_CASE_READ_PLAN_INCOMPLETE", self.finding_codes())
+        case_path.write_text(original_cases, encoding="utf-8")
+        damaged_cases = json.loads(original_cases)
+        row = next(r for r in damaged_cases["registry_case_invocations"] if r["read_plan"]["fixture_artifacts"])
+        row["read_plan"]["fixture_artifacts"] = []
+        case_path.write_text(json.dumps(damaged_cases), encoding="utf-8")
+        self.assertIn("REGISTRY_CASE_READ_PLAN_INCOMPLETE", self.finding_codes())
+        case_path.write_text(original_cases, encoding="utf-8")
+        receipt_schema_path = self.candidate / "validation/schemas/REGISTRY_CASE_EXECUTION_RECEIPT.schema.json"
+        original_receipt_schema = receipt_schema_path.read_text(encoding="utf-8")
+        damaged_schema = json.loads(original_receipt_schema)
+        damaged_schema["required"].remove("exit_code")
+        receipt_schema_path.write_text(json.dumps(damaged_schema), encoding="utf-8")
+        self.assertIn("REGISTRY_EXECUTION_EVIDENCE_SCHEMA_INVALID", self.finding_codes())
+        receipt_schema_path.write_text(original_receipt_schema, encoding="utf-8")
         frozen = json.loads(frozen_path.read_text(encoding="utf-8"))
         frozen_fixture = next(
             artifact

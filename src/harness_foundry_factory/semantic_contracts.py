@@ -25,8 +25,11 @@ from .invariant_contracts import (
     registered_operator_findings,
 )
 from .mutation_contracts import canonical_recomputations, invariant_failure_closure
+from .case_read_plans import REGISTRY_READ_PROTOCOL
+from .registry_evidence import EXECUTION_MANIFEST_REF, RESULT_SCHEMA_REF, RECEIPT_SCHEMA_REF
 from .semantic_operator_catalog import (
-    ALGORITHM_FAMILIES, COLLECTION_PROJECTIONS, LOCAL_OUTPUT_BINDING,
+    ALGORITHM_FAMILIES, COLLECTION_PROJECTIONS, LOCAL_OUTPUT_BINDING, PHASE_PARTITION_PROJECTIONS,
+    REGISTRY_RESULT_PROJECTIONS,
     semantic_projection_errors, failure_set_schema_errors,
 )
 
@@ -531,7 +534,7 @@ _INVARIANT_MUTATION_RECIPES: dict[str, dict[str, Any]] = {
 }
 
 
-def _invariant_mutation_recipe(invariant_id: str) -> dict[str, Any]:
+def _invariant_mutation_recipe(invariant_id: str, *, artifact_kind: str | None = None) -> dict[str, Any]:
     """Return an executable obligation without fabricating a passing witness."""
 
     recipe = deepcopy(_INVARIANT_MUTATION_RECIPES.get(invariant_id, {}))
@@ -586,7 +589,7 @@ def _invariant_mutation_recipe(invariant_id: str) -> dict[str, Any]:
             "acceptance_predicate": {
                 "full_artifact_json_schema": "PASS",
                 "required_failed_invariant_ids": [invariant_id],
-                "allowed_failed_invariant_ids": invariant_failure_closure(invariant_id),
+                "allowed_failed_invariant_ids": invariant_failure_closure(invariant_id, artifact_kind=artifact_kind),
                 "outside_allowed_failure_set": "PASS",
             },
             "failure_if_unsatisfied": "EXACT_COUNTEREXAMPLE_NOT_FOUND",
@@ -648,10 +651,7 @@ _FOR_ALL_INVARIANTS = frozenset(
         "EVERY_NEGATIVE_RESULT_OBSERVES_EXPECTED_FAILURE_WITHOUT_SIDE_EFFECTS",
         "EVERY_NEGATIVE_MUTATION_VARIANT_HAS_HASH_BOUND_EXECUTION_EVIDENCE",
         "EVERY_INVARIANT_NEGATIVE_RESULT_SHA256_MATCHES_REFERENCED_BYTES",
-        "EVERY_INVARIANT_RESULT_COVERS_EXACT_APPLICABLE_SCHEMA_SHA256S",
-        "EVERY_INVARIANT_MUTATION_PRESERVES_JSON_SCHEMA_AND_FAILS_DECLARED_INVARIANT",
         "EVERY_SCHEMA_NATIVE_RESULT_SHA256_MATCHES_REFERENCED_BYTES",
-        "EVERY_SCHEMA_NATIVE_MUTATION_FAILS_SCHEMA_WITHOUT_ORACLE_OR_SIDE_EFFECTS",
         "LOCAL_DETERMINISTIC_ASSET_RECIPE_AND_OUTPUT_ARE_HASH_BOUND",
         "CODEX_IMAGEGEN_MATERIALIZATION_REQUIRES_SEPARATE_CURRENT_AUTHORIZATION",
         "IMAGEGEN_RECEIPT_HASH_MATCHES_REFERENCED_BYTES_WHEN_MATERIALIZED",
@@ -838,7 +838,6 @@ def _normalize_registered_operator_inputs(invariant_id, contract):
         "FULL_TIMELINE_CONTIGUOUS_NO_GAPS_OR_OVERLAPS": "CONTIGUOUS_TIMELINE_V1",
         "ENTER_HOLD_EXIT_SEGMENTS_ARE_CONTIGUOUS_AND_MATCH_DECLARED_INTERVALS": "OBJECT_PHASE_INTERVAL_CONTIGUITY_V1",
         "SOURCE_MANIFEST_ENTRY_MATCHES_REPOSITORY_COMMIT_AND_TREE": "SOURCE_MANIFEST_IDENTITY_V1",
-        "EVERY_INVARIANT_RESULT_COVERS_EXACT_APPLICABLE_SCHEMA_SHA256S": "PER_CASE_SCHEMA_COVERAGE_V1",
     }
     if invariant_id in domain_algorithms and contract["algorithm"] in {
         "ORDERED_NUMERIC_PREDICATE_V1", "CANONICAL_VALUE_OR_SET_EQUALITY_V1"
@@ -848,21 +847,6 @@ def _normalize_registered_operator_inputs(invariant_id, contract):
         refs = contract["operand_refs"]
         if len(refs) in {3, 4} and all(ref.endswith("/audio_sha256") for ref in refs):
             contract["algorithm"] = "ALL_VALUES_EQUAL_V1"
-        elif len(refs) == 2 and any(ref.startswith(("dependency://", "candidate://")) for ref in refs):
-            # An ID-set comparison needs both complete collections. In contrast,
-            # a scalar audio digest comparison retains the exact scalar input.
-            if "*" in refs[1] or refs[1].endswith("_ids"):
-                refs[0] = re.sub(r"/\d+(?=/|$)", "/*", refs[0])
-                contract["quantifier"] = "SINGLE"
-                contract["subject_selector"] = refs[0].split("/*", 1)[0]
-    if contract["algorithm"] == "PER_CASE_SCHEMA_COVERAGE_V1":
-        contract["input_refs"] = ["/invariant_negative_case_results",
-            "candidate://validation/ORACLE_EVALUATOR_REGISTRY.json#/invariant_negative_case_matrix"]
-        contract["operand_refs"] = list(contract["input_refs"])
-        contract["quantifier"] = "FOR_ALL"
-        contract["subject_selector"] = "/invariant_negative_case_results/*"
-        contract["parameters"] = {"join_field": "case_id", "actual_schema_ids": "schema_instance_results/*/schema_sha256",
-                                  "expected_schema_ids": "applicable_schema_sha256s"}
 
 
 def _require_registered_operator_signature(contract):
@@ -1008,6 +992,9 @@ def _assert_invariant_contract_semantics(
 
 
 def _invariant_algorithm_family(invariant_id: str) -> str:
+    from .collection_relations import COLLECTION_RELATIONS, ALGORITHM
+    if invariant_id in COLLECTION_RELATIONS:
+        return ALGORITHM
     try:
         return ALGORITHM_FAMILIES[invariant_id]
     except KeyError as exc:
@@ -1015,6 +1002,27 @@ def _invariant_algorithm_family(invariant_id: str) -> str:
 
 
 def _apply_catalog_projection(invariant_id, contract):
+    result = REGISTRY_RESULT_PROJECTIONS.get(invariant_id)
+    if result is not None:
+        refs = [result["result_root"], "/oracle_evaluator_registry_ref"]
+        contract.update(algorithm="REGISTRY_MUTATION_RESULT_EVIDENCE_V1", input_refs=[*refs, EXECUTION_MANIFEST_REF],
+                        operand_refs=list(refs), subject_selector=result["result_root"], quantifier="SINGLE",
+                        parameters={"case_kind": result["case_kind"], "execution_manifest_ref": EXECUTION_MANIFEST_REF},
+                        decision_rule="Read every exact frozen Case/schema result as bytes; require its identity and outcome "
+                        "projection to equal the aggregate row. Require a passing schema base, the declared mutation "
+                        "outcome, zero side effects, and for invariant Cases a passing Oracle base with target failure "
+                        "inside the predeclared failure closure; schema-native Cases must not start an Oracle. "
+                        "This is a finite evidence predicate: never execute a mutation, invoke a Case runner, or "
+                        "recursively validate the result's baseline. Match the process observation to the exact frozen invocation, "
+                        "require successful observed exit and matching outcome, and verify its referenced before/after bytes. "
+                        "Existing separate result/Registry byte-lineage predicates remain mandatory.")
+    phase = PHASE_PARTITION_PROJECTIONS.get(invariant_id)
+    if phase is not None:
+        refs = phase["operand_refs"]
+        contract.update(algorithm="ORDERED_PHASE_INTERVAL_PARTITION_V1",
+                        input_refs=list(refs), operand_refs=list(refs),
+                        subject_selector=phase["subject_selector"], quantifier="FOR_ALL",
+                        parameters={"phases": list(phase["phases"]), "unit": "seconds"})
     projection = COLLECTION_PROJECTIONS.get(invariant_id)
     if projection is not None:
         root, values = projection
@@ -1030,10 +1038,41 @@ def _apply_catalog_projection(invariant_id, contract):
                         "The existing recipe and materialized-asset byte checks establish the digest equality without another hash.")
 
 
+def _collection_evaluation_contract(invariant_id):
+    """Lower a declared relation without consulting mutation seed semantics."""
+    from .collection_relations import collection_contract_fields, collection_read_refs
+    fields = collection_contract_fields(invariant_id)
+    contract = {
+        **fields,
+        "algorithm_id": f"INVARIANT-{_safe_id(invariant_id)}-V1",
+        "algorithm_version": "1.0",
+        "input_refs": collection_read_refs(fields),
+        "target_ref": _INVARIANT_MUTATION_TARGETS[invariant_id],
+        "canonicalization": "UTF8_JSON_SORT_KEYS_COMPACT_SEPARATORS_PRESERVE_ARRAY_ORDER_V1",
+        "ordering": "DECLARED_ARRAY_ORDER_EXCEPT_SET_COMPARISONS_USE_SORTED_UNIQUE_UTF8",
+        "numeric_tolerance": {"mode": "EXACT_DECIMAL_FROM_JSON"},
+        "branch_precondition": "ANY_JSON_SCHEMA_VALID_BRANCH",
+        "decision_rule": "Select the declared row domains and filters; compare projected identifier sets "
+                         "within each exact group key. Missing fields and duplicate declared row keys reject. "
+                         "Dependency documents must belong to the current Job; empty sets remain distinct from missing fields.",
+        "failure_code": f"INVARIANT_{_safe_id(invariant_id).replace('-', '_')}_FAILED",
+        "evaluation_contract_kind": "TYPED_KERNEL_V1",
+        "evaluator_entrypoint": "external_lab.invariants:evaluate_predicate_ast_v1",
+    }
+    contract["predicate_ast"] = {**deepcopy(fields),
+        "branch_precondition": contract["branch_precondition"],
+        "numeric_tolerance": deepcopy(contract["numeric_tolerance"])}
+    return contract
+
+
 def _invariant_evaluation_contract(
     invariant_id: str, schema: Mapping[str, Any]
 ) -> dict[str, Any]:
     """Return the deterministic Lab evaluator contract for one invariant."""
+
+    from .collection_relations import COLLECTION_RELATIONS
+    if invariant_id in COLLECTION_RELATIONS:
+        return _collection_evaluation_contract(invariant_id)
 
     target_ref = _INVARIANT_MUTATION_TARGETS.get(invariant_id)
     if target_ref is None:
@@ -1247,18 +1286,6 @@ def _invariant_evaluation_contract(
                 "Only on the AUTHORIZED_TARGET_SKILL_RUN branch require a "
                 "current exact authorization plus a hash-verified execution "
                 "receipt and actual_skill_output true."
-            ),
-        },
-        "OBSERVED_MOTION_OBJECT_IDS_EQUAL_MOTION_IR_OBJECT_IDS": {
-            "algorithm": "QUANTIFIED_MOTION_OBJECT_SET_EQUALITY_V1",
-            "input_refs": [
-                target_ref,
-                "/observed_motion_objects/*/object_id",
-                "dependency://OBJECT_MOTION_IR/shots/*/objects/*/object_id",
-            ],
-            "decision_rule": (
-                "Compare the sorted unique observed object IDs with the exact "
-                "sorted unique object IDs declared by the same-Job Motion IR."
             ),
         },
         "DENIED_TARGET_SKILL_GATE_HAS_NO_AUTHORIZATION_OR_SIDE_EFFECT_ATTEMPT": {
@@ -1659,16 +1686,6 @@ def _invariant_evaluation_contract(
                     "required_status": "RERUN_REQUIRED_INPUT_CHANGED_OR_INVALID"
                 },
             ),
-            "MOTION_OBJECT_IDS_EQUAL_ASSET_OBJECT_IDS": typed_spec(
-                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
-                ["/asset_object_ids"],
-                "Require Motion object IDs and Asset object IDs to be equal as sorted unique sets.",
-            ),
-            "SENTENCE_IDS_EQUAL_NARRATION_SCRIPT_SENTENCE_IDS": typed_spec(
-                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
-                ["dependency://NARRATION_SCRIPT/sentences/*/sentence_id"],
-                "Require sentence_ids to equal the same-Job Narration Script sentence-id set.",
-            ),
             "DEMO_PROCESSING_ACTION_MATCHES_EFFECT_CLAIM": typed_spec(
                 "CLAIM_JOINED_VALUE_EQUALITY_V1",
                 ["/effect_claim_id", "dependency://FUNCTION_SCENARIO_EFFECT_MATRIX/claims/*/effect"],
@@ -1678,46 +1695,11 @@ def _invariant_evaluation_contract(
                     "dependency_join_ref": "/claims/*/claim_id",
                 },
             ),
-            "AUDIO_ANCHOR_IDS_EQUAL_REFERENCED_ALIGNMENT_ANCHOR_IDS": typed_spec(
-                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
-                ["dependency://AUDIO_ALIGNMENT_RECEIPT/word_anchors/*/anchor_id"],
-                "Require Motion IR audio_anchor_ids to equal the same-Job alignment anchor-id set.",
-            ),
-            "MOTION_CURVE_IDS_EQUAL_OBJECT_MOTION_SEGMENT_CURVE_IDS": typed_spec(
-                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
-                ["/shots/*/objects/*/motion_segments/*/curve_id"],
-                "Require top-level motion_curve_ids to equal the union of all object motion-segment curve IDs.",
-            ),
-            "SHOT_SENTENCE_ID_UNION_EQUALS_TOP_LEVEL_SENTENCE_IDS": typed_spec(
-                "ARRAY_UNION_SET_EQUALITY_V1",
-                ["/shots/*/sentence_ids", "/sentence_ids"],
-                "Require the union of every shot sentence_ids array to equal top-level sentence_ids.",
-            ),
-            "SHOT_AUDIO_ANCHOR_ID_UNION_EQUALS_TOP_LEVEL_AUDIO_ANCHOR_IDS": typed_spec(
-                "ARRAY_UNION_SET_EQUALITY_V1",
-                ["/shots/*/audio_anchor_ids", "/audio_anchor_ids"],
-                "Require the union of every shot audio_anchor_ids array to equal top-level audio_anchor_ids.",
-            ),
             "SCENE_TRANSITION_COUNT_EQUALS_NON_INITIAL_TRANSITIONS": typed_spec(
                 "DERIVED_COUNT_EQUALITY_V1",
                 ["/shots"],
                 "Require scene_transition_count to equal max(0, number of shots minus one).",
                 parameters={"formula": "MAX_0_LEN_SHOTS_MINUS_1"},
-            ),
-            "RENDERED_SHOT_IDS_EQUAL_MOTION_IR_SHOT_IDS": typed_spec(
-                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
-                ["dependency://OBJECT_MOTION_IR/shots/*/shot_id"],
-                "Require rendered_shot_ids to equal the same-Job Motion IR shot-id set.",
-            ),
-            "RENDERED_OBJECT_IDS_EQUAL_MOTION_IR_OBJECT_IDS": typed_spec(
-                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
-                ["dependency://OBJECT_MOTION_IR/shots/*/objects/*/object_id"],
-                "Require rendered_object_ids to equal the same-Job Motion IR object-id set.",
-            ),
-            "RENDERED_MOTION_CURVE_IDS_EQUAL_MOTION_IR_CURVE_IDS": typed_spec(
-                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
-                ["dependency://OBJECT_MOTION_IR/motion_curve_ids"],
-                "Require rendered_motion_curve_ids to equal the same-Job Motion IR curve-id set.",
             ),
             "RENDERED_SEMANTIC_BINDINGS_EQUAL_MOTION_IR_OBJECT_BINDINGS": typed_spec(
                 "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
@@ -1729,11 +1711,6 @@ def _invariant_evaluation_contract(
                 ["/expected_scene_transition_count"],
                 "Require the probed scene-transition count to equal the expected count.",
             ),
-            "OBSERVED_MOTION_CURVE_IDS_EQUAL_MOTION_IR_CURVE_IDS": typed_spec(
-                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
-                ["dependency://OBJECT_MOTION_IR/motion_curve_ids"],
-                "Require all observed probe curve IDs to equal the same-Job Motion IR curve-id set.",
-            ),
             "OBSERVED_MOTION_SEMANTIC_BINDINGS_EQUAL_RENDERED_AND_MOTION_BINDINGS": typed_spec(
                 "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
                 [
@@ -1741,66 +1718,6 @@ def _invariant_evaluation_contract(
                     "dependency://OBJECT_MOTION_IR/shots/*/objects/*/visual_intent_id",
                 ],
                 "Require observed visual-intent bindings to equal both rendered and Motion IR bindings.",
-            ),
-            "ACCEPTANCE_CASE_RESULT_IDS_EQUAL_FROZEN_ACCEPTANCE_CASE_IDS": typed_spec(
-                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
-                ["candidate://validation/ACCEPTANCE_CASES.json#/cases/*/case_id"],
-                "Require acceptance result case IDs to equal the frozen acceptance Case IDs.",
-            ),
-            "ACCEPTANCE_CASE_RESULT_REFS_EQUAL_FROZEN_CASE_RESULT_REFS": typed_spec(
-                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
-                ["candidate://validation/ACCEPTANCE_CASES.json#/cases/*/result_ref"],
-                "Require acceptance result refs to equal the frozen acceptance invocation result refs.",
-            ),
-            "FIXTURE_RESULT_JOB_IDS_EQUAL_FROZEN_REPOSITORY_JOB_IDS": typed_spec(
-                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
-                ["candidate://validation/PUBLIC_SKILL_JOB_INTERFACE.json#/frozen_certification_fixtures/*/job_id"],
-                "Require fixture result Job IDs to equal the frozen repository Job IDs.",
-            ),
-            "FIXTURE_RESULT_SOURCE_IDS_EQUAL_FROZEN_REPOSITORY_SOURCE_IDS": typed_spec(
-                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
-                ["candidate://validation/PUBLIC_SKILL_JOB_INTERFACE.json#/frozen_certification_fixtures/*/source_id"],
-                "Require fixture result source IDs to equal the frozen repository source IDs.",
-            ),
-            "NEGATIVE_CASE_RESULT_IDS_EQUAL_COMPLETE_NEGATIVE_CASE_IDS": typed_spec(
-                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
-                ["candidate://validation/NEGATIVE_CASES.json#/cases/*/case_id"],
-                "Require negative result Case IDs to equal the complete frozen negative Case IDs.",
-            ),
-            "NEGATIVE_CASE_RESULT_REFS_EQUAL_FROZEN_CASE_RESULT_REFS": typed_spec(
-                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
-                ["candidate://validation/NEGATIVE_CASES.json#/cases/*/result_ref"],
-                "Require negative result refs to equal the frozen negative invocation result refs.",
-            ),
-            "INVARIANT_NEGATIVE_CASE_RESULT_IDS_EQUAL_REGISTRY_CASE_IDS": typed_spec(
-                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
-                ["candidate://validation/ORACLE_EVALUATOR_REGISTRY.json#/invariant_negative_case_matrix/*/case_id"],
-                "Require invariant result Case IDs to equal the Oracle registry invariant Case IDs.",
-            ),
-            "INVARIANT_NEGATIVE_RESULT_REFS_EQUAL_FROZEN_REGISTRY_RESULT_REFS": typed_spec(
-                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
-                ["candidate://validation/CASE_EXECUTION_MANIFEST.json#/registry_case_invocations/*/result_ref"],
-                "Require invariant result refs to equal the frozen registry invocation result refs.",
-            ),
-            "EVERY_INVARIANT_RESULT_COVERS_EXACT_APPLICABLE_SCHEMA_SHA256S": typed_spec(
-                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
-                ["candidate://validation/ORACLE_EVALUATOR_REGISTRY.json#/invariant_negative_case_matrix/*/applicable_schema_sha256s/*"],
-                "For every invariant Case require the result schema hashes to equal the exact applicable schema hashes declared by the Oracle registry.",
-            ),
-            "SCHEMA_NATIVE_NEGATIVE_CASE_RESULT_IDS_EQUAL_REGISTRY_CASE_IDS": typed_spec(
-                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
-                ["candidate://validation/ORACLE_EVALUATOR_REGISTRY.json#/schema_native_negative_case_matrix/*/case_id"],
-                "Require schema-native result Case IDs to equal the Oracle registry Case IDs.",
-            ),
-            "SCHEMA_NATIVE_RESULT_REFS_EQUAL_FROZEN_REGISTRY_RESULT_REFS": typed_spec(
-                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
-                ["candidate://validation/CASE_EXECUTION_MANIFEST.json#/registry_case_invocations/*/result_ref"],
-                "Require schema-native result refs to equal the frozen registry invocation result refs.",
-            ),
-            "NEGATIVE_MUTATION_VARIANT_RESULT_IDS_EQUAL_DECLARED_VARIANT_IDS": typed_spec(
-                "CANONICAL_VALUE_OR_SET_EQUALITY_V1",
-                ["candidate://validation/NEGATIVE_CASES.json#/cases/*/input_fixture/mutation_variants/*/variant_id"],
-                "Require mutation variant result IDs to equal the declared negative Case variant IDs.",
             ),
             "WORD_ANCHORS_ARE_MONOTONIC_AND_NON_OVERLAPPING": typed_spec(
                 "ORDERED_NUMERIC_PREDICATE_V1",
@@ -2078,6 +1995,9 @@ def _invariant_evaluation_contract(
 
 
 def _bind_invariant_evaluation_contracts(schema: dict[str, Any]) -> None:
+    from .collection_relations import (
+        COLLECTION_RELATIONS, LEGACY_COLLECTION_FIELDS, collection_definition_errors,
+    )
     invariants = [
         str(value)
         for value in schema.get("x-invariants", [])
@@ -2089,7 +2009,59 @@ def _bind_invariant_evaluation_contracts(schema: dict[str, Any]) -> None:
     for invariant_id in invariants:
         contract = _invariant_evaluation_contract(invariant_id, schema)
         existing = declared.get(invariant_id)
-        if isinstance(existing, Mapping):
+        if invariant_id in REGISTRY_RESULT_PROJECTIONS:
+            if isinstance(existing, Mapping):
+                spec = REGISTRY_RESULT_PROJECTIONS[invariant_id]
+                legacy_refs = [contract["target_ref"], spec["result_root"],
+                               "candidate://validation/ORACLE_EVALUATOR_REGISTRY.json"]
+                legacy = (existing.get("algorithm") == spec["legacy_algorithm"]
+                          and existing.get("input_refs") == legacy_refs
+                          and existing.get("parameters") in ({}, {"operand_scopes": ["SUBJECT", "GLOBAL", "GLOBAL"]}))
+                # The immediately preceding finite projection lacked execution
+                # evidence binding. Upgrade only that exact structured shape.
+                previous_finite = dict(existing)
+                previous_finite["parameters"] = {**existing.get("parameters", {}), "execution_manifest_ref": EXECUTION_MANIFEST_REF}
+                previous_finite["input_refs"] = [spec["result_root"], "/oracle_evaluator_registry_ref", EXECUTION_MANIFEST_REF]
+                legacy = legacy or (existing.get("parameters") == {"case_kind": spec["case_kind"], "operand_scopes": ["GLOBAL", "GLOBAL"]}
+                                    and existing.get("input_refs") == [spec["result_root"], "/oracle_evaluator_registry_ref"]
+                                    and not semantic_projection_errors(invariant_id, previous_finite))
+                stable = ("branch_precondition", "numeric_tolerance", "canonicalization", "ordering",
+                          "algorithm_version", "evaluator_entrypoint", "target_ref")
+                if (any(existing.get(key) != contract[key] for key in stable)
+                        or (not legacy and semantic_projection_errors(invariant_id, existing))):
+                    raise ValueError(f"RESULT_EVIDENCE_SEMANTIC_OVERRIDE_REQUIRES_DEFINITION:{invariant_id}")
+        elif invariant_id in PHASE_PARTITION_PROJECTIONS:
+            if isinstance(existing, Mapping):
+                legacy_refs = ["/shots/0/objects/0/motion_segments/1/phase",
+                    "/shots/*/objects/*/motion_segments/*/start_seconds",
+                    "/shots/*/objects/*/motion_segments/*/end_seconds",
+                    *PHASE_PARTITION_PROJECTIONS[invariant_id]["operand_refs"][1:]]
+                legacy_params = {"relation": "ENTER_HOLD_EXIT_EXACT_CONTIGUITY", "unit": "seconds"}
+                old_params = dict(existing.get("parameters", {}))
+                old_scopes = old_params.pop("operand_scopes", None)
+                known_legacy = (existing.get("algorithm") in {
+                    "ORDERED_NUMERIC_PREDICATE_V1", "OBJECT_PHASE_INTERVAL_CONTIGUITY_V1"}
+                    and existing.get("input_refs") == legacy_refs
+                    and old_params == legacy_params
+                    and old_scopes in (None, ["GLOBAL"] * len(legacy_refs)))
+                stable = ("branch_precondition", "numeric_tolerance", "canonicalization",
+                          "ordering", "algorithm_version", "evaluator_entrypoint", "target_ref")
+                if (any(existing.get(k) != contract[k] for k in stable)
+                        or (not known_legacy and semantic_projection_errors(invariant_id, existing))):
+                    raise ValueError(f"PHASE_SEMANTIC_OVERRIDE_REQUIRES_DEFINITION:{invariant_id}")
+        elif invariant_id in COLLECTION_RELATIONS:
+            if isinstance(existing, Mapping):
+                legacy = LEGACY_COLLECTION_FIELDS[invariant_id]
+                stable_fields = ("branch_precondition", "numeric_tolerance", "canonicalization",
+                                 "ordering", "algorithm_version", "evaluator_entrypoint")
+                if any(existing.get(k) != contract[k] for k in stable_fields):
+                    raise ValueError(f"COLLECTION_SEMANTIC_OVERRIDE_REQUIRES_DEFINITION:{invariant_id}")
+                is_known_legacy = all(existing.get(k) == v for k, v in legacy.items())
+                if not is_known_legacy and (collection_definition_errors(invariant_id, existing)
+                        or existing.get("input_refs") != contract["input_refs"]
+                        or existing.get("target_ref") != contract["target_ref"]):
+                    raise ValueError(f"COLLECTION_SEMANTIC_OVERRIDE_REQUIRES_DEFINITION:{invariant_id}")
+        elif isinstance(existing, Mapping):
             existing = deepcopy(dict(existing))
             # Upgrade only the known legacy Producer projections. Unknown
             # semantic overrides remain visible to validation, not discarded.
@@ -2182,6 +2154,7 @@ def _bind_invariant_evaluation_contracts(schema: dict[str, Any]) -> None:
 def schema_invariant_contracts_are_complete(schema: Any) -> bool:
     """Return whether every x-invariant has one executable exact contract."""
 
+    from .collection_relations import COLLECTION_RELATIONS, collection_definition_errors
     if not isinstance(schema, Mapping):
         return False
     invariants = {
@@ -2211,6 +2184,9 @@ def schema_invariant_contracts_are_complete(schema: Any) -> bool:
                         (f"/{field}", str(field_schema["const"]))
                     )
     for invariant_id, contract in contracts.items():
+        if invariant_id in COLLECTION_RELATIONS and (
+                not isinstance(contract, Mapping) or collection_definition_errors(invariant_id, contract)):
+            return False
         if (
             not isinstance(contract, Mapping)
             or not INVARIANT_CONTRACT_REQUIRED_FIELDS.issubset(contract)
@@ -2821,8 +2797,8 @@ def oracle_evaluator_registry(
                 )
             case_id = f"NEG-INV-{_safe_id(kind)}-{_safe_id(invariant_id)}"
             negative_case_ids.append(case_id)
-            mutation_recipe = _invariant_mutation_recipe(invariant_id)
-            allowed_failures = invariant_failure_closure(invariant_id)
+            mutation_recipe = _invariant_mutation_recipe(invariant_id, artifact_kind=kind)
+            allowed_failures = invariant_failure_closure(invariant_id, artifact_kind=kind)
             if not set(allowed_failures).issubset(invariant_ids):
                 raise ValueError(f"mutation failure dependency is not declared: {invariant_id}")
             mutation_recipe["mutation_class"] = (
@@ -5710,6 +5686,11 @@ def _strengthen_artifact_schema(
             ],
         }
 
+    # Job evidence has the same ownership field before and after repository
+    # specialization. The latter pins its value; it does not create the field.
+    if artifact_kind in JOB_SCOPED_ARTIFACT_KINDS:
+        _require_schema_fields(schema, ["job_id"])
+        schema.setdefault("properties", {}).setdefault("job_id", {"type": "string", "minLength": 1})
     if schema.get("x-invariants"):
         _bind_invariant_evaluation_contracts(schema)
     return schema
@@ -7444,6 +7425,8 @@ def task_bundle_for_workpack(
                 "harness-resource://candidate/validation/ORACLE_EVALUATOR_REGISTRY.json",
                 PUBLIC_SKILL_JOB_INTERFACE_REF,
                 "harness-resource://candidate/validation/schemas/CASE_RESULT.schema.json",
+                RESULT_SCHEMA_REF,
+                RECEIPT_SCHEMA_REF,
                 "harness-resource://candidate/validation/ACCEPTANCE_CASES.json",
                 "harness-resource://candidate/validation/NEGATIVE_CASES.json",
             ],
@@ -7469,6 +7452,7 @@ def task_bundle_for_workpack(
                 PUBLIC_SKILL_SOURCE_RESOLUTION_ENTRYPOINT
             ),
             "required_job_pipeline_entrypoint": PUBLIC_SKILL_JOB_PIPELINE_ENTRYPOINT,
+            "registry_read_protocol": deepcopy(REGISTRY_READ_PROTOCOL),
             "assertion_operators": [
                 "VALIDATED_RECEIPT_EXISTS",
                 "SET_EQUALS",
@@ -7492,20 +7476,27 @@ def task_bundle_for_workpack(
                     "Expose all seven required subcommands with their declared parameter contracts.",
                     "Implement and invoke external_lab.sources:resolve_public_skill_source_v1 from run-metamorphic-case before content analysis.",
                     "Implement external_lab.jobs:run_public_skill_job_v1 to specialize the complete artifact graph, acquire the existing one-Job lease, run the declared stages, and verify Job descriptor bytes and identity; the Case caller writes only Case receipts.",
+                    "Implement external_lab.inputs:capture_registry_inputs_v1 for run-registry-case: bind --read-plan-ref to the exact Case/schema/result entry; read only the live shared_artifact_refs and job_read_partitions, never fixture_artifacts from their runtime refs; acquire, validate, read under, and release each Job lease sequentially; retain verified artifact and referenced evidence bytes in memory; shared-only plans perform no Job reads and acquire no Job lease.",
+                    "Implement external_lab.inputs:prepare_registry_baseline_v1: construct every declared fixture artifact and its Case-result evidence as isolated test-input bytes using frozen schemas and exact sets; do not run Cases to prepare their own baselines. Resolve fixture aliases only inside the ISOLATED_CONTRACT_FIXTURE context, with no live fallback, Candidate override, or mutation of captured Job bytes. Validate every base and fixture against its schema and all pure evidence Oracles before mutation; setup failure is INCONCLUSIVE, not successful negative evidence.",
+                    "Persist each registry invocation's baseline bytes and logical-reference map only under its exact baseline_root_ref; record that input context in the existing command receipt. Acceptance, metamorphic evaluation, authorization checks, and final certification use live RUNTIME_EVIDENCE resolution and must reject a RegistryBaseline as certification evidence. A real registry test execution receipt may describe fixture inputs; the fixture inputs themselves cannot serve as a real execution receipt.",
                     "Write hash-bound command and side-effect receipts for every invocation.",
+                    "For Registry commands, the local invocation supervisor observes the finished process and writes the declared command_receipt_ref using external_lab.evidence:observe_registry_process_v1. Resolve argv through the existing Runtime URI binding before launching; compare the actual process argv to that resolution, retain canonical and observed argv separately, and record observed exit code/stdout/stderr. A child-emitted PASS is not a process observation and exit 2/timeout/setup failure cannot certify a Case.",
                 ],
                 "LAB-FIXTURES": [
                     "Execute machine-applicable positive and negative fixtures.",
                     "Execute the unlisted public Skill URL metamorphic vector without replacing it with a frozen fixture URL.",
                     "Reject duplicate, omitted, or substituted assertion, artifact, and source-job members.",
                     "Apply every registry invariant mutation to every applicable schema instance after the base artifact passes schema and Oracle validation.",
-                    "Require each invariant mutation to remain JSON-Schema-valid and to fail only its declared x-invariant evaluator.",
+                    "Require each invariant mutation to remain JSON-Schema-valid, fail its target invariant, and fail no invariant outside its predeclared dependency closure.",
                     "Write one hash-bound schema-instance result for every registry case and applicable schema Hash.",
+                    "Each standalone registry result must validate against its invocation result_schema_ref. A PASS requires the explicit execution-result context, exact identity and outcome fields, and ref/SHA pairs for the supervisor command receipt and actual base/mutated input files under baseline_root_ref. The command receipt validates against command_receipt_schema_ref. Do not include the result's own digest. The aggregate checks the outcome projection and process/input binding without re-executing Cases; setup/runner failures use non-certifying FAIL/INCONCLUSIVE results with diagnostics.",
                     "Require every frozen acceptance case and every complete negative case exactly once in the certification aggregate.",
                 ],
                 "LAB-CERTIFICATION": [
                     "Own the exact execution/evidence/cases result root and every Case runner command.",
                     "Acquire the declared per-Job read leases before loading Job artifacts.",
+                    "For each registry read partition, record its lease receipt and loaded input refs in the command receipt; release the lease even if loading fails, and never use a read failure as successful mutation evidence.",
+                    "Keep test-baseline setup separate from live certification aggregation: the final aggregate reads every actual Case execution result, never baseline fixtures or their synthetic evidence aliases. Its evidence predicates validate those results without executing or recursively replaying the Cases they summarize.",
                     "Recompute every Case, fixture-video, and registry-result SHA-256 from referenced bytes before issuing the aggregate receipt.",
                     "Reject missing, duplicate, stale, substituted, or unreachable result evidence.",
                 ],

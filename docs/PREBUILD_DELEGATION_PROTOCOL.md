@@ -1,0 +1,84 @@
+# Audited pre-build delegation V1
+
+Opt-in v2.9 protocol extension approved by the user in the current task. The
+pinned v2.8 snapshot is unchanged. Existing Programs do not acquire a grant or
+change their human approval records merely by upgrading the Factory.
+
+## Scope and authority
+
+A human grants `PREBUILD_AUTHORING_AND_CANDIDATE_DECISION` to one Program and
+Chat. The grant binds the current Requirement, authored intent, source registry,
+specification identity, and output naming rule. It permits internal authoring,
+REOPEN, deterministic empty output binding, Requirement/Architecture locks,
+Candidate generation, review and a delegated Candidate decision. It ends on
+Candidate approval or human revocation. IDs cannot be reused or reactivated.
+
+This explicitly changes the pre-build human-decision requirement **only for the
+opted-in path**. It does not reinterpret a delegate as HUMAN_VIA_CODEX_CHAT.
+Candidate decisions use `approval_mode=DELEGATED`; the old human approval field
+is not changed to APPROVED. Source conflict resolution, changed authored goals,
+new sources, execution/installation, and arbitrary output overrides are not
+delegated. Repairing the Factory Producer remains ordinary authorized source
+engineering, not target Workpack execution.
+
+Actual Harness construction/execution is outside this protocol. Approval stops
+at `PREBUILD_APPROVED_EXECUTION_NOT_AUTHORIZED`, with
+`HARNESS_EXECUTION_AUTHORIZATION_REQUIRED`. No Execution Root, Driver, Workpack,
+installation, model download or media generation is started.
+
+## Commands and payloads
+
+All mutations use the existing `chat-turn` envelope, CAS, idempotency key and
+Program-owned SQLite event store. No second journal or signing system is added.
+
+| Intent | Actor | Exact payload fields |
+| --- | --- | --- |
+| GRANT_PREBUILD_DELEGATION | Human | delegation_id, decision=APPROVE, scope=PREBUILD_AUTHORING_AND_CANDIDATE_DECISION, requirement_ir_sha256, approval_text |
+| REVOKE_PREBUILD_DELEGATION | Human | delegation_id, reason |
+| REOPEN | Delegate | reason |
+| BIND_DELEGATED_OUTPUT | Delegate | empty object |
+| PREPARE_READBACK / ADVANCE_AUTHORING_UNTIL_GATE | Delegate | empty object |
+| DELEGATED_FREEZE | Delegate | decision=APPROVE, requirement_ir_sha256, readback_sha256 |
+| PREPARE_ARCHITECTURE_READBACK | Delegate | empty object |
+| DELEGATED_ARCHITECTURE_LOCK | Delegate | decision=APPROVE, architecture_readback_sha256 |
+| GENERATE | Delegate | empty object |
+| REVIEW_CANDIDATE | Delegate | decision=APPROVE or REJECT, candidate_content_sha256, requirement_ir_sha256, review |
+
+Delegate actors retain `chat_thread_id` and an actual agent action `turn_id`,
+and add `type=CODEX_DELEGATED_AGENT` and `delegation_id`. Human grant actors use
+the actual user turn and approval text; approval cannot be inferred from an
+Agent summary. Neither delegated lock accepts or fabricates a human token.
+The old REQUEST/CONFIRM human challenge path is unchanged.
+
+The output rule retains the parent and base name of the already bound output,
+removes a trailing `-epochN`, and appends the new `-epochN`. Binding requires an
+absent path, creates nothing, and cannot override the parent or execution root.
+Generation consumes that exact frozen binding and retains existing protected-root
+and publication checks. An occupied path is not deleted or silently replaced.
+
+`review` contains a nonempty summary, inspected Candidate file refs, and findings.
+Each finding has code, message and boolean `blocking`. APPROVE requires a fresh
+official Candidate validation PASS, unchanged published bytes and Requirement,
+and no blocking findings. Static validation alone does not create a review or
+an approval. REJECT retains the grant for repair; REOPEN invalidates the prior
+decision without touching the old Candidate files.
+
+## Evidence and compatibility
+
+`readback` exposes `prebuild_delegations`, `candidate_decision` and
+`delegated_next_allowed_intents`. `status` exposes delegated next actions without
+changing the legacy human next-intent list. The public bounded authoring helper
+uses the active delegate's identity on opted-in Programs; revocation never falls
+back to a synthetic human actor. It does not automatically decide substantive
+review findings.
+
+`verify-run` checks the existing byte/event chain and independently audits prior
+human grant, delegated identity, scope and non-execution provenance. Candidate
+approval is a Program-local decision outside the immutable package. The decision
+event binds its Candidate digest and must be provided separately to any later
+explicitly authorized execution workflow; it is not a runtime authorization.
+
+Regression coverage includes the unchanged human path, delegated locks, schema
+parsing, stale/scope/revocation rejection, collision preservation, audit relation
+failures, terminal stop and real temporary Candidate publication/review. Test
+fixtures do not approve the user's production Candidate.

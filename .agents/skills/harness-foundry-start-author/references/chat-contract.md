@@ -58,3 +58,40 @@ python3 tools/hffactory.py validate-candidate --program-id PROGRAM_ID --json
 ```
 
 Authoritative run data is under `runs/PROGRAM_ID/`; derived JSON/JSONL views may always be regenerated from `factory.sqlite3`.
+
+## Opt-in delegated pre-build requests
+
+The user must explicitly approve this protocol before a human grants it. Use
+the existing envelope and actual user turn for `GRANT_PREBUILD_DELEGATION` with:
+`delegation_id`, `decision=APPROVE`,
+`scope=PREBUILD_AUTHORING_AND_CANDIDATE_DECISION`, current
+`requirement_ir_sha256`, and the user's actual `approval_text`. The grant is
+Program/Chat/source/intent scoped and creates no Candidate or execution authority.
+
+Subsequent requests use an actual agent action turn, actor type
+`CODEX_DELEGATED_AGENT`, and the persisted `delegation_id`. Do not submit human
+tokens. Read current `delegated_next_allowed_intents` and State Hash.
+
+- `REOPEN`: reason; invalidates old locks and decisions, preserving old files.
+- `BIND_DELEGATED_OUTPUT`: empty payload; binds the grant's absent next epoch
+  path without creating it. No caller root override is accepted.
+- `ADVANCE_AUTHORING_UNTIL_GATE`: empty payload; prepare the full Readback.
+- `DELEGATED_FREEZE`: decision=APPROVE, exact current requirement_ir_sha256 and
+  readback_sha256. This records a delegated lock, not a human confirmation.
+- `PREPARE_ARCHITECTURE_READBACK`: empty payload, when Architecture Lock applies.
+- `DELEGATED_ARCHITECTURE_LOCK`: decision=APPROVE and architecture_readback_sha256.
+- `GENERATE`: empty payload; consumes only the frozen output binding.
+- `REVIEW_CANDIDATE`: decision=APPROVE or REJECT, candidate_content_sha256,
+  requirement_ir_sha256, and review={summary, findings, reviewed_refs}.
+  Findings require code, message and boolean blocking; reviewed_refs identify
+  existing logical Candidate files. Perform the actual review before deciding.
+  Approval requires fresh Validator PASS and no blocking findings.
+- `REVOKE_PREBUILD_DELEGATION`: human only, delegation_id and reason.
+
+Scope changes and revocation require a new human decision; a delegate cannot
+call ANSWER/UPDATE_REQUIREMENTS/ADD_SOURCES or grant itself new authority.
+Factory Producer repairs may still derive contracts from the unchanged intent.
+All events remain in the existing SQLite audit chain; `verify-run` additionally
+checks delegation relationships. A successful delegated Candidate decision is
+external to the immutable Candidate, consumes the grant, and stops before
+Harness construction/execution. It is never an EXECUTION_AUTHORIZATION.

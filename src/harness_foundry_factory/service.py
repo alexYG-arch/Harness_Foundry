@@ -44,6 +44,7 @@ from .semantic_contracts import (
     validate_explicit_production_contracts,
 )
 from .traceability import WORKPACK_PROJECTS, normalize_ir_coverage
+from . import prebuild_delegation as delegation
 
 
 Clock = Callable[[], str]
@@ -131,8 +132,8 @@ class FactoryService:
     """Authoring-only Factory orchestration.
 
     The service may create and validate a Start Package candidate.  It has no
-    transition for approving the candidate, registering a Program Driver,
-    executing Workpacks, building projects, or installing a target.
+    runtime transition. An opt-in delegated pre-build decision is recorded
+    outside the immutable Candidate and never authorizes execution.
     """
 
     FROZEN_STATES = {
@@ -140,6 +141,7 @@ class FactoryService:
         "GENERATING",
         "VALIDATING",
         TERMINAL_CANDIDATE_STATE,
+        delegation.APPROVED_STOP,
     }
 
     def __init__(
@@ -167,6 +169,7 @@ class FactoryService:
             program_id: str,
             transition_time: str,
         ) -> TransitionOutcome:
+            delegation.authorize(current, request)
             if request.intent == "CREATE":
                 if current is not None:
                     raise InvalidTransitionError("CREATE requires no existing program")
@@ -191,12 +194,149 @@ class FactoryService:
                 ),
                 "GENERATE": self._generate,
                 "REOPEN": self._reopen,
+                "GRANT_PREBUILD_DELEGATION": self._grant_prebuild_delegation,
+                "REVOKE_PREBUILD_DELEGATION": self._revoke_prebuild_delegation,
+                "BIND_DELEGATED_OUTPUT": self._bind_delegated_output,
+                "DELEGATED_FREEZE": self._delegated_freeze,
+                "DELEGATED_ARCHITECTURE_LOCK": self._delegated_architecture_lock,
+                "REVIEW_CANDIDATE": self._review_candidate,
             }[request.intent]
-            return handler(deepcopy(current), request, transition_time)
+            outcome = handler(deepcopy(current), request, transition_time)
+            if request.actor.type == delegation.DELEGATE:
+                outcome.response["delegated_next_allowed_intents"] = delegation.next_delegated_intents(outcome.snapshot)
+                if outcome.snapshot["factory_state"] == "REQUIREMENTS_READBACK_READY":
+                    outcome.response.update(status="DELEGATED_ACTION_READY", stop_reason="DELEGATED_REQUIREMENT_FREEZE_READY",
+                        human_summary="Readback is ready for the active delegate's bound decision; no new human token is requested.")
+                elif request.intent == "GENERATE" and outcome.snapshot["factory_state"] == TERMINAL_CANDIDATE_STATE:
+                    outcome.response.update(status="DELEGATED_ACTION_READY", hard_stop="DELEGATED_CANDIDATE_REVIEW_REQUIRED",
+                        human_summary="Candidate published; perform its delegated review before any approval. Execution remains unauthorized.")
+            return outcome
 
         response = self.store.apply(request, now, mutate)
         self._export_program_views(str(response["program_id"]))
         return response
+
+    def _grant_prebuild_delegation(self, snapshot, request, now):
+        grant = delegation.make_grant(snapshot, request, now)
+        snapshot.setdefault("prebuild_delegations", {})[grant["delegation_id"]] = grant
+        return TransitionOutcome(snapshot=snapshot, event_type="PREBUILD_DELEGATION_GRANTED_BY_HUMAN",
+                                 response={"delegation": grant, "execution_authorized": False})
+
+    def _revoke_prebuild_delegation(self, snapshot, request, now):
+        delegation.require_payload(request.payload, {"delegation_id", "reason"})
+        grant = snapshot.get("prebuild_delegations", {}).get(request.payload["delegation_id"])
+        if not isinstance(grant, dict) or grant.get("status") != "ACTIVE":
+            raise InvalidTransitionError("only an active prebuild delegation can be revoked")
+        if not isinstance(request.payload["reason"], str) or not request.payload["reason"].strip():
+            raise RequestValidationError("revocation requires a reason")
+        grant.update(status="REVOKED", revoked_at=now, revoked_by=request.actor.as_dict(),
+                     revocation_reason=request.payload["reason"])
+        return TransitionOutcome(snapshot=snapshot, event_type="PREBUILD_DELEGATION_REVOKED_BY_HUMAN",
+                                 response={"delegation": grant, "execution_authorized": False})
+
+    def _bind_delegated_output(self, snapshot, request, now):
+        self._require_mutable_requirements(snapshot)
+        grant = snapshot["prebuild_delegations"][request.actor.delegation_id]
+        output = delegation.delegated_output_root(grant, snapshot["requirement_epoch"])
+        if output.exists() or output.is_symlink() or output.parent.resolve() != Path(grant["output_parent"]):
+            raise InvalidTransitionError("delegated output must be an absent child of the bound parent")
+        target = snapshot["requirement_ir"]["target"]
+        if target.get("output_root") not in (None, str(output)):
+            raise InvalidTransitionError("REOPEN must invalidate the old output before rebinding")
+        target["output_root"] = str(output)
+        snapshot["factory_state"] = "CLARIFYING"
+        self._sync_ir_metadata(snapshot)
+        return TransitionOutcome(snapshot=snapshot, event_type="DELEGATED_OUTPUT_BOUND_WITHOUT_CREATION",
+                                 response={"output_root": str(output), "root_created": False,
+                                           "next_allowed_intents": ["ADVANCE_AUTHORING_UNTIL_GATE"]})
+
+    def _delegated_freeze(self, snapshot, request, now):
+        delegation.require_payload(request.payload, {"decision", "requirement_ir_sha256", "readback_sha256"})
+        if snapshot["factory_state"] != "REQUIREMENTS_READBACK_READY":
+            raise InvalidTransitionError("DELEGATED_FREEZE requires a prepared Requirement Readback")
+        if request.payload["decision"] != "APPROVE":
+            raise InvalidTransitionError("delegated freeze requires an explicit bound decision")
+        if self._source_conflicts(snapshot) or self._requirement_gaps(snapshot):
+            raise InvalidTransitionError("delegated freeze cannot bypass source conflicts or Requirement gaps")
+        ir_hash = content_sha256(snapshot["requirement_ir"])
+        readback_hash = content_sha256({"requirement_ir": snapshot["requirement_ir"],
+            "source_registry": snapshot["source_registry"], "requirement_epoch": snapshot["requirement_epoch"]})
+        if (request.payload["requirement_ir_sha256"] != ir_hash
+                or request.payload["readback_sha256"] != readback_hash
+                or snapshot.get("readback", {}).get("readback_sha256") != readback_hash):
+            raise InvalidTransitionError("delegated freeze does not match the current Readback")
+        snapshot["freeze"] = {
+            "status": "FROZEN", "approval_mode": "DELEGATED", "requirement_ir_sha256": ir_hash,
+            "source_registry_sha256": content_sha256(snapshot["source_registry"]),
+            "spec_content_sha256": snapshot["spec_lock"]["content_sha256"],
+            "requirement_epoch": snapshot["requirement_epoch"], "readback_sha256": readback_hash,
+            "approved_at": now, "approved_by": request.actor.as_dict(),
+            "decision_evidence": {"request_id": request.request_id, **request.actor.as_dict()},
+        }
+        snapshot["factory_state"] = "REQUIREMENTS_FROZEN"
+        return TransitionOutcome(snapshot=snapshot, event_type="REQUIREMENTS_FROZEN_BY_DELEGATE",
+                                 response={"freeze_lock": snapshot["freeze"], "execution_authorized": False})
+
+    def _delegated_architecture_lock(self, snapshot, request, now):
+        delegation.require_payload(request.payload, {"decision", "architecture_readback_sha256"})
+        lifecycle = snapshot.get("architecture_lifecycle", {})
+        if (snapshot["factory_state"] != "REQUIREMENTS_FROZEN" or lifecycle.get("status") != "READBACK_READY"
+                or request.payload["decision"] != "APPROVE"):
+            raise InvalidTransitionError("delegated Architecture Lock requires its prepared Readback")
+        return self._complete_architecture_lock(snapshot, request, now, lifecycle,
+                                               request.payload["architecture_readback_sha256"])
+
+    def _review_candidate(self, snapshot, request, now):
+        delegation.require_payload(request.payload, {"decision", "candidate_content_sha256", "requirement_ir_sha256", "review"})
+        if snapshot["factory_state"] != TERMINAL_CANDIDATE_STATE:
+            raise InvalidTransitionError("Candidate decision requires a published Candidate")
+        candidate = snapshot["candidate"]
+        root = Path(candidate["candidate_path"])
+        digest, _ = _tree_hash(root)
+        if (digest != candidate["compiler_result"]["content_sha256"]
+                or digest != request.payload["candidate_content_sha256"]
+                or request.payload["requirement_ir_sha256"] != candidate["requirement_ir_sha256"]
+                or candidate["requirement_ir_sha256"] != content_sha256(snapshot["requirement_ir"])):
+            raise InvalidTransitionError("Candidate decision is stale or its bytes changed")
+        review = request.payload["review"]
+        if not isinstance(review, dict):
+            raise RequestValidationError("Candidate review must be a structured record")
+        delegation.require_payload(review, {"summary", "findings", "reviewed_refs"})
+        if (not isinstance(review["summary"], str) or not review["summary"].strip()
+                or not isinstance(review["findings"], list)
+                or not isinstance(review["reviewed_refs"], list) or not review["reviewed_refs"]):
+            raise RequestValidationError("Candidate review requires summary, findings and inspected references")
+        for ref in review["reviewed_refs"]:
+            if not isinstance(ref, str) or not ref.startswith("harness-resource://candidate/"):
+                raise RequestValidationError("review reference must identify a Candidate file")
+            path = root / ref.removeprefix("harness-resource://candidate/").split("#", 1)[0]
+            if not path.resolve().is_relative_to(root.resolve()) or not path.is_file():
+                raise RequestValidationError("review reference does not resolve to an existing Candidate file")
+        for finding in review["findings"]:
+            if (not isinstance(finding, dict) or type(finding.get("blocking")) is not bool
+                    or not isinstance(finding.get("code"), str) or not finding["code"]
+                    or not isinstance(finding.get("message"), str) or not finding["message"]):
+                raise RequestValidationError("review findings require code, message and boolean blocking")
+        decision = request.payload["decision"]
+        if decision not in {"APPROVE", "REJECT"}:
+            raise RequestValidationError("Candidate decision must APPROVE or REJECT")
+        report = self.validate_candidate(root, snapshot["spec_lock"], snapshot["source_registry"],
+            snapshot["requirement_ir"], _factory_authority_provenance(snapshot), self.store.list_events(snapshot["program_id"]))
+        if decision == "APPROVE" and (report.get("status") != "PASS" or report.get("blocking_findings")
+                                     or any(f["blocking"] for f in review["findings"])):
+            raise InvalidTransitionError("Candidate approval requires clean current validation and no blocking review findings")
+        record = {"decision": decision, "approval_mode": "DELEGATED", "decided_at": now,
+            "actor": request.actor.as_dict(), "decision_event_ref": f"factory-event://{snapshot['program_id']}/{request.request_id}",
+            "requirement_ir_sha256": candidate["requirement_ir_sha256"], "candidate_content_sha256": digest,
+            "review": deepcopy(review), "static_validation": report, "execution_authorized": False}
+        snapshot["candidate_decision"] = record
+        candidate["delegated_approval_status"] = "APPROVED" if decision == "APPROVE" else "REJECTED"
+        if decision == "APPROVE":
+            snapshot["factory_state"] = delegation.APPROVED_STOP
+            snapshot["prebuild_delegations"][request.actor.delegation_id].update(status="COMPLETED", completed_at=now)
+        return TransitionOutcome(snapshot=snapshot, event_type="CANDIDATE_DECIDED_BY_DELEGATE",
+            response={"candidate_decision": record, "execution_authorized": False,
+                "hard_stop": "HARNESS_EXECUTION_AUTHORIZATION_REQUIRED" if decision == "APPROVE" else "CANDIDATE_REPAIR_REQUIRED"})
 
     def advance_authoring_until_gate(self, program_id: str) -> dict[str, Any]:
         """Advance internal Authoring checks in one CAS to the next real gate."""
@@ -210,19 +350,26 @@ class FactoryService:
             "WAITING_REQUIREMENTS_FREEZE",
             "REQUIREMENTS_FROZEN",
             TERMINAL_CANDIDATE_STATE,
+            delegation.APPROVED_STOP,
         }:
             return self._authoring_real_gate_response(record)
+        active = next((g for g in record.snapshot.get("prebuild_delegations", {}).values()
+                       if g.get("status") == "ACTIVE"), None)
+        if record.snapshot.get("prebuild_delegations") and active is None:
+            return {**record.as_status(), "status": "PREBUILD_DELEGATION_INACTIVE", "writes_performed": False,
+                    "execution_started": False, "delegated_next_allowed_intents": []}
+        actor = {"type": "HUMAN_VIA_CODEX_CHAT", "chat_thread_id": "FACTORY-PUBLIC-CLI",
+                 "turn_id": f"AUTO-AUTHORING-{record.revision}"}
+        if active is not None:
+            actor.update(type=delegation.DELEGATE, chat_thread_id=active["issued_by"]["chat_thread_id"],
+                         delegation_id=active["delegation_id"])
         request = ChatRequest.from_dict(
             {
                 "request_id": f"AUTO-AUTHORING-{record.state_hash}",
                 "idempotency_key": f"AUTO-AUTHORING-{record.state_hash}",
                 "program_id": program_id,
                 "expected_state_hash": record.state_hash,
-                "actor": {
-                    "type": "HUMAN_VIA_CODEX_CHAT",
-                    "chat_thread_id": "FACTORY-PUBLIC-CLI",
-                    "turn_id": f"AUTO-AUTHORING-{record.revision}",
-                },
+                "actor": actor,
                 "intent": "ADVANCE_AUTHORING_UNTIL_GATE",
                 "payload": {},
             }
@@ -244,6 +391,7 @@ class FactoryService:
                 "freeze_status": record.snapshot.get("freeze", {}).get(
                     "status", "NOT_REQUESTED"
                 ),
+                "delegated_next_allowed_intents": delegation.next_delegated_intents(record.snapshot),
             }
         )
         return response
@@ -267,6 +415,9 @@ class FactoryService:
             "blockers": snapshot.get("blockers", []),
             "freeze": snapshot.get("freeze"),
             "candidate": snapshot.get("candidate"),
+            "prebuild_delegations": snapshot.get("prebuild_delegations", {}),
+            "candidate_decision": snapshot.get("candidate_decision"),
+            "delegated_next_allowed_intents": delegation.next_delegated_intents(snapshot),
             "next_allowed_intents": self._next_allowed_intents(
                 record.factory_state
             ),
@@ -423,6 +574,12 @@ class FactoryService:
         report = self.store.verify_run(program_id)
         if report["status"] == "PASS":
             record = self.store.get_program(program_id)
+            if record.snapshot.get("prebuild_delegations"):
+                audit = delegation.audit_events(self.store.list_events(program_id))
+                report["prebuild_delegation_audit"] = audit
+                if audit["status"] != "PASS":
+                    report["status"] = "FAIL"
+                    report["errors"].extend(audit["findings"])
             try:
                 self._verify_locked_spec(record.snapshot)
             except SpecDriftError as exc:
@@ -1430,11 +1587,17 @@ class FactoryService:
             "WAITING_REQUIREMENTS_FREEZE": "WAITING_REQUIREMENT_FREEZE_CONFIRMATION",
             "REQUIREMENTS_FROZEN": "REQUIREMENTS_FROZEN",
             TERMINAL_CANDIDATE_STATE: "WAITING_CANDIDATE_HUMAN_REVIEW",
+            delegation.APPROVED_STOP: "HARNESS_EXECUTION_AUTHORIZATION_REQUIRED",
         }[record.factory_state]
         auto = record.snapshot.get("authoring_auto_advance", {})
+        delegated_next = delegation.next_delegated_intents(record.snapshot)
+        if delegated_next and record.factory_state == "REQUIREMENTS_READBACK_READY":
+            stop_reason = "DELEGATED_REQUIREMENT_FREEZE_READY"
+        elif delegated_next and record.factory_state == TERMINAL_CANDIDATE_STATE:
+            stop_reason = "DELEGATED_CANDIDATE_REVIEW_REQUIRED"
         return {
             "schema_version": "2.9",
-            "status": "ALREADY_AT_REAL_GATE",
+            "status": "DELEGATED_ACTION_READY" if delegated_next and record.factory_state in {"REQUIREMENTS_READBACK_READY", TERMINAL_CANDIDATE_STATE} else "ALREADY_AT_REAL_GATE",
             "response_type": "AUTHORING_GATE",
             "program_id": record.program_id,
             "revision": record.revision,
@@ -1449,6 +1612,7 @@ class FactoryService:
             ),
             "writes_performed": False,
             "execution_started": False,
+            "delegated_next_allowed_intents": delegation.next_delegated_intents(record.snapshot),
         }
 
     def _validate_authoring_epoch_pair(self, snapshot: Mapping[str, Any]) -> None:
@@ -1922,6 +2086,9 @@ class FactoryService:
             raise InvalidTransitionError(
                 "architecture confirmation must explicitly approve"
             )
+        return self._complete_architecture_lock(snapshot, request, now, lifecycle, readback_hash)
+
+    def _complete_architecture_lock(self, snapshot, request, now, lifecycle, readback_hash):
         requirement = self._requirement_readback_from_snapshot(snapshot)
         readback = self._build_architecture_readback(snapshot)
         if content_sha256(readback) != readback_hash:
@@ -1989,7 +2156,7 @@ class FactoryService:
         }
         return TransitionOutcome(
             snapshot=snapshot,
-            event_type="ARCHITECTURE_LOCKED_BY_HUMAN",
+            event_type="ARCHITECTURE_LOCKED_BY_DELEGATE" if request.actor.type == delegation.DELEGATE else "ARCHITECTURE_LOCKED_BY_HUMAN",
             response={
                 "response_type": "RESULT",
                 "architecture_lock": architecture_lock,
@@ -2258,6 +2425,7 @@ class FactoryService:
             "OUTPUT_COLLISION",
             TERMINAL_CANDIDATE_STATE,
             "REOPEN_REQUIRED",
+            delegation.APPROVED_STOP,
         }:
             raise InvalidTransitionError(
                 "REOPEN is not allowed from current state",
@@ -2298,12 +2466,17 @@ class FactoryService:
                 ),
                 "reason": reason,
             }
-        if previous_candidate_path:
+        previous_output_binding = previous_candidate_path
+        if request.actor.type == delegation.DELEGATE and not previous_output_binding:
+            previous_output_binding = snapshot.get("requirement_ir", {}).get("target", {}).get("output_root")
+        if previous_output_binding:
             target = snapshot.get("requirement_ir", {}).get("target", {})
             if isinstance(target, dict):
-                target["previous_output_root"] = previous_candidate_path
+                target["previous_output_root"] = previous_output_binding
                 target["output_root"] = None
         snapshot["blockers"] = []
+        if snapshot.get("candidate_decision"):
+            snapshot["candidate_decision"] = {**snapshot["candidate_decision"], "status": "INVALIDATED_BY_REOPEN"}
         snapshot["decisions"].append(
             {
                 "decision_id": f"DEC-{uuid.uuid4().hex.upper()}",
@@ -3118,6 +3291,7 @@ class FactoryService:
                 "REOPEN",
             ],
             TERMINAL_CANDIDATE_STATE: ["REOPEN"],
+            delegation.APPROVED_STOP: ["REOPEN"],
         }.get(factory_state, [])
 
 

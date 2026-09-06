@@ -119,6 +119,7 @@ class Actor:
     type: str
     chat_thread_id: str
     turn_id: str
+    delegation_id: str | None = None
 
     @classmethod
     def from_value(cls, value: Any) -> "Actor":
@@ -131,20 +132,26 @@ class Actor:
                 "actor is missing required fields",
                 details={"missing": missing},
             )
-        unexpected = sorted(set(value).difference({"type", "chat_thread_id", "turn_id"}))
+        delegated = value.get("type") == "CODEX_DELEGATED_AGENT"
+        allowed = {"type", "chat_thread_id", "turn_id"} | ({"delegation_id"} if delegated else set())
+        unexpected = sorted(set(value).difference(allowed))
         if unexpected:
             raise RequestValidationError(
                 "actor contains unsupported fields", details={"unexpected": unexpected}
             )
-        if value.get("type") != "HUMAN_VIA_CODEX_CHAT":
+        if value.get("type") not in {"HUMAN_VIA_CODEX_CHAT", "CODEX_DELEGATED_AGENT"}:
             raise RequestValidationError(
-                "actor.type must be HUMAN_VIA_CODEX_CHAT",
+                "actor.type must be HUMAN_VIA_CODEX_CHAT or CODEX_DELEGATED_AGENT",
                 details={"actual": value.get("type")},
             )
+        if delegated and (not isinstance(value.get("delegation_id"), str)
+                          or not SAFE_ID_RE.fullmatch(value["delegation_id"])):
+            raise RequestValidationError("delegated actor requires a path-safe delegation_id")
         return cls(
             type=str(value["type"]),
             chat_thread_id=str(value["chat_thread_id"]),
             turn_id=str(value["turn_id"]),
+            delegation_id=value.get("delegation_id"),
         )
 
     def as_dict(self) -> dict[str, str]:
@@ -152,6 +159,7 @@ class Actor:
             "type": self.type,
             "chat_thread_id": self.chat_thread_id,
             "turn_id": self.turn_id,
+            **({"delegation_id": self.delegation_id} if self.delegation_id is not None else {}),
         }
 
 
@@ -178,6 +186,12 @@ SUPPORTED_INTENTS = {
     "ADVANCE_AUTHORING_UNTIL_GATE",
     "GENERATE",
     "REOPEN",
+    "GRANT_PREBUILD_DELEGATION",
+    "REVOKE_PREBUILD_DELEGATION",
+    "BIND_DELEGATED_OUTPUT",
+    "DELEGATED_FREEZE",
+    "DELEGATED_ARCHITECTURE_LOCK",
+    "REVIEW_CANDIDATE",
 }
 
 

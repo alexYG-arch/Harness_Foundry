@@ -6,10 +6,10 @@ import json
 import re
 
 from .contract_references import pointer_values
-from .semantic_operator_catalog import MUTATION_FAILURE_DEPENDENCIES
+from .semantic_operator_catalog import MUTATION_FAILURE_DEPENDENCIES, MUTATION_FAILURE_DEPENDENCIES_BY_KIND
 
 
-def invariant_failure_closure(invariant_id):
+def invariant_failure_closure(invariant_id, *, artifact_kind=None):
     """Resolve the predeclared invariant dependency relation, not observed output."""
     closure, pending = set(), [invariant_id]
     while pending:
@@ -17,6 +17,7 @@ def invariant_failure_closure(invariant_id):
         if current not in closure:
             closure.add(current)
             pending.extend(MUTATION_FAILURE_DEPENDENCIES.get(current, ()))
+            pending.extend(MUTATION_FAILURE_DEPENDENCIES_BY_KIND.get(artifact_kind, {}).get(current, ()))
     return sorted(closure)
 
 
@@ -55,7 +56,7 @@ def prepare_mutated_document(document, mutation_target, recomputations):
 
 
 def classify_mutation_result(target_id, *, schema_passed, failed_invariants, execution_status,
-                             allowed_failure_ids=None):
+                             allowed_failure_ids=None, artifact_kind=None):
     if execution_status != "COMPLETED":
         return "INCONCLUSIVE"
     if not schema_passed:
@@ -63,7 +64,7 @@ def classify_mutation_result(target_id, *, schema_passed, failed_invariants, exe
     allowed = {target_id} if allowed_failure_ids is None else set(allowed_failure_ids)
     if target_id not in allowed:
         return "INCONCLUSIVE"
-    if allowed_failure_ids is not None and sorted(allowed) != invariant_failure_closure(target_id):
+    if allowed_failure_ids is not None and sorted(allowed) != invariant_failure_closure(target_id, artifact_kind=artifact_kind):
         return "INCONCLUSIVE"
     if target_id not in failed_invariants:
         return "TARGET_INVARIANT_NOT_REJECTED"

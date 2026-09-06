@@ -27,12 +27,15 @@ from .artifact_descriptors import (
     diagnose_candidate_hash_projections,
 )
 from .invariant_contracts import validate_invariant_contract_v1, registered_operator_findings
+from .case_read_plans import REGISTRY_READ_PROTOCOL
+from .registry_evidence import RESULT_SCHEMA_REF, RECEIPT_SCHEMA_REF, REGISTRY_CASE_RESULT_SCHEMA, REGISTRY_CASE_EXECUTION_RECEIPT_SCHEMA
 from .semantic_operator_catalog import (
     semantic_projection_errors, LOCAL_OUTPUT_BINDING, MUTATION_FAILURE_DEPENDENCIES,
-    failure_set_schema_errors,
+    failure_set_schema_errors, MUTATION_FAILURE_DEPENDENCIES_BY_KIND,
 )
 from .media_evidence_contracts import media_contract_errors
 from .contract_references import resolve_candidate_operand
+from .collection_relations import ALGORITHM as COLLECTION_ALGORITHM, collection_contract_errors, collection_read_refs
 from .constants import (
     BASELINE_FACTORY_ID,
     DAG_WORKPACK_BINDINGS,
@@ -522,6 +525,70 @@ def _artifact_dependency_read_roots_from_manifest(
     )
 
 
+def _independent_registry_read_plans(artifact_index):
+    """Reconstruct expected Case read domains without importing the Producer."""
+    matches = {}
+    for identity, artifact in artifact_index.items():
+        if not isinstance(artifact, Mapping) or not isinstance(artifact.get("schema"), Mapping):
+            return {}
+        key = (artifact.get("artifact_kind"), _json_hash(artifact["schema"]))
+        matches.setdefault(key, set()).add(identity)
+    result = {}
+    for key, bases in matches.items():
+        closure = set(bases)
+        while True:
+            if any(identity not in artifact_index for identity in closure):
+                return {}
+            expanded = closure | {child for identity in closure
+                                  for child in artifact_index[identity].get("depends_on_artifact_ids", [])}
+            if expanded == closure:
+                break
+            closure = expanded
+        fixture_ids = set()
+        for identity in closure:
+            for evidence_ref in artifact_index[identity].get("depends_on_evidence_refs", []):
+                if evidence_ref.removeprefix(f"{LOGICAL_EXECUTION_ROOT}/") == "evidence/cases" or evidence_ref.startswith(
+                    f"{LOGICAL_EXECUTION_ROOT}/evidence/cases/"
+                ):
+                    fixture_ids.add(identity)
+        pending_consumers = True
+        while pending_consumers:
+            pending_consumers = False
+            for identity in closure - fixture_ids:
+                if any(child in fixture_ids for child in artifact_index[identity].get("depends_on_artifact_ids", [])):
+                    fixture_ids.add(identity)
+                    pending_consumers = True
+        shared_refs, by_job = set(), {}
+        for identity in closure:
+            entry = artifact_index[identity]
+            ref, job = entry.get("artifact_ref"), entry.get("job_id")
+            if not isinstance(ref, str):
+                return {}
+            if job:
+                if not ref.startswith(f"harness-resource://execution/jobs/{job}/"):
+                    return {}
+            if identity in fixture_ids:
+                continue
+            if job:
+                by_job.setdefault(job, set()).add(ref)
+            else:
+                shared_refs.add(ref)
+        result[key] = {
+            "base_artifact_ids": sorted(bases), "shared_artifact_refs": sorted(shared_refs),
+            "evaluation_context": "ISOLATED_CONTRACT_FIXTURE",
+            "fixture_artifacts": [{"artifact_id": identity,
+                "artifact_ref": artifact_index[identity]["artifact_ref"],
+                "dependency_artifact_ids": sorted(artifact_index[identity].get("depends_on_artifact_ids", [])),
+                "evidence_refs": sorted(artifact_index[identity].get("depends_on_evidence_refs", []))}
+                for identity in sorted(fixture_ids)],
+            "job_read_partitions": [{"job_id": job, "artifact_refs": sorted(refs),
+                "lease_receipt_ref": f"{LOGICAL_EXECUTION_ROOT}/evidence/job_artifact_leases/"
+                                     f"LAB-CERTIFICATION/LAB-RUN-REGISTRY-CASE/{job}.lease.json"}
+                for job, refs in sorted(by_job.items())],
+        }
+    return result
+
+
 def _job_artifact_scopes(
     artifact_roots: Sequence[str], *, roots_field: str
 ) -> list[dict[str, Any]]:
@@ -760,7 +827,7 @@ def _expected_workpack_commands(
             if shared_roots
             else "NONE"
         )
-        is_case_runner = command_id == "LAB-RUN-CASE-PARTITION"
+        is_case_runner = command_id in {"LAB-RUN-CASE-PARTITION", "LAB-RUN-REGISTRY-CASE"}
         lease_eligible = is_coding_command or (
             workpack_id == CASE_EVIDENCE_WRITER_WORKPACK_ID
             and is_case_runner
@@ -786,7 +853,9 @@ def _expected_workpack_commands(
                 read_scopes=command["job_artifact_read_scopes"],
                 write_scopes=command["job_artifact_write_scopes"],
                 selection_cardinality=(
-                    "EXACTLY_ONE_ACTIVE_JOB_LEASE_PER_CASE_PARTITION"
+                    "EXACTLY_ONE_ACTIVE_JOB_LEASE_PER_REGISTRY_READ_PARTITION"
+                    if command_id == "LAB-RUN-REGISTRY-CASE"
+                    else "EXACTLY_ONE_ACTIVE_JOB_LEASE_PER_CASE_PARTITION"
                     if is_case_runner
                     else "EXACTLY_ONE_ACTIVE_JOB_LEASE_PER_INVOCATION"
                 ),
@@ -856,7 +925,7 @@ def _job_artifact_lease_contract_is_valid(
     is_lab_case_runner = (
         workpack_id == CASE_EVIDENCE_WRITER_WORKPACK_ID
         and str(command.get("command_id") or "")
-        == "LAB-RUN-CASE-PARTITION"
+        in {"LAB-RUN-CASE-PARTITION", "LAB-RUN-REGISTRY-CASE"}
     )
     required = (is_coding or is_lab_case_runner) and bool(job_ids)
     if command.get("job_artifact_lease_required") is not required:
@@ -878,7 +947,9 @@ def _job_artifact_lease_contract_is_valid(
     bindings = contract.get("job_scope_bindings")
     receipt_schema = contract.get("receipt_schema")
     expected_selection_cardinality = (
-        "EXACTLY_ONE_ACTIVE_JOB_LEASE_PER_CASE_PARTITION"
+        "EXACTLY_ONE_ACTIVE_JOB_LEASE_PER_REGISTRY_READ_PARTITION"
+        if command.get("command_id") == "LAB-RUN-REGISTRY-CASE"
+        else "EXACTLY_ONE_ACTIVE_JOB_LEASE_PER_CASE_PARTITION"
         if is_lab_case_runner
         else "EXACTLY_ONE_ACTIVE_JOB_LEASE_PER_INVOCATION"
     )
@@ -2387,6 +2458,7 @@ def _oracle_registry_is_independently_consistent(
             if current not in expected_failure_set:
                 expected_failure_set.add(current)
                 pending.extend(MUTATION_FAILURE_DEPENDENCIES.get(current, ()))
+                pending.extend(MUTATION_FAILURE_DEPENDENCIES_BY_KIND.get(pair[0], {}).get(current, ()))
         if not expected_failure_set.issubset(peer_contracts):
             return False
         expected_failures = sorted(expected_failure_set)
@@ -2640,6 +2712,11 @@ def _check_executable_acceptance_and_oracles(
     manifest = _read_json(manifest_path, findings)
     result_schema_path = root / "validation/schemas/CASE_RESULT.schema.json"
     result_schema = _read_json(result_schema_path, findings)
+    for ref, definition in ((RESULT_SCHEMA_REF, REGISTRY_CASE_RESULT_SCHEMA),
+                            (RECEIPT_SCHEMA_REF, REGISTRY_CASE_EXECUTION_RECEIPT_SCHEMA)):
+        relative = ref.removeprefix("harness-resource://candidate/")
+        if _read_json(root / relative, findings) != definition:
+            findings.append(_finding("REGISTRY_EXECUTION_EVIDENCE_SCHEMA_INVALID", relative))
     registry_path = root / "validation/ORACLE_EVALUATOR_REGISTRY.json"
     registry = _read_json(registry_path, findings)
     artifact_manifest_path = (
@@ -2739,6 +2816,7 @@ def _check_executable_acceptance_and_oracles(
         "LAB-EVALUATE-CASE-ORACLE",
     }
     expected_registry_invocations = []
+    registry_read_plans = _independent_registry_read_plans(artifact_index)
     seen_registry_result_refs: set[str] = set()
     for matrix_field, case_kind in (
         ("invariant_negative_case_matrix", "INVARIANT"),
@@ -2764,6 +2842,8 @@ def _check_executable_acceptance_and_oracles(
                 if result_ref in seen_registry_result_refs:
                     continue
                 seen_registry_result_refs.add(result_ref)
+                read_plan_ref = (f"{LOGICAL_CANDIDATE_ROOT}/validation/CASE_EXECUTION_MANIFEST.json"
+                                 f"#/registry_case_invocations/{len(expected_registry_invocations)}/read_plan")
                 expected_registry_invocations.append(
                     {
                         "case_id": str(case["case_id"]),
@@ -2773,6 +2853,12 @@ def _check_executable_acceptance_and_oracles(
                         "executor_command_id": "LAB-RUN-REGISTRY-CASE",
                         "fixture_ref": fixture_ref,
                         "result_ref": result_ref,
+                        "baseline_root_ref": result_ref.removesuffix(".result.json") + "/inputs",
+                        "result_schema_ref": RESULT_SCHEMA_REF,
+                        "command_receipt_ref": result_ref.removesuffix(".result.json") + ".command.json",
+                        "command_receipt_schema_ref": RECEIPT_SCHEMA_REF,
+                        "read_plan_ref": read_plan_ref,
+                        "read_plan": registry_read_plans.get((str(case["artifact_kind"]), str(schema_sha256))),
                         "executor_argv": [
                             f"{LOGICAL_EXECUTION_ROOT}/project_start_packages/"
                             "external_lab/.venv/bin/python",
@@ -2783,9 +2869,20 @@ def _check_executable_acceptance_and_oracles(
                             fixture_ref,
                             "--result-ref",
                             result_ref,
+                            "--read-plan-ref",
+                            read_plan_ref,
                         ],
                     }
                 )
+    if isinstance(manifest, Mapping):
+        emitted_invocations = manifest.get("registry_case_invocations", [])
+        if (len(emitted_invocations) != len(expected_registry_invocations)
+                or any(not isinstance(actual, Mapping) or any(actual.get(field) != expected.get(field)
+                    for field in ("read_plan", "read_plan_ref", "baseline_root_ref", "executor_argv",
+                                  "result_schema_ref", "command_receipt_ref", "command_receipt_schema_ref"))
+                    for actual, expected in zip(emitted_invocations, expected_registry_invocations))):
+            findings.append(_finding("REGISTRY_CASE_READ_PLAN_INCOMPLETE",
+                                     "validation/CASE_EXECUTION_MANIFEST.json"))
     public_vector = (
         public_job_interface.get("metamorphic_acceptance_vector", {})
         if isinstance(public_job_interface, Mapping)
@@ -2928,7 +3025,7 @@ def _check_executable_acceptance_and_oracles(
     expected_parameter_flags = {
         "LAB-RUN-ACCEPTANCE-CASE": ["--fixture-ref", "--result-ref"],
         "LAB-RUN-NEGATIVE-CASE": ["--fixture-ref", "--result-ref"],
-        "LAB-RUN-REGISTRY-CASE": ["--fixture-ref", "--result-ref"],
+        "LAB-RUN-REGISTRY-CASE": ["--fixture-ref", "--result-ref", "--read-plan-ref"],
         "LAB-RUN-CASE-PARTITION": [
             "--fixture-ref",
             "--job-id",
@@ -2957,7 +3054,8 @@ def _check_executable_acceptance_and_oracles(
         == flags
         for command_id, flags in expected_parameter_flags.items()
     ) and (
-        commands.get("LAB-RUN-CASE-PARTITION", {}).get("allowed_read_roots")
+        commands.get("LAB-RUN-REGISTRY-CASE", {}).get("registry_read_protocol") == REGISTRY_READ_PROTOCOL
+        and commands.get("LAB-RUN-CASE-PARTITION", {}).get("allowed_read_roots")
         == [LOGICAL_CANDIDATE_ROOT]
         and commands.get("LAB-RUN-METAMORPHIC-CASE", {}).get(
             "allowed_read_roots"
@@ -3114,6 +3212,7 @@ def _check_executable_acceptance_and_oracles(
             "EXACTLY_ONE_ACTIVE_JOB_LEASE_PER_CASE_PARTITION_THEN_"
             "HASH_BOUND_CASE_AGGREGATION"
         )
+        or manifest.get("job_read_partition_policy_case_kinds") != ["ACCEPTANCE", "NEGATIVE"]
         or manifest.get("expected_case_result_refs") != expected_result_refs
         or manifest.get("registry_case_invocations")
         != expected_registry_invocations
@@ -9630,6 +9729,8 @@ def _expected_validation_check_evidence_refs(check_id: Any) -> list[str]:
             "validation/ACCEPTANCE_CASES.json",
             "validation/NEGATIVE_CASES.json",
             "validation/schemas/CASE_RESULT.schema.json",
+            "validation/schemas/REGISTRY_CASE_RESULT.schema.json",
+            "validation/schemas/REGISTRY_CASE_EXECUTION_RECEIPT.schema.json",
             "project_start_packages/external_lab/commands/LAB-CERTIFICATION.commands.json",
         ]
     if check == "SEMANTIC_PRODUCTION_CONTRACTS":
@@ -13114,6 +13215,11 @@ def _independent_invariant_contract_findings(
                                 for item in registered_operator_findings(predicate_ast,
                                     location=f"{artifact_id}:{invariant_id}"))
             operand_refs = contract.get("operand_refs")
+            if contract.get("algorithm") == COLLECTION_ALGORITHM and not collection_contract_errors(contract):
+                expected_reads = collection_read_refs(contract)
+                if input_refs != expected_reads:
+                    findings.append(_finding("COLLECTION_READ_DOMAIN_INCOMPLETE", f"{artifact_id}:{invariant_id}"))
+                operand_refs = sorted(set(contract["operand_refs"] + expected_reads))
             if isinstance(operand_refs, list):
                 for operand_ref in operand_refs:
                     unresolved = False
@@ -13707,7 +13813,9 @@ def _check_semantic_production_contracts(root: Path) -> list[dict[str, Any]]:
             ref
             for artifact in artifact_index.values()
             for contract in artifact.get("schema", {}).get("x-invariant-contracts", {}).values()
-            for ref in contract.get("operand_refs", [])
+            for ref in (contract.get("operand_refs", []) + (
+                collection_read_refs(contract) if contract.get("algorithm") == COLLECTION_ALGORITHM
+                and not collection_contract_errors(contract) else []))
             if isinstance(ref, str) and ref.startswith(("candidate://", "harness-resource://candidate/"))
         }
         for ref in sorted(candidate_operands):

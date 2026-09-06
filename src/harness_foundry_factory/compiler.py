@@ -40,6 +40,8 @@ from .constants import (
 )
 from .control_kernel import AUTHORITY_PRECEDENCE
 from .artifact_descriptors import JOB_ARTIFACT_DESCRIPTOR_SCHEMA
+from .case_read_plans import REGISTRY_READ_PROTOCOL, registry_schema_read_plans
+from .registry_evidence import RESULT_SCHEMA_REF, RECEIPT_SCHEMA_REF, REGISTRY_CASE_RESULT_SCHEMA, REGISTRY_CASE_EXECUTION_RECEIPT_SCHEMA
 from .semantic_contracts import (
     ARTIFACT_MANIFEST_REF,
     CASE_EVIDENCE_WRITER_WORKPACK_ID,
@@ -16154,7 +16156,7 @@ def _bind_commands_to_workpack_artifact_roots(
             if is_coding_command
             else []
         )
-        is_case_runner = command_id == "LAB-RUN-CASE-PARTITION"
+        is_case_runner = command_id in {"LAB-RUN-CASE-PARTITION", "LAB-RUN-REGISTRY-CASE"}
         lease_eligible = is_coding_command or (
             workpack_id == CASE_EVIDENCE_WRITER_WORKPACK_ID
             and is_case_runner
@@ -16187,7 +16189,9 @@ def _bind_commands_to_workpack_artifact_roots(
                 read_scopes=command["job_artifact_read_scopes"],
                 write_scopes=command["job_artifact_write_scopes"],
                 selection_cardinality=(
-                    "EXACTLY_ONE_ACTIVE_JOB_LEASE_PER_CASE_PARTITION"
+                    "EXACTLY_ONE_ACTIVE_JOB_LEASE_PER_REGISTRY_READ_PARTITION"
+                    if command_id == "LAB-RUN-REGISTRY-CASE"
+                    else "EXACTLY_ONE_ACTIVE_JOB_LEASE_PER_CASE_PARTITION"
                     if is_case_runner
                     else "EXACTLY_ONE_ACTIVE_JOB_LEASE_PER_INVOCATION"
                 ),
@@ -18068,7 +18072,7 @@ def _external_lab_case_command_contracts(
             "LAB-RUN-REGISTRY-CASE",
             "run-registry-case",
             ["INVARIANT", "SCHEMA_NATIVE"],
-            ["--fixture-ref", "--result-ref"],
+            ["--fixture-ref", "--result-ref", "--read-plan-ref"],
             False,
         ),
         (
@@ -18194,6 +18198,8 @@ def _external_lab_case_command_contracts(
                 "resolved_tree_bytes_required": True,
                 "target_skill_execution_forbidden": True,
             }
+        if command_id == "LAB-RUN-REGISTRY-CASE":
+            command["registry_read_protocol"] = deepcopy(REGISTRY_READ_PROTOCOL)
         command["command_sha256"] = _hash_without_field(
             command, "command_sha256"
         )
@@ -18262,6 +18268,12 @@ def _bind_case_execution_contracts(
             if isinstance(case, Mapping) and case.get("case_id")
         ]
     registry_case_invocations: list[dict[str, Any]] = []
+    artifact_manifest_path = staging / "canonical_sources/ARTIFACT_OBLIGATION_MANIFEST.json"
+    artifact_index = (json.loads(artifact_manifest_path.read_text(encoding="utf-8"))["artifact_index"]
+                      if artifact_manifest_path.is_file() else {})
+    registry_read_plans = registry_schema_read_plans(artifact_index)
+    _write_json(staging / "validation/schemas/REGISTRY_CASE_RESULT.schema.json", REGISTRY_CASE_RESULT_SCHEMA)
+    _write_json(staging / "validation/schemas/REGISTRY_CASE_EXECUTION_RECEIPT.schema.json", REGISTRY_CASE_EXECUTION_RECEIPT_SCHEMA)
     seen_registry_result_refs: set[str] = set()
     for matrix_field, case_kind in (
         ("invariant_negative_case_matrix", "INVARIANT"),
@@ -18283,6 +18295,8 @@ def _bind_case_execution_contracts(
                 if result_ref in seen_registry_result_refs:
                     continue
                 seen_registry_result_refs.add(result_ref)
+                read_plan_ref = (f"{manifest_ref}#/registry_case_invocations/"
+                                 f"{len(registry_case_invocations)}/read_plan")
                 registry_case_invocations.append(
                     {
                         "case_id": str(case["case_id"]),
@@ -18292,6 +18306,12 @@ def _bind_case_execution_contracts(
                         "executor_command_id": "LAB-RUN-REGISTRY-CASE",
                         "fixture_ref": fixture_ref,
                         "result_ref": result_ref,
+                        "baseline_root_ref": result_ref.removesuffix(".result.json") + "/inputs",
+                        "result_schema_ref": RESULT_SCHEMA_REF,
+                        "command_receipt_ref": result_ref.removesuffix(".result.json") + ".command.json",
+                        "command_receipt_schema_ref": RECEIPT_SCHEMA_REF,
+                        "read_plan_ref": read_plan_ref,
+                        "read_plan": deepcopy(registry_read_plans[(str(case["artifact_kind"]), str(schema_sha256))]),
                         "executor_argv": [
                             planned_python,
                             "-m",
@@ -18301,6 +18321,8 @@ def _bind_case_execution_contracts(
                             fixture_ref,
                             "--result-ref",
                             result_ref,
+                            "--read-plan-ref",
+                            read_plan_ref,
                         ],
                     }
                 )
@@ -18548,6 +18570,7 @@ def _bind_case_execution_contracts(
             "EXACTLY_ONE_ACTIVE_JOB_LEASE_PER_CASE_PARTITION_THEN_"
             "HASH_BOUND_CASE_AGGREGATION"
         ),
+        "job_read_partition_policy_case_kinds": ["ACCEPTANCE", "NEGATIVE"],
         "expected_case_result_refs": sorted(
             [
                 *[
@@ -20439,6 +20462,8 @@ def _validation_check_evidence_refs(check_id: Any) -> list[str]:
             "validation/ACCEPTANCE_CASES.json",
             "validation/NEGATIVE_CASES.json",
             "validation/schemas/CASE_RESULT.schema.json",
+            "validation/schemas/REGISTRY_CASE_RESULT.schema.json",
+            "validation/schemas/REGISTRY_CASE_EXECUTION_RECEIPT.schema.json",
             "project_start_packages/external_lab/commands/LAB-CERTIFICATION.commands.json",
         ]
     if check == "SEMANTIC_PRODUCTION_CONTRACTS":

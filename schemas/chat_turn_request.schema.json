@@ -20,10 +20,14 @@
       "type": "object",
       "required": ["type", "chat_thread_id", "turn_id"],
       "properties": {
-        "type": {"const": "HUMAN_VIA_CODEX_CHAT"},
+        "type": {"enum": ["HUMAN_VIA_CODEX_CHAT", "CODEX_DELEGATED_AGENT"]},
         "chat_thread_id": {"type": "string", "minLength": 1},
-        "turn_id": {"type": "string", "minLength": 1}
+        "turn_id": {"type": "string", "minLength": 1},
+        "delegation_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"}
       },
+      "allOf": [{"if": {"properties": {"type": {"const": "CODEX_DELEGATED_AGENT"}}},
+                 "then": {"required": ["delegation_id"]},
+                 "else": {"not": {"required": ["delegation_id"]}}}],
       "additionalProperties": false
     },
     "intent": {
@@ -36,7 +40,17 @@
         "REQUEST_FREEZE",
         "CONFIRM_FREEZE",
         "GENERATE",
-        "REOPEN"
+        "REOPEN",
+        "PREPARE_ARCHITECTURE_READBACK",
+        "REQUEST_ARCHITECTURE_LOCK",
+        "CONFIRM_ARCHITECTURE_LOCK",
+        "ADVANCE_AUTHORING_UNTIL_GATE",
+        "GRANT_PREBUILD_DELEGATION",
+        "REVOKE_PREBUILD_DELEGATION",
+        "BIND_DELEGATED_OUTPUT",
+        "DELEGATED_FREEZE",
+        "DELEGATED_ARCHITECTURE_LOCK",
+        "REVIEW_CANDIDATE"
       ]
     },
     "payload": {"type": "object"}
