@@ -390,7 +390,7 @@ class ControlledWorkpackRuntimeTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "A3_AUTHORIZATION_INVALID")
         self.assertFalse((execution / runtime.REPOSITORY_REF).exists())
 
-    def test_real_provider_uses_subprocess_and_stops_before_successor(self) -> None:
+    def test_provider_persists_mocked_command_observations_without_successor(self) -> None:
         execution = self._execution_root("execute-provider")
         hydration = runtime.hydrate_workpack_runtime(
             self.candidate,
@@ -436,6 +436,84 @@ class ControlledWorkpackRuntimeTests(unittest.TestCase):
         self.assertEqual(review["status"], "PASS")
         self.assertEqual(review["verification_exit_code"], 0)
 
+    def _real_process_hydration(self, name: str, *, fail: bool = False):
+        execution = self._execution_root(name)
+        executable = self.root / f"{name}-protocol-fixture"
+        source = (ROOT / "tests/fixtures/workpack_process_fixture.py").read_text()
+        executable.write_text(f"#!{Path(sys.executable).resolve()}\n" + source)
+        executable.chmod(0o755)
+        overlay = self._overlay(execution)
+        coding = overlay["commands"][0]
+        coding["executable_abs"] = str(executable)
+        coding["executable_sha256"] = runtime.file_hash(executable)
+        coding["argv"][0] = str(executable)
+        if fail:
+            coding["argv"].append("--fixture-fail")
+        hydration = runtime.hydrate_workpack_runtime(self.candidate, execution, overlay)
+        return execution, executable, hydration, self._authorization(hydration)
+
+    def test_actual_process_and_unittest_exit_codes_are_observed(self) -> None:
+        execution, _executable, hydration, authorization = self._real_process_hydration("actual-process")
+        result = runtime.execute_hydrated_workpack(self.candidate, execution, hydration, authorization)
+        self.assertEqual(result["status"], "PASS")
+        self.assertEqual([item["exit_code"] for item in result["command_results"]], [0, 0])
+        evidence = execution / runtime.NODE_EVIDENCE_REF
+        self.assertIn("TEST FIXTURE ONLY", (evidence / "ROOT-CODEX-CODING.stdout.txt").read_text())
+        self.assertIn("Ran 1 test", (evidence / "ROOT-MATERIALIZATION-VERIFY.stderr.txt").read_text())
+        self.assertFalse(result["successor_started"])
+
+    def test_actual_process_failure_does_not_run_verification_or_claim_pass(self) -> None:
+        execution, _executable, hydration, authorization = self._real_process_hydration("actual-failure", fail=True)
+        result = runtime.execute_hydrated_workpack(self.candidate, execution, hydration, authorization)
+        self.assertEqual(result["status"], "FAIL")
+        self.assertEqual([item["exit_code"] for item in result["command_results"]], [23])
+        self.assertEqual(result["produced_capabilities"], [])
+        self.assertFalse((execution / runtime.NODE_EVIDENCE_REF / "ROOT-MATERIALIZATION-VERIFY.result.json").exists())
+
+    def test_packaged_cli_exit_status_matches_actual_workpack_result(self) -> None:
+        for fail in (False, True):
+            with self.subTest(fail=fail):
+                execution, _executable, hydration, authorization = self._real_process_hydration(
+                    f"packaged-cli-{fail}", fail=fail,
+                )
+                hydration_path = execution / "test-hydration.json"
+                authorization_path = execution / "test-authorization.json"
+                self._write_json(hydration_path, hydration)
+                self._write_json(authorization_path, authorization)
+                completed = subprocess.run([
+                    sys.executable, str(self.candidate / runtime.RUNTIME_ENTRYPOINT_REF),
+                    "execute", "--candidate-root", str(self.candidate),
+                    "--execution-root", str(execution),
+                    "--hydration", str(hydration_path),
+                    "--authorization", str(authorization_path),
+                ], capture_output=True, text=True, check=False, timeout=60)
+                result = json.loads(completed.stdout)
+                self.assertEqual(result["status"], "FAIL" if fail else "PASS")
+                self.assertEqual(completed.returncode, 1 if fail else 0, completed.stdout)
+                self.assertFalse(result["successor_started"])
+
+    def test_control_change_after_hydration_fails_before_output_creation(self) -> None:
+        execution, _executable, hydration, authorization = self._real_process_hydration("stale-control")
+        path = execution / runtime.CONTROL_STATE_REF
+        state = json.loads(path.read_text())
+        state["revision"] += 1
+        state["state_sha256"] = runtime.hash_without(state, "state_sha256")
+        self._write_json(path, state)
+        with self.assertRaises(runtime.RuntimeContractError) as caught:
+            runtime.execute_hydrated_workpack(self.candidate, execution, hydration, authorization)
+        self.assertEqual(caught.exception.code, "RUNTIME_HYDRATION_STALE")
+        self.assertFalse((execution / runtime.REPOSITORY_REF).exists())
+        self.assertFalse((execution / runtime.NODE_EVIDENCE_REF).exists())
+
+    def test_executable_change_after_hydration_fails_before_output_creation(self) -> None:
+        execution, executable, hydration, authorization = self._real_process_hydration("stale-executable")
+        executable.write_text(executable.read_text() + "\n# Changed after preparation.\n")
+        with self.assertRaises(runtime.RuntimeContractError) as caught:
+            runtime.execute_hydrated_workpack(self.candidate, execution, hydration, authorization)
+        self.assertEqual(caught.exception.code, "COMMAND_OVERLAY_EXECUTABLE_INVALID")
+        self.assertFalse((execution / runtime.REPOSITORY_REF).exists())
+        self.assertFalse((execution / runtime.NODE_EVIDENCE_REF).exists())
+
     def test_compiler_projects_provider_and_static_validator_rejects_drift(
         self,
     ) -> None:
@@ -468,6 +546,23 @@ class ControlledWorkpackRuntimeTests(unittest.TestCase):
                 "CONTROLLED_WORKPACK_RUNTIME_PORTABLE_BINDING_INVALID",
             }.intersection(codes)
         )
+
+    def test_static_validator_requires_preexecution_freshness_contract(self) -> None:
+        drifted = self.root / "stale-freshness-contract-candidate"
+        shutil.copytree(self.candidate, drifted)
+        path = drifted / runtime.RUNTIME_CONTRACT_REF
+        contract = json.loads(path.read_text())
+        self.assertTrue(contract["execution_contract"]["fresh_hydration_inputs_required_before_writes"])
+        del contract["execution_contract"]["fresh_hydration_inputs_required_before_writes"]
+        contract["contract_sha256"] = runtime.hash_without(contract, "contract_sha256")
+        self._write_json(path, contract)
+        codes = {
+            item["code"]
+            for item in _check_controlled_workpack_runtime_executable_closure(
+                drifted, active_requirement_epoch=47,
+            )
+        }
+        self.assertIn("CONTROLLED_WORKPACK_RUNTIME_CONTRACT_INVALID", codes)
 
     def test_epoch47_successor_readiness_projects_runtime_closure(self) -> None:
         profile = json.loads(

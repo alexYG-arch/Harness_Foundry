@@ -13633,6 +13633,7 @@ def _write_controlled_workpack_runtime_contract(
             "max_transitions": 1,
             "max_loop_rounds": 1,
             "validation_scope": "STRUCTURAL_PACKAGE_CONTRACT_ONLY",
+            "fresh_hydration_inputs_required_before_writes": True,
             "allowed_write_refs": allowed_write_refs,
             "network_allowed": False,
             "real_target_install_allowed": False,

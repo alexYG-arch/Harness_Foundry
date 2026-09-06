@@ -24,8 +24,38 @@ cases. Local runtime rejection is tested directly (revocation, expanded probes,
 missing executor and skipped Lab); this does not drop the target Requirement's
 own acceptance or negative cases.
 
-Steps 3–7 remain open. In particular, no production authority bridge, generic
-Workpack execution or target Harness result has been proven by these tests.
+Step 3 now has a read-only audited decision projection and public CLI. Six
+integration tests use actual temporary authoring and validation, preserve the
+delegated actor and both existing Candidate identity domains, and prove that the
+approval receipt cannot be used as execution authorization. The formal epoch 29
+Candidate correctly fails this handoff under the repaired Validator because its
+three startup provider artifacts are absent. It has not been modified.
+
+Step 4 has a reproduced and repaired pre-execution freshness gap in the existing
+controlled Workpack provider: after hydration, changed control state or changed
+executable bytes used to run anyway. The provider now rechecks the already bound
+Candidate contracts, live control state and commands before creating output
+directories. Producer and independent Validator require this same contract.
+Six new regressions cover real local process success, nonzero exit and skipped
+verification, both freshness failures, missing contract projection and the
+packaged CLI. That CLI used to return exit code 0 even for a provider FAIL; it
+now propagates failure to the caller. The old mocked subprocess test is
+explicitly named as such.
+
+The process fixture is labeled TEST ONLY and is not Codex. Its tests still use
+the historical controlled-Workpack fixture, not the ordinary target's complete
+build DAG. They prove process dispatch and failure handling, not real model
+generation, isolation certification or normal Harness materialization.
+
+Steps 3–7 remain open: separately scoped human build authority and production
+controller integration, generic Workpack execution, fresh Candidate authoring,
+Lab/Linkage/Harness execution and target videos are not yet proven.
+
+The combined handoff/freshness/CLI repair passed 20 focused tests in 20.472
+seconds and the complete 544-test suite in 442.048 seconds (2026-09-07).
+`verify-spec`, `validate_skill.py` and `git diff --check` also passed. The formal
+Program stayed at revision 191, `PREBUILD_APPROVED_EXECUTION_NOT_AUTHORIZED`;
+this source-validation checkpoint grants no production execution authority.
 
 ## Reproduced gap
 

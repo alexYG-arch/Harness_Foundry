@@ -69,6 +69,14 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common_paths(readback, database=True)
     _add_json_flag(readback)
 
+    handoff = subparsers.add_parser(
+        "prepare-execution-handoff",
+        help="Read audited Candidate approval for a separate runtime; grants no execution authority",
+    )
+    handoff.add_argument("--program-id", required=True)
+    _add_common_paths(handoff, database=True)
+    _add_json_flag(handoff)
+
     requirement_readback = subparsers.add_parser(
         "requirement-readback",
         help="Read the frozen Requirement and its human-approved lock",
@@ -191,6 +199,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = _service(args, program_id=args.program_id, read_only_store=True).status(args.program_id)
         elif args.command == "readback":
             result = _service(args, program_id=args.program_id, read_only_store=True).readback(args.program_id)
+        elif args.command == "prepare-execution-handoff":
+            result = _service(
+                args, program_id=args.program_id, read_only_store=True,
+            ).prepare_execution_handoff(args.program_id)
         elif args.command == "requirement-readback":
             result = _service(
                 args,

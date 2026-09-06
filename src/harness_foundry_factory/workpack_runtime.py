@@ -809,6 +809,34 @@ def execute_hydrated_workpack(
         "RUNTIME_OUTPUT_COLLISION",
         "repository and node evidence roots must be fresh and absent",
     )
+    # Hydration may wait for human authorization. Its self-hash proves what was
+    # prepared, not that the control state or executable bytes are still current.
+    contracts = _load_candidate_contracts(candidate)
+    control = _validate_control_binding(
+        candidate, execution, hydration["candidate_tree_sha256"]
+    )
+    _require(
+        contracts["source_sha256s"] == hydration.get("candidate_source_sha256s")
+        and control == hydration.get("control_binding"),
+        "RUNTIME_HYDRATION_STALE",
+        "Candidate contracts or control state changed after hydration; prepare again",
+    )
+    current_commands = [
+        _validate_overlay_command(
+            command,
+            command_id=command_id,
+            repository_root=repository_root,
+            allowed_roots={repository_root, evidence_root},
+        )
+        for command_id, command in zip(COMMAND_IDS, commands, strict=True)
+    ]
+    _require(
+        current_commands == commands
+        and [item["resolved_command_sha256"] for item in current_commands]
+        == hydration.get("resolved_command_sha256s"),
+        "RUNTIME_HYDRATION_STALE",
+        "resolved commands no longer match the authorized hydration",
+    )
     candidate_before = _tree_snapshot(candidate)
     execution_before = _tree_snapshot(execution)
     repository_root.mkdir(parents=True)

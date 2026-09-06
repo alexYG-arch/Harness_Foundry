@@ -82,3 +82,40 @@ Regression coverage includes the unchanged human path, delegated locks, schema
 parsing, stale/scope/revocation rejection, collision preservation, audit relation
 failures, terminal stop and real temporary Candidate publication/review. Test
 fixtures do not approve the user's production Candidate.
+
+## Read-only execution handoff
+
+`python3 tools/hffactory.py prepare-execution-handoff --program-id <program_id> --json`
+reads the Program-owned store and current published Candidate. It returns a
+`FACTORY_CANDIDATE_APPROVAL_PROJECTION_V1` only for an audited, current delegated
+approval backed by its completed grant. It never reactivates that grant. A
+missing decision, REOPEN, changed Candidate bytes, failed current validation or
+missing startup provider blocks the handoff. There is no output-root override.
+
+The receipt retains `approval_mode=DELEGATED`, the actual actor, decision event,
+grant event, Requirement binding and Factory revision. The compatibility path
+`evidence/engineering_dag/START_PACKAGE_HUMAN_APPROVAL/result.json` and the first
+control action's legacy `human_approval_receipt_sha256` field do **not** turn the
+decision into Human approval. The old Candidate human-approval field stays
+unchanged. All execution, Driver, Workpack and installation permissions remain
+false. The command prints the projection; it does not write a receipt or create
+an Execution Root.
+
+The existing runtime field `candidate_tree_sha256` identifies the portable
+file inventory (`candidate_identity_domain=PORTABLE_FILE_MANIFEST_FILES`).
+`factory_candidate_content_sha256` separately identifies the Factory publication
+tree. These are distinct existing digest domains, not interchangeable values or
+new authority mechanisms.
+
+A future explicitly authorized runtime controller must call
+`validate_live_handoff` against the authoritative Factory before consuming this
+projection and supply its separate execution authorization. A saved projection
+alone is not a bearer grant. That production controller integration is not yet
+implemented; this interface is only the read-only half of the bridge.
+
+`tests/test_execution_handoff.py` exercises real temporary authoring, generation,
+review, the public CLI and the generated first-control action without compiler
+or Validator mocks. The action accepts the delegated approval receipt together
+with a separate test-only execution authorization, and rejects the receipt when
+offered as execution authorization. This is protocol integration evidence, not
+authorization or execution of a production Program.

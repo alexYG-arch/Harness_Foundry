@@ -39,6 +39,12 @@ python3 tools/hffactory.py package-local --json
 
 权威状态不依赖 Chat 历史。换一个 Codex Chat 后，只需给出 `program_id`，Codex 会从 SQLite 恢复。
 
+显式启用[预构建代理委托](docs/PREBUILD_DELEGATION_PROTOCOL.md)的 Program，
+可用 `prepare-execution-handoff --program-id <program_id> --json` 只读核对并投影
+已审计的 Candidate 决策。它不批准执行、不创建 Execution Root，也不启动 Driver
+或 Workpack。执行启动链的已验证范围与剩余工作见
+[启动链修复计划](docs/EXECUTION_STARTUP_REPAIR_PLAN.md)。
+
 ## 兼容路线运行实例
 
 ```text

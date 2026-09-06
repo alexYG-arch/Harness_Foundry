@@ -6295,6 +6295,7 @@ def _check_controlled_workpack_runtime_executable_closure(
         or execution.get("allowed_write_refs") != allowed_write_refs
         or execution.get("validation_scope")
         != "STRUCTURAL_PACKAGE_CONTRACT_ONLY"
+        or execution.get("fresh_hydration_inputs_required_before_writes") is not True
         or execution.get("network_allowed") is not False
         or execution.get("real_target_install_allowed") is not False
         or execution.get("candidate_write_allowed") is not False

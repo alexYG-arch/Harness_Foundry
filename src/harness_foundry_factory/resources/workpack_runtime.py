@@ -81,7 +81,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
-    return 0
+    # A completed provider call can still report a failed Workpack. Propagate
+    # that outcome to the caller instead of treating JSON serialization as PASS.
+    return 0 if result.get("status") in {"PASS", "READY_FOR_A3_PREPARATION"} else 1
 
 
 if __name__ == "__main__":

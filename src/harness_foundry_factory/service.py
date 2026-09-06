@@ -427,6 +427,12 @@ class FactoryService:
         }
         return response
 
+    def prepare_execution_handoff(self, program_id: str) -> dict[str, Any]:
+        """Project audited pre-build approval without granting runtime authority."""
+        from .execution_handoff import prepare_execution_handoff
+
+        return prepare_execution_handoff(self, program_id)
+
     def requirement_readback(self, program_id: str) -> dict[str, Any]:
         """Project the authoritative frozen Requirement and its human lock."""
 
