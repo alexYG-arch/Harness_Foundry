@@ -165,7 +165,7 @@ def verify_runtime_factory_binding(parent):
     from .service import FactoryService
     from .store import SQLiteEventStore
 
-    plan = parent.get("startup_execution", parent.get("local_execution"))
+    plan = parent.get("startup_execution", parent.get("local_execution", parent.get("coding_execution")))
     source = plan["factory_source"]
     service = FactoryService(SQLiteEventStore(source["database_path"], read_only=True),
                              spec_root=default_spec_root(), runs_root=source["runs_root"])

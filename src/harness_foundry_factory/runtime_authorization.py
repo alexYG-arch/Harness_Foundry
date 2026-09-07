@@ -17,6 +17,7 @@ from .control_kernel import (
 )
 from .execution_handoff import verify_runtime_factory_binding
 from .local_runtime import LOCAL_CLASS
+from .coding_runtime import CODING_CLASS, _fresh_task
 from .models import SAFE_ID_RE
 from .startup_runtime import (
     STARTUP_CLASS, CONTROL_DB_REF, STATE_REF, EVENTS_REF, startup_transitions,
@@ -61,9 +62,9 @@ def _preflight(parent, control_db):
     challenge = prepare_parent_authorization_challenge(parent, expected_bindings=parent.get("bindings", {}))
     _require(parent.get("bindings", {}).get("binding_kind") == START_PACKAGE_BINDING_KIND,
              "public local authorization requires the live Factory approval binding")
-    plans = {key: parent[key] for key in ("startup_execution", "local_execution") if key in parent}
-    _require(bool(plans), "an explicit startup or offline process plan is required")
-    plan = plans.get("startup_execution", plans.get("local_execution"))
+    plans = {key: parent[key] for key in ("startup_execution", "local_execution", "coding_execution") if key in parent}
+    _require(bool(plans), "an explicit implemented execution plan is required")
+    plan = next(iter(plans.values()))
     database, execution, candidate = (_path(str(control_db)), _path(plan["execution_root"]), _path(plan["candidate_root"]))
     _require(database == _path(plan["control_db"]) == execution / CONTROL_DB_REF,
              "use the one controller named in the Parent plan")
@@ -72,11 +73,14 @@ def _preflight(parent, control_db):
     # aliases such as /var); compare their resolved identity to writable roots.
     protected = [candidate, Path(plan["factory_source"]["runs_root"]).resolve(),
                  Path(plan["factory_source"]["database_path"]).resolve().parent, Path(__file__).resolve().parents[2]]
+    if "coding_execution" in plans:
+        protected.append(Path(plan["client_state_root"]).resolve())
     _require(all(not execution.is_relative_to(root) and not root.is_relative_to(execution) for root in protected),
              "execution root overlaps Candidate, Factory or authoring storage")
     _require(_parse_time(parent["expires_at"], "PARENT_AUTHORIZATION_INVALID") > datetime.now(timezone.utc),
              "Parent has expired", "PARENT_AUTHORIZATION_EXPIRED")
-    expected_classes = {STARTUP_CLASS if key == "startup_execution" else LOCAL_CLASS for key in plans}
+    classes = {"startup_execution": STARTUP_CLASS, "local_execution": LOCAL_CLASS, "coding_execution": CODING_CLASS}
+    expected_classes = {classes[key] for key in plans}
     _require(set(parent["command_classes"]) == expected_classes,
              "Parent command classes must match its implemented local plans")
     for key, value in plans.items():
@@ -84,6 +88,8 @@ def _preflight(parent, control_db):
             _require(value["transitions"] == startup_transitions(candidate, parent["bindings"]),
                      "startup transitions differ from the Candidate DAG")
         for transition in value["transitions"].values():
+            if key == "coding_execution":
+                _fresh_task(value, transition["command_contract"]["coding_invocation"])
             _validate_transition_contract(transition)
             _require(transition.get("bindings") == parent["bindings"], "transition binding differs from its Parent")
             _require_scope_subset(parent, _transition_scope(transition))
@@ -149,7 +155,7 @@ def revoke_runtime_authorization(program, parent_id, actor, reason, control_db):
     _require(store is not None, "controller does not exist")
     parent = rebuild_control_projections(store.list_events(program))["grant_ledger"]["parents"].get(parent_id)
     _require(parent is not None, "Parent does not exist")
-    plan = parent.get("startup_execution", parent.get("local_execution"))
+    plan = parent.get("startup_execution", parent.get("local_execution", parent.get("coding_execution")))
     _require(isinstance(plan, Mapping) and database == _path(plan["control_db"])
              == _path(plan["execution_root"]) / CONTROL_DB_REF, "controller differs from the recorded Parent")
     if parent["status"] == "REVOKED":

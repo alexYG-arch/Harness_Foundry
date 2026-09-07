@@ -188,12 +188,14 @@ class NormalWorkpackRuntimeTests(unittest.TestCase):
         self.assertIn("PROJECT_WORKPACK_COMMAND_BINDING_INVALID", {item["code"] for item in report["blocking_findings"]})
 
     def test_candidate_packages_local_runtime_import_closure(self):
-        for name in ("local_runtime.py", "local_process.py", "startup_runtime.py", "coding_protocol.py"):
+        for name in ("local_runtime.py", "local_process.py", "startup_runtime.py", "coding_protocol.py",
+                     "coding_process.py", "coding_runtime.py"):
             ref = f"tools/harness_foundry_runtime/{name}"
             self.assertEqual((self.candidate / ref).read_bytes(),
                              (startup.ROOT / "src/harness_foundry_factory" / name).read_bytes())
         code = ("from harness_foundry_runtime.local_runtime import LOCAL_MODE; "
-                "from harness_foundry_runtime.startup_runtime import STARTUP_MODE; print(LOCAL_MODE)")
+                "from harness_foundry_runtime.startup_runtime import STARTUP_MODE; "
+                "from harness_foundry_runtime.coding_runtime import CODING_MODE; print(LOCAL_MODE)")
         env = dict(os.environ, PYTHONPATH=str(self.candidate / "tools"), PYTHONDONTWRITEBYTECODE="1")
         completed = subprocess.run([sys.executable, "-B", "-c", code], cwd=self.root,
                                    capture_output=True, text=True, env=env, timeout=20)
@@ -266,13 +268,15 @@ class NormalWorkpackRuntimeTests(unittest.TestCase):
         self.assertIn("CONTROLLED_WORKPACK_RUNTIME_ARTIFACT_MISSING", {item["code"] for item in findings})
 
     def test_independent_validator_requires_the_coding_protocol_in_workpack_bundle(self):
-        candidate = self.root / "missing-coding-protocol"
-        shutil.copytree(self.candidate, candidate)
-        path = candidate / "tools/harness_foundry_runtime/coding_protocol.py"
-        make_path_writable(path.parent)
-        path.unlink()
-        findings = _check_controlled_workpack_runtime_executable_closure(candidate)
-        self.assertIn("CONTROLLED_WORKPACK_RUNTIME_ARTIFACT_MISSING", {item["code"] for item in findings})
+        for module in ("coding_protocol", "coding_process", "coding_runtime"):
+            with self.subTest(module=module):
+                candidate = self.root / ("missing-" + module)
+                shutil.copytree(self.candidate, candidate)
+                path = candidate / f"tools/harness_foundry_runtime/{module}.py"
+                make_path_writable(path.parent)
+                path.unlink()
+                findings = _check_controlled_workpack_runtime_executable_closure(candidate)
+                self.assertIn("CONTROLLED_WORKPACK_RUNTIME_ARTIFACT_MISSING", {item["code"] for item in findings})
 
     def test_plan_rejects_index_identity_drift_even_when_file_inventory_is_current(self):
         drifted = self.root / "cross-project-workpack"

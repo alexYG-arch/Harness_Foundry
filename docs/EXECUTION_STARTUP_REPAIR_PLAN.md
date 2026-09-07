@@ -571,6 +571,62 @@ effective configuration/service authorization, durable model outcome capture
 and independent native Workpack acceptance remain unimplemented. This slice
 must not be reported as the full execution connector or a completed build.
 
+### First coding-stage service adapter
+
+The coding adapter now uses the existing public runtime authorization and
+durable SQLite engine, not a second grant database or an agent-written receipt.
+It retains the complete Candidate-native task and adds a resolved mapping of
+only its approved read/write resources for stdin. Coding service/auth/client
+effects are explicit in a separate Parent; no offline Parent or completed
+pre-build grant is widened. Current authority is rechecked after local receiver
+probes and immediately before dispatch. The public checkpoint/resume route
+retains the same plan, and observed outcomes recover without another dispatch.
+
+The native startup predecessor evidence is verified before the first Lab
+coding task. Later Workpacks/commands remain blocked on independent acceptance;
+a completed model turn produces no Workpack capability. The result contract
+explicitly requires `workpack_accepted=false`. This is a first-command connector,
+not a complete Lab/Linkage/Harness scheduler or acceptance provider.
+
+Three integration issues were found and corrected in this slice. The new test
+fixture initially retained another fixture's unregistered source ID; it now
+uses the real authoring turn's source registration rather than bypassing the
+Requirement checks. The adapter result needed the existing kernel's explicit
+boolean/enum schema dialect. Finally, the portable task prompt needed an actual
+host resource mapping; keeping logical paths alone was insufficient for model
+input discovery. A regression now checks that the complete portable task is
+unchanged and the mapping matches the effective scope, excluding Factory/auth
+paths. The earlier full run was deliberately interrupted for this functional
+correction, not reported as a completed regression.
+
+The corrected focused process/Factory/startup/recovery/portable-Workpack suite
+passed 32 tests in 85.795 seconds. The shared local capture receiver changed, so
+the real offline Codex sandbox suite was rerun: all 28 tests passed in 10.150
+seconds, including its 12 opt-in sandbox tests. Model transport tests use an
+explicitly fake Codex executable and TEST events; no real model service request,
+account/configuration change or formal target command occurred. Additional
+system/project configuration remains unsupported until explicit hydration;
+live model and selected-Job coding validation remain outstanding.
+
+The final full suite ran 661 tests in 643.574 seconds: 645 passed and 16
+opt-in sandbox tests were skipped by the restricted runner. The other four
+startup/authorization/Factory-binding sandbox tests then passed separately in
+25.745 seconds; together the two real offline runs cover all 16 skipped tests.
+Official core validation, `verify-spec`, `validate_skill.py` and
+`git diff --check` passed after the final source change. Raw failed, interrupted,
+focused, final and actual offline results are retained under ignored local
+`build/coding-runtime.Y2fbtl/`, not exported as generated target evidence.
+The formal Program was checked read-only and remained revision 191 at
+`PREBUILD_APPROVED_EXECUTION_NOT_AUTHORIZED`. No frozen Candidate, Requirement,
+formal Execution Root or completed pre-build grant was changed or reused.
+
+Next implementation dependency: consume the actual selected Workpack's artifact
+obligations and independent validation/Oracle contract on the existing stream,
+then permit its declared successor only from accepted evidence. Do not derive
+that capability from the model message, JSONL completion, file existence or an
+offline process exit alone. Until that provider exists, keep the explicit
+predecessor stop instead of inserting a synthetic acceptance receipt.
+
 ## Reproduced gap
 
 The normal producer declares `SHARED_CONTROL_BASELINE_LOCK` but previously

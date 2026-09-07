@@ -50,7 +50,9 @@ python3 tools/hffactory.py package-local --json
 Parent，不自动运行命令，也不代表 Lab、Workpack 或目标 Harness 已完成。
 
 [编码命令协议](docs/CODING_COMMAND_PROTOCOL.md)提供只读 `coding-plan` 和模型
-事件分类；尚不提供模型执行适配器，模型回合完成也不等于 Workpack 验收通过。
+事件分类，并将首个启动后编码阶段接入同一 SQLite 控制库与单独授权的模型服务适配器。
+目前仅有测试进程验证，未执行真实模型生成；模型回合完成不等于 Workpack 验收通过，
+后续 Workpack 仍需独立验收接口。
 
 ## 兼容路线运行实例
 

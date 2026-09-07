@@ -279,6 +279,11 @@ def validate_parent_authorization(parent: Mapping[str, Any]) -> dict[str, Any]:
         if "local_execution" in parent and any(parent["startup_execution"][field] != parent["local_execution"][field]
                                                for field in ("candidate_root", "execution_root", "control_db", "factory_source")):
             raise ControlKernelError("PARENT_AUTHORIZATION_INVALID", "startup and local stages must share the same approved roots and controller")
+    if "coding_execution" in parent:
+        # Optional Workpack provider dependency, not part of a control-only
+        # compatibility bundle. The host supplies the live Factory verifier.
+        from importlib import import_module
+        import_module(__package__ + ".coding_runtime").validate_coding_execution(parent)
     normalized["parent_authorization_sha256"] = content_sha256(parent)
     return normalized
 
@@ -337,7 +342,16 @@ def prepare_parent_authorization_challenge(
     if "startup_execution" in parent:
         from copy import deepcopy
         challenge["startup_execution"] = deepcopy(parent["startup_execution"])
-    plan = parent.get("startup_execution", parent.get("local_execution"))
+    if "coding_execution" in parent:
+        from copy import deepcopy
+        challenge["coding_execution"] = deepcopy(parent["coding_execution"])
+        challenge["coding_client_effects"] = {
+            "network": "CODEX_MODEL_AUTH_AND_CLIENT_SERVICE_TRAFFIC",
+            "client_state_root": parent["coding_execution"]["client_state_root"],
+            "may_refresh_saved_auth_and_write_client_state": True,
+            "local_command_network": "DENY", "workpack_acceptance_granted": False,
+        }
+    plan = parent.get("startup_execution", parent.get("local_execution", parent.get("coding_execution")))
     if plan is not None:
         challenge["controller_effects"] = {
             "control_db": plan["control_db"],

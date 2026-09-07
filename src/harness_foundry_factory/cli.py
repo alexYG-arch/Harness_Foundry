@@ -406,7 +406,7 @@ def _runtime_authorization(args: argparse.Namespace) -> dict[str, Any]:
 
 def _runtime_advance(args: argparse.Namespace) -> dict[str, Any]:
     request = _load_request(args.request)
-    if request.get("adapter_mode") in {"LOCAL_OFFLINE_PROCESSES", "START_PACKAGE_SQLITE_REGISTRATION"}:
+    if request.get("adapter_mode") in {"LOCAL_OFFLINE_PROCESSES", "START_PACKAGE_SQLITE_REGISTRATION", "CODEX_CODING_SERVICE"}:
         return _runtime_local(args, request)
     _require_test_adapter_mode(request)
     program_id = request.get("program_id")
@@ -464,7 +464,7 @@ def _runtime_advance(args: argparse.Namespace) -> dict[str, Any]:
 
 def _runtime_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
     request = _load_request(args.request)
-    if request.get("adapter_mode") in {"LOCAL_OFFLINE_PROCESSES", "START_PACKAGE_SQLITE_REGISTRATION"}:
+    if request.get("adapter_mode") in {"LOCAL_OFFLINE_PROCESSES", "START_PACKAGE_SQLITE_REGISTRATION", "CODEX_CODING_SERVICE"}:
         return _runtime_local(args, request, checkpoint=True)
     if "binding_kind" in _required_mapping(request, "expected_bindings"):
         raise ControlKernelError("LOCAL_RUNTIME_REQUEST_INVALID", "Start Package checkpoints require the real-clock local mode")
@@ -489,7 +489,7 @@ def _runtime_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
 
 def _runtime_resume(args: argparse.Namespace) -> dict[str, Any]:
     request = _load_request(args.request)
-    if request.get("adapter_mode") in {"LOCAL_OFFLINE_PROCESSES", "START_PACKAGE_SQLITE_REGISTRATION"}:
+    if request.get("adapter_mode") in {"LOCAL_OFFLINE_PROCESSES", "START_PACKAGE_SQLITE_REGISTRATION", "CODEX_CODING_SERVICE"}:
         return _runtime_local(args, request, resume=True)
     _require_test_adapter_mode(request)
     capsule = _required_mapping(request, "resume_capsule")
@@ -543,6 +543,7 @@ def _runtime_local(args: argparse.Namespace, request: Mapping[str, Any], *, resu
     from .execution_handoff import verify_runtime_factory_binding
     from .control_kernel import rebuild_control_projections
     from .startup_runtime import STARTUP_MODE, STARTUP_CLASS, prepare_startup_runtime, project_startup_views
+    from .coding_runtime import CODING_MODE, CODING_CLASS, prepare_coding_runtime
 
     if "test_adapter_results" in request or "created_at" in request:
         raise ControlKernelError("LOCAL_RUNTIME_REQUEST_INVALID", "production requests cannot supply results or wall-clock time")
@@ -552,7 +553,8 @@ def _runtime_local(args: argparse.Namespace, request: Mapping[str, Any], *, resu
     parent_id = _required_string(identity, "parent_authorization_id")
     _validate_runtime_program_id(program_id)
     startup = request.get("adapter_mode") == STARTUP_MODE
-    plan_key = "startup_execution" if startup else "local_execution"
+    coding = request.get("adapter_mode") == CODING_MODE
+    plan_key = "startup_execution" if startup else "coding_execution" if coding else "local_execution"
     transition = _required_mapping(request, "transition") if resume else None
     if checkpoint:
         read_store = ControlEventStore(Path(args.control_db).expanduser().resolve(), read_only=True)
@@ -564,11 +566,14 @@ def _runtime_local(args: argparse.Namespace, request: Mapping[str, Any], *, resu
         contracts = {resume_node: selected}
     else:
         contracts = {_required_string(transition, "transition_id"): transition} if resume else _required_mapping(request, "contracts")
-    prepare = prepare_startup_runtime if startup else prepare_local_runtime
+    prepare = prepare_startup_runtime if startup else prepare_coding_runtime if coding else prepare_local_runtime
     options = {"entry_node": (resume_node if checkpoint else transition["transition_id"] if resume
                                else _required_string(request, "start_transition_id"))} if startup else {}
+    if coding:
+        options["binding_verifier"] = verify_runtime_factory_binding
     adapter = prepare(Path(args.control_db).expanduser().resolve(), program_id, parent_id, contracts, **options)
-    engine = GenericTransitionEngine(adapter.store, {STARTUP_CLASS if startup else LOCAL_CLASS: adapter},
+    command_class = STARTUP_CLASS if startup else CODING_CLASS if coding else LOCAL_CLASS
+    engine = GenericTransitionEngine(adapter.store, {command_class: adapter},
                                      binding_verifier=verify_runtime_factory_binding)
     current_time = datetime.now(timezone.utc).isoformat()
     common = dict(expected_bindings=_required_mapping(request, "expected_bindings"),

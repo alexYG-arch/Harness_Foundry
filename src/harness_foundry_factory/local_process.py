@@ -123,11 +123,15 @@ class CodexSandboxRunner:
         # HOME is left to the OS; never redirect Codex's own configuration home.
         return {"PATH": os.defpath, "PYTHONDONTWRITEBYTECODE": "1"}
 
-    def _capture(self, argv: list[str], cwd: Path, timeout: float, *, output_limit: int | None = None) -> dict[str, Any]:
+    def _capture(self, argv: list[str], cwd: Path, timeout: float, *, output_limit: int | None = None,
+                 stdin_bytes: bytes | None = None) -> dict[str, Any]:
         limit = self.output_limit_bytes if output_limit is None else output_limit
-        with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
+        with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr, tempfile.TemporaryFile() as source:
+            if stdin_bytes is not None:
+                source.write(stdin_bytes)
+                source.seek(0)
             try:
-                process = subprocess.Popen(argv, cwd=cwd, stdin=subprocess.DEVNULL,
+                process = subprocess.Popen(argv, cwd=cwd, stdin=source if stdin_bytes is not None else subprocess.DEVNULL,
                                            stdout=stdout, stderr=stderr, shell=False,
                                            start_new_session=True, env=self._environment())
             except OSError as exc:
@@ -149,13 +153,18 @@ class CodexSandboxRunner:
                 process.wait()
             captured = {}
             truncated = False
+            encoding_error = False
             for name, stream in (("stdout", stdout), ("stderr", stderr)):
                 stream.seek(0)
                 data = stream.read(limit + 1)
                 truncated |= len(data) > limit
-                captured[name] = data[:limit].decode("utf-8", errors="replace")
+                try:
+                    captured[name] = data[:limit].decode("utf-8")
+                except UnicodeDecodeError:
+                    encoding_error = True
+                    captured[name] = data[:limit].decode("utf-8", errors="replace")
             return {"exit_code": process.returncode, "timed_out": timed_out,
-                    "output_truncated": truncated, **captured}
+                    "output_truncated": truncated, **({"encoding_error": True} if encoding_error else {}), **captured}
 
     def run(self, command: LocalCommand) -> dict[str, Any]:
         if os.name != "posix":

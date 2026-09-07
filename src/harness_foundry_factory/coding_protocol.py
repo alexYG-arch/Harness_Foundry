@@ -1,7 +1,7 @@
 """Candidate-native coding input and observed Codex JSONL, without dispatch.
 
 These are protocol boundaries, not an authorizer, model client or Workpack
-Oracle. A future transport must use the reserved attempt in the existing
+Oracle. A transport must use the reserved attempt in the existing
 SQLite kernel; these helpers cannot create one or supply its authority.
 """
 

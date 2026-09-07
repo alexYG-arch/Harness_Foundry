@@ -2,8 +2,10 @@
 
 This is an opt-in runtime interface, separate from Factory authoring and the
 41-capability default core route. It supports the implemented Candidate-native
-startup and offline local process plans. It does not provide a model transport,
-start a Driver, run a Workpack, install tools or approve the target's outputs.
+startup, offline local process and separately scoped first coding-stage plans.
+The authorization operations do not start a Driver, dispatch a command, install
+tools or approve the target's outputs. Model dispatch is a separate operation;
+the coding adapter currently has TEST-process evidence, not live model evidence.
 
 An audited pre-build Candidate decision is an input, not a runtime grant. A
 trusted Codex Chat host must obtain and accurately carry a separate human
@@ -32,11 +34,18 @@ and expiry. Do not ask the user to calculate hashes or author per-attempt leases
 `startup_transitions` derives the three native startup contracts; the existing
 local process binder retains each selected native command and Job lease.
 
-The Parent contains `startup_execution`, `local_execution`, or both. Both plans,
+An offline Parent contains `startup_execution`, `local_execution`, or both. Both plans,
 when present, must refer to the same Candidate, Factory locator, execution root
 and controller. The public interface requires the actual
 `FACTORY_APPROVED_START_PACKAGE` binding and its live audited decision, retaining
 null Architecture/Control epochs where the Requirement left them unbound.
+
+A separate coding Parent instead contains only `coding_execution`, with the
+`CODEX_CODING_MODEL_TURN` class and explicit service-network, saved-auth and
+client-state effects. It cannot be attached to an offline/startup Parent. The
+challenge includes the complete task, executable/model settings, scopes and
+`coding_client_effects`; it does not grant Workpack acceptance. The implemented
+scope and remaining limits are in the [coding protocol](CODING_COMMAND_PROTOCOL.md).
 
 Readback creates no root, database, grant, receipt file or command attempt. Its
 challenge discloses the complete plans, read/write roots, budgets and expiry,
