@@ -2095,6 +2095,11 @@ def _public_skill_job_interface_is_valid(
         for value in (request_schema, specialization, vector)
     ) or not isinstance(frozen_fixtures, list):
         return False
+    # A JSON pointer locates the embedded schema, but cannot be its canonical
+    # $id in 2020-12. Do not accept the old non-empty fragment identifier.
+    if (request_schema.get("$id") != "urn:harness-foundry:public-skill-job-request:v1"
+            or request_schema.get("$schema") != "https://json-schema.org/draft/2020-12/schema"):
+        return False
     schema_properties = request_schema.get("properties")
     input_value = vector.get("input")
     resolution = vector.get("resolution_contract")
@@ -6211,6 +6216,8 @@ def _check_controlled_workpack_runtime_executable_closure(
         "coding_process": "tools/harness_foundry_runtime/coding_process.py",
         "coding_runtime": "tools/harness_foundry_runtime/coding_runtime.py",
         "workpack_acceptance": "tools/harness_foundry_runtime/workpack_acceptance.py",
+        "lab_protocol": "tools/harness_foundry_runtime/lab_protocol.py",
+        "lab_protocol_checks": "tools/harness_foundry_runtime/lab_protocol_checks.py",
         "entrypoint": "tools/workpack_runtime.py",
         "contract": "validation/CONTROLLED_WORKPACK_RUNTIME_CONTRACT.json",
         "commands": f"commands/{workpack_id}.commands.json",
@@ -13892,6 +13899,29 @@ def _check_video_artifact_evidence_semantics(
     return findings
 
 
+def _lab_completion_scope_findings(bundle: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Check phase ownership independently of the producer bundle builder."""
+    workpack_id = bundle.get("workpack_id")
+    if workpack_id not in {"LAB-PROTOCOL", "LAB-CLI", "LAB-FIXTURES", "LAB-CERTIFICATION"}:
+        return []
+    contract = bundle.get("lab_case_execution_contract", {})
+    scope = contract.get("completion_scope", {}) if isinstance(contract, Mapping) else {}
+    obligations = contract.get("implementation_obligations", []) if isinstance(contract, Mapping) else []
+    if not isinstance(scope, Mapping) or not isinstance(obligations, list):
+        return [_finding("LAB_COMPLETION_PHASE_SCOPE_INVALID", str(workpack_id))]
+    refs = [f"/lab_case_execution_contract/implementation_obligations/{index}" for index in range(len(obligations))]
+    if (not obligations or scope.get("workpack_id") != workpack_id
+            or scope.get("owned_obligation_refs") != refs
+            or scope.get("artifact_obligations") != "ALL_CURRENT_TASK_CONTRACT_ARTIFACTS"
+            or scope.get("shared_reference_rule") != "INTERFACE_CONTEXT_NOT_PROOF_OF_LATER_WORKPACK_COMPLETION"
+            or scope.get("shared_reference_fields") != ["required_refs", "required_command_ids", "required_subcommands",
+                "required_source_resolution_entrypoint", "required_job_pipeline_entrypoint", "registry_read_protocol",
+                "assertion_operators", "required_evaluator_ids"]
+            or contract.get("completion_rule") != "IMPLEMENTATION_AND_SELFTESTS_PROVE_THIS_WORKPACK_OWNED_OBLIGATIONS_AND_ALL_DECLARED_ARTIFACT_CONTRACTS"):
+        return [_finding("LAB_COMPLETION_PHASE_SCOPE_INVALID", str(workpack_id))]
+    return []
+
+
 def _check_semantic_production_contracts(root: Path) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
     frozen_ir = _read_json(
@@ -14019,6 +14049,8 @@ def _check_semantic_production_contracts(root: Path) -> list[dict[str, Any]]:
             bundle_ref = f"task_bundles/{workpack_id}.task_bundle.json"
             bundle_path = project_root / bundle_ref
             bundle = _read_json(bundle_path, findings)
+            if isinstance(bundle, Mapping):
+                findings.extend(_lab_completion_scope_findings(bundle))
             if bundle != expected_bundle:
                 findings.append(
                     _finding("TASK_BUNDLE_CONTENT_MISMATCH", workpack_id)

@@ -55,6 +55,8 @@ Parent，不自动运行命令，也不代表 Lab、Workpack 或目标 Harness �
 后续 Workpack 仍需独立验收接口。
 [Workpack 完成审计](docs/WORKPACK_COMPLETION_AUDIT.md)可读取完整验收义务、已提交
 命令观测与共享 JSON 产物的 Schema 结果；未实现的独立 Oracle 保持未完成，不授予能力或推进任务。
+[Lab 协议基础实现](docs/LAB_PROTOCOL_SUPPORT.md)提供可执行协议函数与独立行为测试，
+并明确当前 Workpack 的义务归属；它不是完整 Lab 或 Workpack 验收适配器。
 
 ## 兼容路线运行实例
 

@@ -117,6 +117,8 @@ FACTORY_IMPLEMENTATION_PATHS = (
     "src/harness_foundry_factory/coding_process.py",
     "src/harness_foundry_factory/coding_runtime.py",
     "src/harness_foundry_factory/workpack_acceptance.py",
+    "src/harness_foundry_factory/lab_protocol.py",
+    "src/harness_foundry_factory/lab_protocol_checks.py",
     "src/harness_foundry_factory/main_execution_package_validation.py",
     "src/harness_foundry_factory/service.py",
     "src/harness_foundry_factory/models.py",
@@ -1371,6 +1373,11 @@ def compile_start_package(
         candidate,
         artifact_manifest,
     )
+    if artifact_manifest is not None:
+        # Semantic Task Bundles declare this support even on compatibility
+        # routes without the local Workpack runtime. Materialize by dependency,
+        # not by a historical control-plane profile or Requirement epoch.
+        _write_lab_protocol_support(staging)
     if control_plane_mode == EPOCH4_MODE:
         _write_epoch4_generation_profile(staging, generation_readiness)
         _apply_epoch4_default_route_selection(staging)
@@ -12411,6 +12418,15 @@ Driver or a Workpack and never automatically advances its successor node.
     )
 
 
+def _write_lab_protocol_support(staging: Path) -> None:
+    runtime_root = staging / "tools/harness_foundry_runtime"
+    runtime_root.mkdir(parents=True, exist_ok=True)
+    if not (runtime_root / "__init__.py").exists():
+        _write_text(runtime_root / "__init__.py", '"""Portable Foundry protocol support."""\n')
+    for filename in ("lab_protocol.py", "lab_protocol_checks.py"):
+        _write_text(runtime_root / filename, (Path(__file__).parent / filename).read_text(encoding="utf-8"))
+
+
 def _write_epoch4_runtime_store_dependency_closure(
     staging: Path,
     *,
@@ -12441,6 +12457,8 @@ def _write_epoch4_runtime_store_dependency_closure(
         if not source.is_file():
             raise ValueError(f"Epoch 4 runtime store dependency is missing: {filename}")
         _write_text(runtime_root / filename, source.read_text(encoding="utf-8"))
+    if include_workpack_runtime:
+        _write_lab_protocol_support(staging)
 
 
 def _control_plane_registration_result_schema() -> dict[str, Any]:
@@ -19654,13 +19672,13 @@ def _semantic_workpack_markdown(task_bundle: Mapping[str, Any] | None) -> str:
                 "### External Lab case execution contract",
                 "",
                 f"- Contract: `{lab_contract['contract_id']}`",
-                "- Required command IDs: "
+                "- Shared Lab interface command IDs (context; execution belongs to the native Workpack manifest): "
                 + ", ".join(lab_contract["required_command_ids"]),
                 "- Assertion operators: "
                 + ", ".join(lab_contract["assertion_operators"]),
                 "- Required interfaces:",
                 *[f"  - `{item}`" for item in lab_contract["required_refs"]],
-                "- Implementation obligations:",
+                "- Current Workpack implementation obligations (later Workpacks are not preconditions):",
                 *[
                     f"  - {item}"
                     for item in lab_contract["implementation_obligations"]

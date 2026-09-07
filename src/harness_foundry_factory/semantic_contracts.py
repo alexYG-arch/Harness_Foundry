@@ -27,6 +27,7 @@ from .invariant_contracts import (
 from .mutation_contracts import canonical_recomputations, invariant_failure_closure
 from .case_read_plans import REGISTRY_READ_PROTOCOL
 from .registry_evidence import EXECUTION_MANIFEST_REF, RESULT_SCHEMA_REF, RECEIPT_SCHEMA_REF
+from .lab_protocol import specialize_artifact_schema
 from .semantic_operator_catalog import (
     ALGORITHM_FAMILIES, COLLECTION_PROJECTIONS, LOCAL_OUTPUT_BINDING, PHASE_PARTITION_PROJECTIONS,
     REGISTRY_RESULT_PROJECTIONS,
@@ -2488,7 +2489,7 @@ def public_skill_job_interface(
         "execution_started": False,
         "job_request_schema": {
             "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "$id": f"{PUBLIC_SKILL_JOB_INTERFACE_REF}#/job_request_schema",
+            "$id": "urn:harness-foundry:public-skill-job-request:v1",
             "type": "object",
             "additionalProperties": False,
             "required": list(sample_request),
@@ -2997,66 +2998,7 @@ def _bind_schema_to_job(
     artifact_kind: str,
     repository_jobs: list[Mapping[str, str]],
 ) -> dict[str, Any]:
-    bound = deepcopy(dict(schema))
-    properties = bound.setdefault("properties", {})
-    _require_schema_fields(bound, ["job_id", "source_id"])
-    properties["job_id"] = {"const": job["job_id"]}
-    properties["source_id"] = {"const": job["source_id"]}
-    if artifact_kind == "LOCAL_RENDER_RECEIPT":
-        declared_repository = properties.get("repository_url")
-        renderer_repository_url = (
-            declared_repository.get("const")
-            if isinstance(declared_repository, Mapping)
-            else None
-        )
-        renderer = next(
-            (
-                item
-                for item in repository_jobs
-                if item.get("repository_url") == renderer_repository_url
-            ),
-            None,
-        )
-        if renderer is not None:
-            renderer_fields = {
-                "renderer_source_id": renderer.get("source_id"),
-                "renderer_repository_url": renderer.get("repository_url"),
-                "renderer_commit_sha": renderer.get("commit_sha"),
-                "renderer_tree_sha256": renderer.get("tree_sha256"),
-                "renderer_license_spdx": renderer.get("license_spdx"),
-                # Preserve the original renderer fields for compatibility.
-                "repository_url": renderer.get("repository_url"),
-                "commit_sha": renderer.get("commit_sha"),
-                "tree_sha256": renderer.get("tree_sha256"),
-                "license_spdx": renderer.get("license_spdx"),
-            }
-            _require_schema_fields(bound, list(renderer_fields))
-            for field, value in renderer_fields.items():
-                if value:
-                    properties[field] = {"const": value}
-        content_fields = {
-            "content_repository_url": job.get("repository_url"),
-            "content_commit_sha": job.get("commit_sha"),
-            "content_tree_sha256": job.get("tree_sha256"),
-        }
-        _require_schema_fields(bound, list(content_fields))
-        for field, value in content_fields.items():
-            if value:
-                properties[field] = {"const": value}
-    else:
-        for field in (
-            "repository_url",
-            "commit_sha",
-            "git_tree_oid",
-            "tree_sha256",
-        ):
-            if field in properties and job.get(field):
-                properties[field] = {"const": job[field]}
-    if "exact_commit_sha" in properties and job.get("commit_sha"):
-        properties["exact_commit_sha"] = {"const": job["commit_sha"]}
-    if artifact_kind == "TARGET_SKILL_EXECUTION_GATE_RECEIPT":
-        properties["target_skill_id"] = {"const": job["source_id"]}
-    return bound
+    return specialize_artifact_schema(schema, job, artifact_kind, repository_jobs)
 
 
 def _require_schema_fields(schema: dict[str, Any], fields: list[str]) -> None:
@@ -7502,10 +7444,36 @@ def task_bundle_for_workpack(
                 ],
             }[workpack_id],
             "completion_rule": (
-                "IMPLEMENTATION_AND_SELFTESTS_PROVE_THE_BOUND_CASE_SCHEMA_COMMANDS_"
-                "OPERATORS_AND_EXACT_SET_ORACLE"
+                "IMPLEMENTATION_AND_SELFTESTS_PROVE_THIS_WORKPACK_OWNED_"
+                "OBLIGATIONS_AND_ALL_DECLARED_ARTIFACT_CONTRACTS"
             ),
         }
+        lab_contract = bundle["lab_case_execution_contract"]
+        lab_contract["completion_scope"] = {
+            "workpack_id": workpack_id,
+            "owned_obligation_refs": [
+                f"/lab_case_execution_contract/implementation_obligations/{index}"
+                for index in range(len(lab_contract["implementation_obligations"]))
+            ],
+            "artifact_obligations": "ALL_CURRENT_TASK_CONTRACT_ARTIFACTS",
+            "shared_reference_fields": [
+                "required_refs", "required_command_ids", "required_subcommands",
+                "required_source_resolution_entrypoint", "required_job_pipeline_entrypoint",
+                "registry_read_protocol", "assertion_operators", "required_evaluator_ids",
+            ],
+            "shared_reference_rule": "INTERFACE_CONTEXT_NOT_PROOF_OF_LATER_WORKPACK_COMPLETION",
+        }
+        if workpack_id in {"LAB-PROTOCOL", "LAB-CLI"}:
+            lab_contract["protocol_implementation_support"] = {
+                "library_ref": "harness-resource://candidate/tools/harness_foundry_runtime/lab_protocol.py",
+                "checks_ref": "harness-resource://candidate/tools/harness_foundry_runtime/lab_protocol_checks.py",
+                "check_entrypoint": "harness_foundry_runtime.lab_protocol_checks:verify_protocol_primitives",
+                "check_scope": "LAB_PROTOCOL_PRIMITIVES_ONLY",
+                "optional_dependencies_extra": "runtime-audit",
+                "worker_rule": "CALL_IMPLEMENTATION_ONLY_INSIDE_AUTHORIZED_ISOLATED_WORKER",
+                "not_covered": ["FULL_DYNAMIC_ARTIFACT_GRAPH", "EVALUATOR_ALGORITHMS", "JOB_LEASES",
+                                "COMMAND_RECEIPTS", "WORKPACK_ACCEPTANCE"],
+            }
     bundle["task_bundle_sha256"] = _hash_without_field(
         bundle, "task_bundle_sha256"
     )

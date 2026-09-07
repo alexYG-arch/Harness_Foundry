@@ -2,14 +2,20 @@
 
 Status: IN_PROGRESS. A bound Execution Root is not a running Harness.
 
-Latest slice: completion planning/evidence audit now retains the full Workpack
-contract and separates command observations and shared-artifact Schema checks
-from still-unimplemented semantic acceptance. Startup/offline process integration
-and the first coding-stage transport have temporary test evidence; real model
-generation, native Workpack acceptance, the full build DAG and target media remain
-unverified. See [Workpack completion audit](WORKPACK_COMPLETION_AUDIT.md) for the
-current boundary. The sections below retain earlier checkpoints in
-chronological order; their test counts describe those individual source states.
+Current engineering objective: Foundry execution startup and its regressions.
+The user removed complete target Harness/media delivery from the active goal;
+this does not edit the separate frozen target Requirement or grant execution.
+
+Latest slice: executable Lab protocol foundations and independent behavior
+probes are packaged, and actual schema loading exposed and repaired the public
+Job request's invalid canonical schema ID. Current Workpack implementation
+ownership is separated from later shared Lab interface context. Startup/offline
+process integration and the first coding-stage transport have temporary test
+evidence; real model transport and native independent Workpack acceptance remain
+unverified. See [protocol support](LAB_PROTOCOL_SUPPORT.md) and
+[completion audit](WORKPACK_COMPLETION_AUDIT.md) for the boundaries. The sections
+below retain earlier checkpoints in chronological order; their test counts
+describe those individual source states.
 
 ## Cumulative implementation evidence
 
@@ -676,6 +682,68 @@ active delegated intents. No formal Candidate, authoring state or Execution
 Root was changed. Fresh authoring authority and an independent semantic
 acceptance provider are still required; these tests do not close the target
 Harness, Lab/Linkage or the three requested videos.
+
+## Executable Lab protocol foundations and schema-loading checkpoint
+
+Foundry now supplies portable pure protocol primitives for schema validation,
+registry/operator/evidence lookup, immutable Job identity and schema binding.
+The existing producer's schema binder was extracted into that library so the
+future built Lab need not copy a subtly different algorithm or import the
+Factory compiler. Independently authored behavior probes call the implementation
+with valid and invalid inputs; they do not use its self-tests or stdout PASS as
+their expected outcomes. All eight deliberately stubbed API variants fail.
+
+The first real probe failed five public-request cases because the common schema
+could not load: its `$id` contained a non-empty fragment. Producer and independent
+Validator now use a valid canonical identifier, with a regression that rejects
+the old form and loads the corrected schema using the actual 2020-12 metaschema.
+Normal Candidate tests additionally load every emitted standalone validation
+schema. This is a reproduced runtime-compatibility defect, not a hypothetical
+adversarial scenario or a reason to weaken schema validation.
+
+Lab completion scope now identifies current implementation obligations by exact
+reference and owner. The complete shared interfaces, CLI IDs and registry
+contracts remain present, but do not require later Workpacks to have completed
+before the current one. The independent scope check rejects a wrong owner,
+missing obligation, or moving implementation obligations into shared context.
+The existing artifact and prerequisite contracts are not removed.
+
+The corrected focused protocol/normal-Workpack/portable suite passed 38 tests in
+27.999 seconds. Its 11 protocol tests include actual packaged execution of the
+28 behavior probes, bad-implementation variants, schema loading and phase-scope
+regressions. Raw initial failure, focused and final results are retained under
+ignored `build/lab-protocol.K9fud1/`. Core validation, `verify-spec` and skill
+validation passed. Program revision 191 was checked read-only and remains
+`PREBUILD_APPROVED_EXECUTION_NOT_AUTHORIZED`; no completed grant was reused.
+
+The first full run then exposed an introduced dependency-routing regression:
+51 tests failed with the same two dangling support-module references. Semantic
+compatibility Candidates referenced the new protocol support but did not use the
+local Workpack profile that initially emitted it. The producer now materializes
+the two pure modules whenever the semantic bundle declares the dependency,
+without enabling a Workpack runtime or creating an Execution Root. The new
+compatibility regression verifies that only the support package is introduced.
+After correction, 39 focused tests passed in 32.118 seconds and the complete
+66-test semantic-production suite passed in 132.019 seconds. This repair changes
+the producer dependency route; the dangling-reference Validator remains intact.
+
+The corrected complete suite ran 686 tests in 942.770 seconds: 670 passed, with
+16 opt-in offline sandbox tests skipped by this restricted runner. Those 16
+were not executed in this slice. Final core validation (26 exact selectors),
+`verify-spec`, `validate_skill.py` and `git diff --check` passed. The original
+failed full run and corrected full log remain separate in the diagnostic
+directory above; the passing result does not erase the introduced regression.
+These are source and temporary packaged-library checks, not a real model turn,
+formal Workpack run or independent Workpack acceptance.
+
+Remaining Foundry integration: bind an independent verification command to the
+selected project's implementation, run it under the approved isolated local
+receiver, verify the complete owned scope and prerequisite provenance, and
+commit genuine Workpack acceptance before allowing its successor. The new
+protocol support does not dispatch that worker, implement every domain-specific
+Lab/target algorithm, or claim Workpack acceptance. A real model transport check
+also remains separate from TEST-only subprocess evidence. Completing the target
+video products is no longer the active Foundry engineering goal's endpoint.
 
 ## Reproduced gap
 
