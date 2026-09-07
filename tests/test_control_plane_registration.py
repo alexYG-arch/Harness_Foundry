@@ -399,6 +399,8 @@ class ControlPlaneRegistrationTests(unittest.TestCase):
             contract["runtime_module_refs"],
             [
                 "tools/harness_foundry_runtime/control_kernel.py",
+                "tools/harness_foundry_runtime/local_runtime.py",
+                "tools/harness_foundry_runtime/local_process.py",
                 "tools/harness_foundry_runtime/store.py",
                 "tools/harness_foundry_runtime/models.py",
                 "tools/harness_foundry_runtime/constants.py",

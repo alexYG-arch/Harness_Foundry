@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from collections import defaultdict, deque
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -372,6 +373,8 @@ def _version_result() -> dict[str, Any]:
 
 def _runtime_advance(args: argparse.Namespace) -> dict[str, Any]:
     request = _load_request(args.request)
+    if request.get("adapter_mode") == "LOCAL_OFFLINE_PROCESSES":
+        return _runtime_local(args, request)
     _require_test_adapter_mode(request)
     program_id = request.get("program_id")
     if not isinstance(program_id, str) or not SAFE_ID_RE.fullmatch(program_id):
@@ -449,6 +452,8 @@ def _runtime_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
 
 def _runtime_resume(args: argparse.Namespace) -> dict[str, Any]:
     request = _load_request(args.request)
+    if request.get("adapter_mode") == "LOCAL_OFFLINE_PROCESSES":
+        return _runtime_local(args, request, resume=True)
     _require_test_adapter_mode(request)
     capsule = _required_mapping(request, "resume_capsule")
     _validate_runtime_program_id(_required_string(capsule, "program_id"))
@@ -493,6 +498,33 @@ def _runtime_resume(args: argparse.Namespace) -> dict[str, Any]:
         artifact_manifest=_required_mapping(request, "artifact_manifest"),
         created_at=_required_string(request, "created_at"),
     )
+
+
+def _runtime_local(args: argparse.Namespace, request: Mapping[str, Any], *, resume: bool = False) -> dict[str, Any]:
+    from .local_runtime import LOCAL_CLASS, prepare_local_runtime
+
+    if "test_adapter_results" in request or "created_at" in request:
+        raise ControlKernelError("LOCAL_RUNTIME_REQUEST_INVALID", "production requests cannot supply results or wall-clock time")
+    capsule = _required_mapping(request, "resume_capsule") if resume else None
+    identity = capsule if resume else request
+    program_id = _required_string(identity, "program_id")
+    parent_id = _required_string(identity, "parent_authorization_id")
+    _validate_runtime_program_id(program_id)
+    transition = _required_mapping(request, "transition") if resume else None
+    contracts = {transition["transition_id"]: transition} if resume else _required_mapping(request, "contracts")
+    adapter = prepare_local_runtime(Path(args.control_db).expanduser().resolve(), program_id, parent_id, contracts)
+    engine = GenericTransitionEngine(adapter.store, {LOCAL_CLASS: adapter})
+    current_time = datetime.now(timezone.utc).isoformat()
+    common = dict(expected_bindings=_required_mapping(request, "expected_bindings"),
+                  expected_control_state_sha256=_required_string(request, "expected_control_state_sha256"),
+                  environment_manifest=request.get("environment_manifest"),
+                  artifact_manifest=request.get("artifact_manifest"), created_at=current_time)
+    if resume:
+        return engine.resume_from_capsule(capsule, transition, _required_mapping(request, "inputs"),
+                                          expected_fencing_token=request.get("expected_fencing_token"), **common)
+    return engine.runtime_advance_until_gate(program_id, parent_id, contracts,
+        _required_mapping(request, "inputs_by_transition"), start_transition_id=_required_string(request, "start_transition_id"),
+        max_transitions=request.get("max_transitions"), **common)
 
 
 def _require_test_adapter_mode(request: Mapping[str, Any]) -> None:

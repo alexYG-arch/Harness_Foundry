@@ -14,11 +14,13 @@ import unittest
 
 from harness_foundry_factory import workpack_runtime as runtime
 from harness_foundry_factory.compiler import compile_start_package
+from harness_foundry_factory.local_runtime import bind_local_workpack_transition
 from harness_foundry_factory.models import content_sha256
 from harness_foundry_factory.validator import validate_candidate, _check_controlled_workpack_runtime_executable_closure
 from tests import test_default_startup_contracts as startup
 from tests import test_workpack_runtime as process_support
 from tests import test_semantic_production_contracts as semantic_support
+from tests import test_runtime_advance_cli as control_support
 from tests.permissions import make_path_writable, make_tree_writable
 
 
@@ -84,6 +86,58 @@ class NormalWorkpackRuntimeTests(unittest.TestCase):
         self.assertFalse(plan["execution_authorized"])
         self.assertFalse(plan["writes_performed"])
         self.assertEqual(before, runtime.candidate_identity(self.candidate))
+
+    def test_native_local_command_keeps_repository_reads_through_final_projection(self):
+        # Previously this final native command had no reads at all. Checking
+        # only the initial producer helper missed the later refresh overwrite.
+        plan = runtime.plan_workpack_node(self.candidate, "LAB_SELF_CONFORMANCE_PASS")
+        unit = plan["units"][0]
+        native = next(command for command in unit["commands"] if command["command_id"] == "LAB-SELFTEST")
+        cwd = "harness-resource://execution/project_start_packages/external_lab/repository"
+        self.assertIn(cwd, native["allowed_read_roots"])
+        self.assertIn("harness-resource://candidate", native["allowed_read_roots"])
+        transition = bind_local_workpack_transition(control_support.transition("T-LOCAL", "STATE"),
+            native_command=native, project_id=unit["project_id"], workpack_id=unit["workpack_id"],
+            argv=[{"resource_ref": "harness-resource://runtime-tools/python"}, "-B", "--version"],
+            cwd_ref=cwd, executable_sha256=runtime.file_hash(Path(sys.executable)),
+            runtime_read_refs=["harness-resource://runtime-tools/python"])
+        self.assertIn(cwd, transition["allowed_read_roots"])
+        self.assertFalse(any("/jobs/" in root for root in transition["allowed_read_roots"]))
+        self.assertEqual(transition["command_contract"]["local_invocation"]["native_command"], native)
+
+    def test_independent_validator_rejects_removed_native_repository_reads(self):
+        candidate = self.root / "removed-native-reads"
+        shutil.copytree(self.candidate, candidate)
+        ref = "project_start_packages/external_lab/commands/LAB-SELFTEST.commands.json"
+        document = json.loads((candidate / ref).read_text())
+        for command in document["commands"]:
+            command["allowed_read_roots"] = []
+            command["command_sha256"] = runtime.hash_without(command, "command_sha256")
+        document["manifest_sha256"] = runtime.hash_without(document, "manifest_sha256")
+        self._write_json(candidate / ref, document)
+        index_ref = "project_start_packages/external_lab/WORKPACK_INDEX.json"
+        index = json.loads((candidate / index_ref).read_text())
+        item = next(item for item in index["workpacks"] if item["workpack_id"] == "LAB-SELFTEST")
+        item["command_manifest_sha256"] = runtime.file_hash(candidate / ref)
+        self._write_json(candidate / index_ref, index)
+        inventory = json.loads((candidate / runtime.PORTABLE_MANIFEST_REF).read_text())
+        for updated in (ref, index_ref):
+            inventory["files"][updated] = runtime.file_hash(candidate / updated)
+        self._write_json(candidate / runtime.PORTABLE_MANIFEST_REF, inventory)
+        report = validate_candidate(candidate)
+        self.assertIn("PROJECT_WORKPACK_COMMAND_BINDING_INVALID", {item["code"] for item in report["blocking_findings"]})
+
+    def test_candidate_packages_local_runtime_import_closure(self):
+        for name in ("local_runtime.py", "local_process.py"):
+            ref = f"tools/harness_foundry_runtime/{name}"
+            self.assertEqual((self.candidate / ref).read_bytes(),
+                             (startup.ROOT / "src/harness_foundry_factory" / name).read_bytes())
+        code = "from harness_foundry_runtime.local_runtime import LOCAL_MODE; print(LOCAL_MODE)"
+        env = dict(os.environ, PYTHONPATH=str(self.candidate / "tools"), PYTHONDONTWRITEBYTECODE="1")
+        completed = subprocess.run([sys.executable, "-B", "-c", code], cwd=self.root,
+                                   capture_output=True, text=True, env=env, timeout=20)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.stdout.strip(), "LOCAL_OFFLINE_PROCESSES")
 
     def test_every_workpack_bearing_engineering_node_preserves_its_native_contracts(self):
         dag = json.loads((self.candidate / runtime.DAG_REF).read_text())

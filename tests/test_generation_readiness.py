@@ -683,6 +683,8 @@ class GenerationReadinessTests(unittest.TestCase):
                     "__init__.py",
                     "constants.py",
                     "control_kernel.py",
+                    "local_runtime.py",
+                    "local_process.py",
                     "models.py",
                     "store.py",
                 },
@@ -690,6 +692,8 @@ class GenerationReadinessTests(unittest.TestCase):
             for filename in (
                 "constants.py",
                 "control_kernel.py",
+                "local_runtime.py",
+                "local_process.py",
                 "models.py",
                 "store.py",
             ):

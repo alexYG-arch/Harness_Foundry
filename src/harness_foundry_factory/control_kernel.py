@@ -264,6 +264,9 @@ def validate_parent_authorization(parent: Mapping[str, Any]) -> dict[str, Any]:
                 "PARENT_AUTHORIZATION_INVALID", f"invalid budget: {name}"
             )
     _parse_time(parent["expires_at"], "PARENT_AUTHORIZATION_INVALID")
+    if "local_execution" in parent:
+        from .local_runtime import validate_local_execution
+        validate_local_execution(parent)
     normalized["parent_authorization_sha256"] = content_sha256(parent)
     return normalized
 
@@ -312,6 +315,13 @@ def prepare_parent_authorization_challenge(
         ],
         "manual_child_hash_input_required": False,
     }
+    if "allowed_read_roots" in parent:
+        challenge["read_roots"] = list(parent["allowed_read_roots"])
+    if "local_execution" in parent:
+        # This contains the actual paths, executable bindings and complete
+        # command/Job selection, not merely an opaque plan digest.
+        from copy import deepcopy
+        challenge["local_execution"] = deepcopy(parent["local_execution"])
     challenge["challenge_sha256"] = content_sha256(challenge)
     return challenge
 
@@ -2086,7 +2096,7 @@ def _transition_scope(transition: Mapping[str, Any]) -> dict[str, Any]:
     command = transition.get("command_contract")
     if not isinstance(risk, Mapping) or not isinstance(command, Mapping):
         raise ControlKernelError("TRANSITION_CONTRACT_INVALID", "risk or command")
-    return {
+    scope = {
         "allowed_write_roots": list(transition.get("allowed_write_roots", [])),
         "command_classes": [command.get("command_class")],
         "permissions": list(risk.get("permissions", [])),
@@ -2097,11 +2107,21 @@ def _transition_scope(transition: Mapping[str, Any]) -> dict[str, Any]:
         if transition.get("stop_gate")
         else [],
     }
+    # Legacy fixture grants retain their wire shape. Real local dispatch also
+    # carries its narrowed read lease through the existing authoritative Grant.
+    if command.get("command_class") == "LOCAL_OFFLINE_PROCESS":
+        scope["allowed_read_roots"] = list(transition.get("allowed_read_roots", []))
+    return scope
 
 
 def _require_scope_subset(
     parent: Mapping[str, Any], child: Mapping[str, Any]
 ) -> None:
+    if "allowed_read_roots" in child and not all(
+        any(_resource_within(root, parent_root) for parent_root in parent.get("allowed_read_roots", []))
+        for root in child["allowed_read_roots"]
+    ):
+        raise ControlKernelError("DERIVED_GRANT_SCOPE_EXPANSION", "read root exceeds Parent scope")
     if not all(
         any(_resource_within(root, parent_root) for parent_root in parent["allowed_write_roots"])
         for root in child["allowed_write_roots"]

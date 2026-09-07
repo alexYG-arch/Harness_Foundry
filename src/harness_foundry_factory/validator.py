@@ -765,6 +765,7 @@ def _expected_workpack_commands(
     artifact_read_roots: Sequence[str] = (),
     *,
     workpack_id: str,
+    workpack_read_roots: Sequence[str] = (),
 ) -> list[dict[str, Any]] | None:
     job_scopes: dict[str, list[str]] = {}
     shared_roots: list[str] = []
@@ -808,7 +809,7 @@ def _expected_workpack_commands(
             for root in command.get("allowed_read_roots") or []
             if root not in artifact_read_roots
         ]
-        for artifact_root in shared_read_roots:
+        for artifact_root in [*workpack_read_roots, *shared_read_roots]:
             if artifact_root not in read_roots:
                 read_roots.append(artifact_root)
         command["allowed_read_roots"] = read_roots
@@ -5358,6 +5359,8 @@ def _check_control_plane_registration_executable_closure(
     paths = {name: root / ref for name, ref in refs.items()}
     runtime_refs = [
         "tools/harness_foundry_runtime/control_kernel.py",
+        "tools/harness_foundry_runtime/local_runtime.py",
+        "tools/harness_foundry_runtime/local_process.py",
         "tools/harness_foundry_runtime/store.py",
         "tools/harness_foundry_runtime/models.py",
         "tools/harness_foundry_runtime/constants.py",
@@ -15112,6 +15115,11 @@ def _check_project_workpack_execution_contracts(
                     command_write_roots,
                     artifact_read_roots or [],
                     workpack_id=workpack_id,
+                    workpack_read_roots=[
+                        LOGICAL_CANDIDATE_ROOT if candidate_root == VIRTUAL_CANDIDATE_ROOT else str(candidate_root),
+                        _contract_serialized_path(execution_root, f"project_start_packages/{directory}/repository"),
+                        *shared_artifact_read_roots,
+                    ],
                 )
                 if command_write_roots is not None
                 and artifact_read_roots is not None
@@ -15204,6 +15212,7 @@ def _check_project_workpack_execution_contracts(
                             if candidate_root == VIRTUAL_CANDIDATE_ROOT
                             else str(candidate_root)
                         ),
+                        _contract_serialized_path(execution_root, f"project_start_packages/{directory}/repository"),
                         *shared_artifact_read_roots,
                     ]
                 )

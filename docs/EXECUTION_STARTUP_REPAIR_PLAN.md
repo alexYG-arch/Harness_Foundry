@@ -99,9 +99,9 @@ Executing Lab/Linkage/project Workpack sequences and connecting production
 adapters to the authoritative controller remain open. Neither a declared plan
 nor a structural Main package closes the target's behavioral/media acceptance.
 
-### Next serial integration boundary
+### Serial integration baseline (before the slices below)
 
-The current public `runtime-advance-until-gate` and `resume` paths still require
+The public `advance-until-gate` and `resume` paths at this baseline required
 `TEST_ONLY_IDEMPOTENT_ADAPTERS`. The packaged Program Driver is also explicitly
 a read-only pre-verification interface. Removing either guard alone is not a
 production adapter implementation. The next integration must consume the native
@@ -243,6 +243,86 @@ tests were skipped in the ordinary restricted runner, not relabelled PASS.
 `verify-spec`, `validate_skill.py` and the whitespace checks passed. The formal
 Program remained revision 191, and its Execution Root still contained only
 the original runtime binding file. No models or formal Workpacks were run.
+
+### Approved local process-stage adapter
+
+`local_runtime.py` connects the offline receiver to the existing durable SQLite
+controller. This is a **process-stage interface**, not a normal Workpack or
+Harness completion provider. It neither bootstraps authority nor migrates the
+compatibility JSONL controller. An existing, explicitly approved Parent must
+contain its complete `local_execution` plan: actual Candidate/input root,
+execution root, controller database, receiver executable binding, runtime-tool
+resource mappings and full transitions. The readable Parent challenge includes
+these fields and its read/write scope. A dispatch request can select unchanged
+transitions from that plan, not replace their arguments or Job selection.
+
+`bind_local_workpack_transition` retains the native command/lease contract and
+binds exactly one declared Job where required. It combines shared reads, the
+selected Job's reads/writes, explicitly mapped runtime dependencies, and read-only
+access to that Job's lease receipt. The resulting grant must remain within the
+Parent. Workloads cannot write the Candidate, runtime tools or controller;
+runtime-tool aliases cannot reopen another Job or controller domain. Model/code
+generation and Driver commands are rejected by this offline transport.
+
+Before dispatch, the adapter rechecks the live approved Parent, reserved Grant,
+actual wall-clock expiry and executable bytes. The native lease JSON is an
+atomic projection of this persisted attempt, with the existing scope fields,
+Grant identity and fencing token. It passes the Producer's native receipt
+schema, without a second authorization ledger. Its `ACTIVE`/`consumed=false`
+fields describe **issuance**, not continuing bearer authority: current consume
+and revocation state lives in SQLite. The workload can read but not write its
+receipt. Controller projection and workload effects are distinguished.
+
+The public `advance-until-gate` and `resume` commands accept the explicit
+`adapter_mode=LOCAL_OFFLINE_PROCESSES`; the old test-only mode remains guarded.
+Local requests cannot supply `test_adapter_results` or `created_at`. They use
+the existing expected bindings/state and budget fields. Missing databases do
+not create an execution root; existing compatibility controller files cause a
+typed migration stop rather than dual writes. Unknown receiver outcomes remain
+unknown effects; observed outcomes recover without redispatch. Path completion
+retains the kernel's `STOPPED_AT_REAL_GATE` / `TRANSITION_PATH_COMPLETE` response,
+not a claim of target acceptance. Successful resume returns `RESUMED` with the
+individual committed transition receipt.
+
+The integration also reproduced a Producer read-scope gap: a normal final
+`LAB-SELFTEST` command had an empty read list despite its repository cwd. Adding
+reads only to initial materialization was insufficient: portable command
+reconstruction and semantic hydration removed them again. All three production
+paths now retain Candidate/repository reads, and the independent Validator
+derives those required reads itself. Tests inspect the final ordinary Candidate,
+not only the initial helper; they also remove/re-hash a command's reads and
+verify semantic rejection after updating the relevant inventory binding. The
+portable runtime includes both new modules and tests their actual import closure.
+
+The opt-in local adapter suite passed all 13 tests in 4.478 seconds (2026-09-07),
+including four real public CLI/sandbox tests without test adapters. They observe
+actual output bytes, read the native lease inside the sandbox, validate its
+schema, verify one consumed narrowed Grant, reject printed `PASS` with exit 7,
+recover a non-idempotent effect once, and exercise public capsule resume. The
+other nine tests cover plan/Job replacement, missing authority/store, old
+controller files, fake results/time, model/Driver routing, lease ownership,
+physical tool aliasing, executable drift and real-clock expiry. These are
+temporary local process fixtures, not model, Lab, Linkage or media evidence.
+
+Still open for the normal full build: audited Candidate-decision/build-grant
+integration at dispatch, the target's null Architecture/Control epoch binding,
+one-controller migration/startup, pending-process reconciliation when no outcome
+was observed, model transport, and Workpack/DAG acceptance. This local receiver
+does not verify a native command's entire artifact acceptance contract merely
+because the process exits zero. It does not replace the legacy Workpack runner
+or make the immutable epoch 29 Candidate executable under the repaired source.
+
+Final verification (2026-09-07): the complete suite ran 599 tests in 546.421
+seconds, with 587 passing and the 12 opt-in sandbox tests skipped in the
+restricted runner. A separate receiver/adapter run passed all 28 tests in
+10.840 seconds, including those 12 real sandbox tests, on Codex CLI 0.153.3 and
+Python 3.14.5 (jsonschema 4.26.0, cryptography 48.0.0). Two older tests' exact
+runtime-module inventories were updated for the newly packaged modules; the
+final full run includes both corrected checks. `verify-spec`, `validate_skill`
+and whitespace validation passed. Raw run output is retained in ignored local
+build artifacts, not a published Candidate or a production execution receipt.
+The formal Program still reports revision 191 and
+`PREBUILD_APPROVED_EXECUTION_NOT_AUTHORIZED`.
 
 ## Reproduced gap
 

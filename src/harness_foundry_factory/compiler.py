@@ -579,6 +579,8 @@ EPOCH32_RUNTIME_MODULE_REFS = (
 )
 EPOCH40_CONTROL_RUNTIME_MODULE_REFS = (
     "tools/harness_foundry_runtime/control_kernel.py",
+    "tools/harness_foundry_runtime/local_runtime.py",
+    "tools/harness_foundry_runtime/local_process.py",
     *EPOCH32_RUNTIME_MODULE_REFS,
 )
 EPOCH45_WORKPACK_RUNTIME_MODULE_REF = (
@@ -2562,6 +2564,7 @@ def _repair_portable_project_bindings(staging: Path) -> None:
                     ),
                     artifact_read_roots,
                     workpack_id=str(item.get("workpack_id") or ""),
+                    workpack_read_roots=item.get("allowed_read_paths", []),
                 )
             )
             if required_artifact_refs:
@@ -2719,6 +2722,7 @@ def _repair_semantic_production_bindings(staging: Path) -> None:
                 command_write_roots,
                 artifact_read_roots,
                 workpack_id=workpack_id,
+                workpack_read_roots=workpack.get("allowed_read_paths", []),
             )
             commands["manifest_sha256"] = _hash_without_field(
                 commands, "manifest_sha256"
@@ -2737,7 +2741,9 @@ def _repair_semantic_production_bindings(staging: Path) -> None:
                     "job_artifact_read_scopes": job_artifact_read_scopes,
                     "allowed_read_paths": list(
                         dict.fromkeys(
-                            [LOGICAL_CANDIDATE_ROOT, *shared_artifact_read_roots]
+                            [LOGICAL_CANDIDATE_ROOT,
+                             f"{LOGICAL_EXECUTION_ROOT}/project_start_packages/{directory}/repository",
+                             *shared_artifact_read_roots]
                         )
                     ),
                     "case_result_write_root": (
@@ -2773,7 +2779,9 @@ def _repair_semantic_production_bindings(staging: Path) -> None:
                     "job_artifact_read_scopes": job_artifact_read_scopes,
                     "allowed_read_paths": list(
                         dict.fromkeys(
-                            [LOGICAL_CANDIDATE_ROOT, *shared_artifact_read_roots]
+                            [LOGICAL_CANDIDATE_ROOT,
+                             f"{LOGICAL_EXECUTION_ROOT}/project_start_packages/{directory}/repository",
+                             *shared_artifact_read_roots]
                         )
                     ),
                     "workpack_sha256": _file_hash(
@@ -11233,6 +11241,8 @@ def _write_control_kernel_bundle(
         "models.py",
         "store.py",
         "control_kernel.py",
+        "local_runtime.py",
+        "local_process.py",
         "requirement_completion.py",
     )
     for filename in runtime_sources:
@@ -15687,6 +15697,7 @@ def _patch_command_manifest(document: dict[str, Any], context: Mapping[str, str]
                 "argv": argv,
                 "command_sha256": _stable_hash({"argv": argv, "cwd": str(workspace_root)}),
                 "cwd_abs": str(workspace_root),
+                "allowed_read_roots": [str(candidate), str(workspace_root)],
                 "allowed_write_roots": [
                     str(workspace_root / ".test-artifacts")
                 ],
@@ -15708,6 +15719,7 @@ def _patch_command_manifest(document: dict[str, Any], context: Mapping[str, str]
         "invocation_contract_status": "REQUIRES_VERIFIED_CLI_SCHEMA_AND_PREFLIGHT",
         "unverified_cli_flags_forbidden": True,
         "cwd_abs": str(workspace_root),
+        "allowed_read_roots": [str(candidate), str(workspace_root)],
         "authorization_ref": None,
         "preflight_gate": "PROGRAM_DRIVER_RUNTIME_VERIFIED_AND_CODEX_CLI_SCHEMA_VERIFIED",
         "allowed_modes": ["WORKPACK_EXECUTION"],
@@ -16162,6 +16174,7 @@ def _bind_commands_to_workpack_artifact_roots(
     artifact_read_roots: Sequence[str] = (),
     *,
     workpack_id: str,
+    workpack_read_roots: Sequence[str] = (),
 ) -> list[dict[str, Any]]:
     """Declare semantic roots without granting one command every Job root."""
 
@@ -16204,7 +16217,7 @@ def _bind_commands_to_workpack_artifact_roots(
             for root in command.get("allowed_read_roots") or []
             if root not in artifact_read_roots
         ]
-        for artifact_root in shared_read_roots:
+        for artifact_root in [*workpack_read_roots, *shared_read_roots]:
             if artifact_root not in read_roots:
                 read_roots.append(artifact_root)
         command["allowed_read_roots"] = read_roots
@@ -19777,7 +19790,7 @@ def _materialize_project_workpack_contracts(
             root for root in artifact_read_roots if "/jobs/" not in root
         ]
         allowed_read_paths = list(
-            dict.fromkeys([str(candidate), *shared_artifact_read_roots])
+            dict.fromkeys([str(candidate), str(repository), *shared_artifact_read_roots])
         )
         job_artifact_read_scopes = _job_artifact_scopes(
             artifact_read_roots, roots_field="allowed_read_roots"
@@ -19901,6 +19914,7 @@ This Workpack is declarative. Its semantic task contract may be frozen, but runt
                 command_write_roots,
                 artifact_read_roots,
                 workpack_id=workpack_id,
+                workpack_read_roots=allowed_read_paths,
             ),
         }
         if task_bundle is not None and task_bundle_ref is not None:
