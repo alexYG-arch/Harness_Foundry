@@ -1,8 +1,9 @@
 # Lab protocol implementation support
 
 Status: executable pure protocol primitives and independently defined behavior
-probes are implemented and packaged. A Candidate-owned command now runs those
-probes against the selected project's API through the existing offline receiver.
+probes are implemented and packaged. A Candidate-owned command runs both those
+probes and the complete frozen Registry/Schema declaration checks against the
+selected project's API through the existing offline receiver.
 This is **not a complete external Lab, a Workpack acceptance adapter, or permission
 to execute target code without the separate runtime approval**.
 
@@ -47,10 +48,27 @@ Both approval preparation and dispatch compare the current Candidate command.
 Dispatch additionally requires its actual prior coding observation and commit.
 The verifier has no workload write roots: stdout is captured by the supervisor
 and stored in the existing controller event stream. A valid result requires
-successful finite process capture, the complete ordered 28-case set and all
-behavior outcomes; a bare stdout PASS is not evidence. These are protocol-only
+successful finite process capture, the complete ordered 28-case primitive set,
+the complete frozen-declaration set and all behavior outcomes; a bare stdout
+PASS is not evidence. These are protocol-only
 observations. Hydration removes inherited successors/retries and Parent
 validation rejects their reintroduction. No Workpack capability is granted.
+
+The `LAB_PROTOCOL_BEHAVIOR_V2` recipe additionally binds the Candidate's frozen
+evaluator registry and Requirement schema catalog. The controller derives the
+expected Case IDs from those Candidate inputs before dispatch; it never trusts
+the project's proposed case list. The independent worker loads every evaluator,
+resolves each full declaration and specializes every declared schema with two
+distinct synthetic Job identities. It checks schema validity, unchanged inputs,
+preserved non-binding constraints and separate renderer/content identities.
+Both omitted members and misleading success reports fail verification.
+
+The optional catalog can legitimately be absent when contracts are supplied
+directly per Atom. In that case the empty catalog is explicit context for the
+binding-set check, not evidence that per-Atom artifact Oracles ran. Both input
+forms have actual worker regressions. Frozen-declaration checks never resolve
+real Git sources, execute evaluator algorithms or recompile a Job graph; their
+report carries those exclusions and `workpack_accepted=false`.
 
 Temporary tests cover real worker subprocesses and a TEST-only coding/receiver
 fixture, without calling a model. A separate opt-in test uses the actual offline

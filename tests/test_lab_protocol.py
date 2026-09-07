@@ -114,7 +114,7 @@ class LabProtocolTests(unittest.TestCase):
         fixture.compile()
         support = fixture.candidate / "tools/harness_foundry_runtime"
         self.assertEqual({path.name for path in support.glob("*.py")},
-                         {"__init__.py", "lab_protocol.py", "lab_protocol_checks.py"})
+                         {"__init__.py", "lab_protocol.py", "lab_protocol_checks.py", "lab_protocol_contract_checks.py"})
         self.assertFalse(fixture.execution.exists())
 
 

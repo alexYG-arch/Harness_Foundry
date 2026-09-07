@@ -15,7 +15,7 @@ import tempfile
 import unittest
 
 from harness_foundry_factory.project_verification import (
-    COMMAND_ID, plan_project_verification, observe_project_verification,
+    COMMAND_ID, EVIDENCE_SCOPE, plan_project_verification, observe_project_verification,
 )
 from harness_foundry_factory.lab_protocol_checks import PROTOCOL_CASE_IDS
 from harness_foundry_factory.local_runtime import LOCAL_MODE, LOCAL_CLASS, bind_local_workpack_transition
@@ -30,13 +30,18 @@ from tests import test_normal_workpack_runtime as normal, test_coding_runtime as
 from tests import test_local_runtime as local, test_runtime_advance_cli as support
 
 
-def write_project(root, *, broken=False):
+def write_project(root, *, broken=False, frozen_broken=False):
     package = root / "external_lab"
     package.mkdir(parents=True, exist_ok=True)
     (package / "__init__.py").write_text('"""TEST-only project implementation."""\n')
     (package / "protocol.py").write_text(
         "from harness_foundry_runtime.lab_protocol import *\n"
-        + ("def validate_instance(*args): return True\n" if broken else ""))
+        + ("def validate_instance(*args): return True\n" if broken else "")
+        + ("from harness_foundry_runtime.lab_protocol import resolve_evaluator as original_resolve\n"
+           "def resolve_evaluator(registry, key):\n"
+           "    result = original_resolve(registry, key)\n"
+           "    return {} if len(registry['evaluators']) > 1 and key == sorted(registry['evaluators'])[-1] else result\n"
+           if frozen_broken else ""))
 
 
 def test_receiver(root):
@@ -55,7 +60,11 @@ raise SystemExit(subprocess.run(args).returncode)
 
 
 class ProducedProjectVerificationTests(unittest.TestCase):
-    target_overrides = normal.NormalWorkpackRuntimeTests.target_overrides
+    target_overrides = {**normal.NormalWorkpackRuntimeTests.target_overrides, "artifact_schema_catalog": {
+        "ATOM-001": {"artifact_kind": "LOCK_RECEIPT", "schema": {
+            "type": "object", "required": ["runtime_entrypoint", "driver_entrypoint", "entrypoints_distinct"],
+            "properties": {"runtime_entrypoint": {"type": "string"}, "driver_entrypoint": {"type": "string"},
+                           "entrypoints_distinct": {"const": True}}}}}}
     setUpClass = classmethod(normal.NormalWorkpackRuntimeTests.setUpClass.__func__)
     tearDownClass = classmethod(normal.NormalWorkpackRuntimeTests.tearDownClass.__func__)
 
@@ -64,6 +73,7 @@ class ProducedProjectVerificationTests(unittest.TestCase):
         self.assertEqual(planned["completion_plan"]["command_execution_order"], ["LAB-CODEX-CODING", COMMAND_ID])
         self.assertEqual(planned["native_command"]["allowed_write_roots"], [])
         self.assertEqual(planned["native_command"]["shared_artifact_write_roots"], [])
+        self.assertIn("frozen-schema-binding:ATOM-001", planned["expected_contract_case_ids"])
         self.assertFalse(planned["workpack_accepted"])
         self.assertEqual(_project_verification_command_findings(planned["native_command"]), [])
         for field, value in (("argv", ["python", "--version"]), ("allowed_write_roots", ["harness-resource://execution"]),
@@ -99,27 +109,46 @@ class ProducedProjectVerificationTests(unittest.TestCase):
             repository = Path(temporary)
             command = [sys.executable, "-I", "-B", str(self.semantic_candidate / "tools/lab_protocol_worker.py"),
                        "--project-root", str(repository), "--schema-file", str(self.semantic_candidate / "validation/PUBLIC_SKILL_JOB_INTERFACE.json")]
-            for state in ("missing", "correct", "broken"):
+            for state in ("missing", "correct", "broken", "frozen-broken"):
                 if state != "missing":
-                    write_project(repository, broken=state == "broken")
+                    write_project(repository, broken=state == "broken", frozen_broken=state == "frozen-broken")
                 before = runtime._tree_snapshot(self.root)
                 completed = subprocess.run(command, cwd=repository, capture_output=True, text=True, timeout=30)
                 result = json.loads(completed.stdout)
                 self.assertEqual(completed.returncode, 0 if state == "correct" else 1, completed.stdout + completed.stderr)
-                self.assertEqual(result["status"], {"correct": "PASS", "missing": "INCONCLUSIVE", "broken": "FAIL"}[state])
+                self.assertEqual(result["status"], {"correct": "PASS", "missing": "INCONCLUSIVE", "broken": "FAIL", "frozen-broken": "FAIL"}[state])
+                if state == "frozen-broken":
+                    self.assertTrue(all(row["status"] == "PASS" for row in result["cases"]))
+                    self.assertEqual(result["frozen_contract_checks"]["status"], "FAIL")
                 self.assertFalse(result["workpack_accepted"])
+                if state == "correct":
+                    self.assertIn({"case_id": "frozen-schema-binding:ATOM-001", "status": "PASS"},
+                                  result["frozen_contract_checks"]["cases"])
                 self.assertEqual(before, runtime._tree_snapshot(self.root))
 
     def test_observation_requires_actual_complete_case_set_and_successful_capture(self):
-        result = {"status": "PASS", "evidence_scope": "LAB_PROTOCOL_PRIMITIVES_ONLY", "workpack_accepted": False,
+        expected = plan_project_verification(self.semantic_candidate, "LAB_BOOTSTRAP", "LAB-PROTOCOL", COMMAND_ID)["expected_contract_case_ids"]
+        frozen = {"status": "PASS", "evidence_scope": "FROZEN_PROTOCOL_DECLARATIONS_ONLY", "workpack_accepted": False,
+                  "source_resolution_executed": False, "job_graph_executed": False,
+                  "cases": [{"case_id": case, "status": "PASS"} for case in expected]}
+        result = {"status": "PASS", "evidence_scope": EVIDENCE_SCOPE, "workpack_accepted": False,
                   "execution_authorized": False, "implementation_module": "external_lab.protocol",
+                  "frozen_contract_checks": frozen,
                   "cases": [{"case_id": case, "status": "PASS"} for case in PROTOCOL_CASE_IDS]}
         capture = {"status": "PASS", "stdout": json.dumps(result), "exit_code": 0, "timed_out": False, "output_truncated": False}
-        self.assertEqual(observe_project_verification(capture)["status"], "PASS")
+        self.assertEqual(observe_project_verification(capture, expected_contract_case_ids=expected)["status"], "PASS")
         for mutation in ({"stdout": "PASS"}, {"exit_code": 1}, {"timed_out": True}, {"output_truncated": True},
                          {"stdout": json.dumps({**result, "cases": result["cases"][:-1]})},
-                         {"stdout": json.dumps({**result, "workpack_accepted": True})}):
-            self.assertEqual(observe_project_verification({**capture, **mutation})["status"], "FAIL")
+                         {"stdout": json.dumps({**result, "workpack_accepted": True})},
+                         {"stdout": json.dumps({key: value for key, value in result.items() if key != "frozen_contract_checks"})}):
+            self.assertEqual(observe_project_verification({**capture, **mutation}, expected_contract_case_ids=expected)["status"], "FAIL")
+        for mutation in ({"cases": frozen["cases"][:-1]}, {"cases": frozen["cases"] + [frozen["cases"][0]]},
+                         {"cases": frozen["cases"][::-1]}, {"job_graph_executed": True}, {"status": "FAIL"},
+                         {"cases": [{**row, "status": "FAIL"} for row in frozen["cases"]]}):
+            changed = {**result, "frozen_contract_checks": {**frozen, **mutation}}
+            self.assertEqual(observe_project_verification({**capture, "stdout": json.dumps(changed)},
+                             expected_contract_case_ids=expected)["status"], "FAIL")
+        self.assertEqual(observe_project_verification(capture, expected_contract_case_ids=[])["status"], "FAIL")
 
     @unittest.skipUnless(os.environ.get("HFFACTORY_TEST_CODEX_SANDBOX"), "explicit offline OS sandbox test opt-in required")
     def test_actual_offline_sandbox_verifies_project_but_denies_implementation_rewrites(self):
@@ -134,13 +163,14 @@ class ProducedProjectVerificationTests(unittest.TestCase):
             runner = CodexSandboxRunner(os.environ["HFFACTORY_TEST_CODEX_SANDBOX"])
             before = runtime._tree_snapshot(self.root)
             observed = runner.run(command)
-            self.assertEqual(observe_project_verification(observed)["status"], "PASS", observed)
+            expected = plan_project_verification(self.semantic_candidate, "LAB_BOOTSTRAP", "LAB-PROTOCOL", COMMAND_ID)["expected_contract_case_ids"]
+            self.assertEqual(observe_project_verification(observed, expected_contract_case_ids=expected)["status"], "PASS", observed)
             self.assertEqual(before, runtime._tree_snapshot(self.root))
             implementation = repository / "external_lab/protocol.py"
             implementation.write_text("from pathlib import Path\nPath(__file__).write_text('unauthorized rewrite')\n")
             before = runtime._tree_snapshot(self.root)
             rejected = runner.run(command)
-            self.assertEqual(observe_project_verification(rejected)["status"], "FAIL")
+            self.assertEqual(observe_project_verification(rejected, expected_contract_case_ids=expected)["status"], "FAIL")
             self.assertIn("PermissionError", json.loads(rejected["stdout"])["diagnostic"])
             self.assertEqual(before, runtime._tree_snapshot(self.root))
 
@@ -152,6 +182,10 @@ class ProjectVerificationRuntimeTests(unittest.TestCase):
         self.addCleanup(self.fixture.doCleanups)
         f = self.fixture
         self.plan = plan_project_verification(f.candidate, "LAB_BOOTSTRAP", "LAB-PROTOCOL", COMMAND_ID)
+        # The other supported input form has direct per-Atom contracts and no
+        # optional schema catalog. Its exact empty binding set is still checked.
+        self.assertIn("frozen-schema-binding-set", self.plan["expected_contract_case_ids"])
+        self.assertFalse(any(case.startswith("frozen-schema-binding:") for case in self.plan["expected_contract_case_ids"]))
         receiver = test_receiver(f.local.root)
         self.transition = bind_local_workpack_transition(support.transition("T-VERIFY", LOCAL_CLASS),
             native_command=self.plan["native_command"], project_id="EXTERNAL_CONFORMANCE_LAB", workpack_id="LAB-PROTOCOL",
@@ -189,6 +223,8 @@ class ProjectVerificationRuntimeTests(unittest.TestCase):
         self.assertEqual(proof["status"], "PASS", observation)
         self.assertFalse(proof["workpack_accepted"])
         self.assertEqual(len(proof["report"]["cases"]), 28)
+        self.assertEqual([row["case_id"] for row in proof["report"]["frozen_contract_checks"]["cases"]],
+                         self.plan["expected_contract_case_ids"])
         count = len(f.local.observations())
         f.local.cli(self.request())
         self.assertEqual(len(f.local.observations()), count)

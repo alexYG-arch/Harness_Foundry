@@ -190,6 +190,7 @@ class NormalWorkpackRuntimeTests(unittest.TestCase):
     def test_candidate_packages_local_runtime_import_closure(self):
         for name in ("local_runtime.py", "local_process.py", "startup_runtime.py", "coding_protocol.py",
                      "coding_process.py", "coding_runtime.py", "workpack_acceptance.py", "lab_protocol.py", "lab_protocol_checks.py",
+                     "lab_protocol_contract_checks.py",
                      "project_verification.py", "workpack_evidence.py"):
             ref = f"tools/harness_foundry_runtime/{name}"
             self.assertEqual((self.candidate / ref).read_bytes(),
@@ -273,6 +274,7 @@ class NormalWorkpackRuntimeTests(unittest.TestCase):
 
     def test_independent_validator_requires_the_coding_protocol_in_workpack_bundle(self):
         for module in ("coding_protocol", "coding_process", "coding_runtime", "workpack_acceptance", "lab_protocol", "lab_protocol_checks",
+                       "lab_protocol_contract_checks",
                        "project_verification", "lab_protocol_worker", "workpack_evidence"):
             with self.subTest(module=module):
                 candidate = self.root / ("missing-" + module)

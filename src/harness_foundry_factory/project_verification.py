@@ -7,12 +7,16 @@ No project implementation is imported into this controller module.
 
 from copy import deepcopy
 import json
+from pathlib import Path
 
 
 COMMAND_ID = "LAB-PROTOCOL-CHECK"
 WORKER_REF = "harness-resource://candidate/tools/lab_protocol_worker.py"
 PROJECT_REF = "harness-resource://execution/project_start_packages/external_lab/repository"
 SCHEMA_REF = "harness-resource://candidate/validation/PUBLIC_SKILL_JOB_INTERFACE.json"
+REGISTRY_REF = "harness-resource://candidate/validation/ORACLE_EVALUATOR_REGISTRY.json"
+CATALOG_REF = "harness-resource://candidate/canonical_sources/FROZEN_REQUIREMENT_IR.json#/target/artifact_schema_catalog"
+EVIDENCE_SCOPE = "LAB_PROTOCOL_PRIMITIVES_AND_FROZEN_DECLARATIONS"
 
 
 def lab_protocol_command():
@@ -30,10 +34,11 @@ def lab_protocol_command():
         "allowed_read_roots": ["harness-resource://candidate", PROJECT_REF],
         "auto_execute": False, "shell": False,
         "verification_contract": {
-            "protocol": "LAB_PROTOCOL_BEHAVIOR_V1", "node_id": "LAB_BOOTSTRAP",
+            "protocol": "LAB_PROTOCOL_BEHAVIOR_V2", "node_id": "LAB_BOOTSTRAP",
             "workpack_id": "LAB-PROTOCOL", "worker_ref": WORKER_REF,
             "project_repository_ref": PROJECT_REF, "project_api_module": "external_lab.protocol",
-            "schema_ref": SCHEMA_REF, "evidence_scope": "LAB_PROTOCOL_PRIMITIVES_ONLY",
+            "schema_ref": SCHEMA_REF, "registry_ref": REGISTRY_REF, "schema_catalog_ref": CATALOG_REF,
+            "evidence_scope": EVIDENCE_SCOPE,
             "workpack_accepted": False,
         },
     }
@@ -53,7 +58,18 @@ def plan_project_verification(candidate_root, node_id, workpack_id, command_id):
              and native.get("allowed_write_roots") == [] and not native.get("job_artifact_lease_required"),
              "independent verifier contract or read-only ownership differs")
     _require(plan["semantic_contract"] is not None, "verification requires the complete native task bundle")
+    from .lab_protocol_contract_checks import contract_case_ids
+    try:
+        root = Path(candidate_root)
+        registry = json.loads((root / "validation/ORACLE_EVALUATOR_REGISTRY.json").read_bytes())
+        # Direct per-Atom contracts may legitimately have no optional catalog.
+        # The worker still checks that the interface declares exactly that set.
+        catalog = json.loads((root / "canonical_sources/FROZEN_REQUIREMENT_IR.json").read_bytes())["target"].get("artifact_schema_catalog", {})
+        expected_cases = contract_case_ids(registry, catalog)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        _require(False, f"frozen protocol declarations are unavailable: {exc}")
     return {"status": "DECLARED_PROJECT_VERIFICATION", "completion_plan": plan,
+            "expected_contract_case_ids": expected_cases,
             "native_command": deepcopy(native), "cwd_ref": PROJECT_REF,
             "argv_tail": ["-I", "-B", {"resource_ref": WORKER_REF}, "--project-root",
                           {"resource_ref": PROJECT_REF}, "--schema-file", {"resource_ref": SCHEMA_REF}],
@@ -93,20 +109,28 @@ def validate_verification_invocation(parent, invocation, *, events=None):
     return verification
 
 
-def observe_project_verification(process_result):
+def observe_project_verification(process_result, *, expected_contract_case_ids):
     """Parse the independent worker's captured result, never an output file."""
     from .lab_protocol_checks import PROTOCOL_CASE_IDS
     try:
         report = json.loads(process_result["stdout"])
         rows = report["cases"]
+        frozen = report["frozen_contract_checks"]
+        frozen_rows = frozen["cases"]
         valid = (process_result.get("status") == "PASS" and process_result.get("exit_code") == 0
                  and process_result.get("timed_out") is False and not process_result.get("output_truncated")
-                 and report.get("status") == "PASS" and report.get("evidence_scope") == "LAB_PROTOCOL_PRIMITIVES_ONLY"
+                 and report.get("status") == "PASS" and report.get("evidence_scope") == EVIDENCE_SCOPE
                  and report.get("workpack_accepted") is False and report.get("execution_authorized") is False
                  and report.get("implementation_module") == "external_lab.protocol"
                  and isinstance(rows, list) and [row.get("case_id") for row in rows] == list(PROTOCOL_CASE_IDS)
-                 and all(row.get("status") == "PASS" for row in rows))
+                 and all(row.get("status") == "PASS" for row in rows)
+                 and bool(expected_contract_case_ids) and isinstance(frozen_rows, list)
+                 and [row.get("case_id") for row in frozen_rows] == expected_contract_case_ids
+                 and all(row.get("status") == "PASS" for row in frozen_rows)
+                 and frozen.get("status") == "PASS" and frozen.get("evidence_scope") == "FROZEN_PROTOCOL_DECLARATIONS_ONLY"
+                 and frozen.get("workpack_accepted") is False and frozen.get("source_resolution_executed") is False
+                 and frozen.get("job_graph_executed") is False)
     except (KeyError, ValueError, TypeError, AttributeError):
         report, valid = {}, False
     return {"status": "PASS" if valid else "FAIL", "report": report,
-            "evidence_scope": "LAB_PROTOCOL_PRIMITIVES_ONLY", "workpack_accepted": False}
+            "evidence_scope": EVIDENCE_SCOPE, "workpack_accepted": False}

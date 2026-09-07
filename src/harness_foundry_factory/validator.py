@@ -6247,6 +6247,7 @@ def _check_controlled_workpack_runtime_executable_closure(
         "workpack_evidence": "tools/harness_foundry_runtime/workpack_evidence.py",
         "lab_protocol": "tools/harness_foundry_runtime/lab_protocol.py",
         "lab_protocol_checks": "tools/harness_foundry_runtime/lab_protocol_checks.py",
+        "lab_protocol_contract_checks": "tools/harness_foundry_runtime/lab_protocol_contract_checks.py",
         "project_verification": "tools/harness_foundry_runtime/project_verification.py",
         "lab_protocol_worker": "tools/lab_protocol_worker.py",
         "entrypoint": "tools/workpack_runtime.py",
@@ -14941,9 +14942,12 @@ def _project_verification_command_findings(command: Mapping[str, Any]) -> list[d
     repository = "harness-resource://execution/project_start_packages/external_lab/repository"
     schema = "harness-resource://candidate/validation/PUBLIC_SKILL_JOB_INTERFACE.json"
     executable = "harness-resource://execution/project_start_packages/external_lab/.venv/bin/python"
-    expected = {"protocol": "LAB_PROTOCOL_BEHAVIOR_V1", "node_id": "LAB_BOOTSTRAP", "workpack_id": "LAB-PROTOCOL",
+    expected = {"protocol": "LAB_PROTOCOL_BEHAVIOR_V2", "node_id": "LAB_BOOTSTRAP", "workpack_id": "LAB-PROTOCOL",
                 "worker_ref": worker, "project_repository_ref": repository, "project_api_module": "external_lab.protocol",
-                "schema_ref": schema, "evidence_scope": "LAB_PROTOCOL_PRIMITIVES_ONLY", "workpack_accepted": False}
+                "schema_ref": schema,
+                "registry_ref": "harness-resource://candidate/validation/ORACLE_EVALUATOR_REGISTRY.json",
+                "schema_catalog_ref": "harness-resource://candidate/canonical_sources/FROZEN_REQUIREMENT_IR.json#/target/artifact_schema_catalog",
+                "evidence_scope": "LAB_PROTOCOL_PRIMITIVES_AND_FROZEN_DECLARATIONS", "workpack_accepted": False}
     if (command.get("verification_contract") != expected or command.get("executor_role") != "INDEPENDENT_PROJECT_VERIFIER"
             or command.get("argv") != [executable, "-I", "-B", worker, "--project-root", repository, "--schema-file", schema]
             or command.get("cwd_absolute") != repository or command.get("allowed_write_roots") != []

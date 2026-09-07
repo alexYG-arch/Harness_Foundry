@@ -109,8 +109,9 @@ contract defines the missing scope rather than hiding it behind a green check.
 
 The native `LAB-PROTOCOL-CHECK` now invokes the project's actual protocol API and
 stores independent behavior observations through the approved offline receiver;
-see [protocol support](LAB_PROTOCOL_SUPPORT.md). Its scope is protocol primitives,
-not full Workpack acceptance. This audit conservatively still classifies command
+see [protocol support](LAB_PROTOCOL_SUPPORT.md). Its scope is protocol primitives
+and the complete frozen Registry/Schema declarations, not full Workpack
+acceptance. This audit conservatively still classifies command
 rows as process observations; it does not promote the nested protocol report to
 an artifact Oracle or a fresh implementation attestation.
 

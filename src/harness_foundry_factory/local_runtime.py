@@ -310,8 +310,9 @@ class LocalRuntimeAdapter:
         _require(now < expires, "local Parent expired before process dispatch", "PARENT_AUTHORIZATION_EXPIRED")
         invocation = transition["command_contract"]["local_invocation"]
         verification_provider = _verification_provider(invocation["native_command"])
+        verification_plan = None
         if verification_provider is not None:
-            verification_provider.validate_verification_invocation(parent, invocation, events=events)
+            verification_plan = verification_provider.validate_verification_invocation(parent, invocation, events=events)
         roots, selected = _effective_roots(invocation["native_command"], invocation["job_id"], invocation["runtime_read_refs"])
         lease = {}
         result = {"status": "VALIDATION_FAILED", "reason_code": "LOCAL_PROCESS_PREFLIGHT_FAILED",
@@ -346,7 +347,8 @@ class LocalRuntimeAdapter:
             observed = CodexSandboxRunner(receiver["executable_abs"]).run(command)
             result.update(status=observed["status"], reason_code=observed["reason_code"], process_result=observed)
             if verification_provider is not None:
-                proof = verification_provider.observe_project_verification(observed)
+                proof = verification_provider.observe_project_verification(
+                    observed, expected_contract_case_ids=verification_plan["expected_contract_case_ids"])
                 observed["project_verification"] = proof
                 if observed["status"] == "PASS":
                     result.update(status="PASS" if proof["status"] == "PASS" else "VALIDATION_FAILED",

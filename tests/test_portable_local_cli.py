@@ -74,7 +74,7 @@ class PortableLocalCliTests(unittest.TestCase):
             if dependency["dependency_id"] in {"jsonschema", "referencing"}:
                 self.assertFalse(dependency["required_for_core_startup"])
                 self.assertEqual(dependency["extra"], "runtime-audit")
-                self.assertEqual(dependency["required_for_commands"], ["audit-completion"])
+                self.assertEqual(dependency["required_for_commands"], ["audit-completion", "LAB-PROTOCOL-CHECK"])
         self.assertEqual(manifest["dependency_discovery"]["undeclared_external_imports"], [])
         self.assertFalse(any(path.startswith("runs/") for path in manifest["files"]))
         self.assertFalse(any(path.startswith("tests/") for path in manifest["files"]))

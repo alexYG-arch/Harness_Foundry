@@ -6,9 +6,10 @@ Current engineering objective: Foundry execution startup and its regressions.
 The user removed complete target Harness/media delivery from the active goal;
 this does not edit the separate frozen target Requirement or grant execution.
 
-Latest slice: the native Lab protocol verifier now calls the selected project's
-implementation through the approved offline receiver and commits its actual
-protocol observation. Coding prerequisites, immutable verification arguments,
+Latest slice: the native Lab protocol verifier calls the selected project's
+implementation through the approved offline receiver, checks the complete
+frozen Registry/Schema declarations as well as primitive examples, and commits
+its actual protocol observation. Coding prerequisites, immutable verification arguments,
 read-only worker scope and a stop before Workpack acceptance are enforced.
 Post-observation control results now have a separate producer and are excluded
 from coding-command writes, while remaining mandatory Workpack outputs.
@@ -913,6 +914,51 @@ current implementation-byte evidence, Workpack-produced capability provider,
 acceptance receipt publication and successor integration remain explicit. No
 formal Candidate mutation, additional runtime authority, model call or GitHub
 push occurred. Logs are under `build/project-verification.PpLizI/capability-*`.
+
+## Frozen protocol declaration verification slice
+
+The independent `lab_protocol_contract_checks.py` now checks every frozen
+evaluator declaration and catalog schema, rather than treating the primitive
+examples as coverage of a real Candidate. The producer emits the module, frozen
+input bindings and versioned native recipe; the independent Validator verifies
+the same declared inputs and portable closure. The real worker invokes the
+selected project's API. The controller derives the expected complete case set
+from its fresh Candidate plan and checks the captured worker report before
+recording a successful protocol observation. Missing, duplicate, reordered or
+failing rows and an omitted frozen report cannot produce that observation.
+
+An initial integration run correctly exposed an assumption in the new reader:
+the catalog is optional for direct per-Atom contracts. The reader now uses the
+same documented optional input semantics as the frozen interface, and checks
+its exact binding set. Separate worker fixtures exercise both absent and
+nonempty catalogs; no historical Candidate or fixture output was edited.
+
+This adds no model service, target execution authority or acceptance receipt.
+The full owned-scope Oracle, current implementation-byte evidence, Workpack
+capability publication and successor chain remain separate unfinished work.
+The first integrated corrected run passed 14 tests in 62.605 seconds (13 passed,
+one opt-in sandbox test skipped). After adding the nonempty-catalog worker
+fixture, its independent focused run passed 10 tests in 2.445 seconds (nine
+passed, one skipped). The real offline OS sandbox test was then explicitly run
+and passed in 2.328 seconds: the full worker succeeds, attempted implementation
+rewrites are denied, and the temporary tree remains unchanged. This is not a
+model call or formal Workpack execution. Core, spec and Skill validation passed.
+Logs are under `build/project-verification.PpLizI/frozen-protocol-*`.
+The complete final source suite passed 714 tests in 784.279 seconds: 697 passed
+and 17 opt-in tests skipped (`frozen-protocol-full.log`). The separately executed
+OS sandbox test above remains a distinct observed result, not a claim that all
+17 optional tests ran. `git diff --check` also passed.
+
+The next serial acceptance slice must consume this actual protocol observation
+against the exact owned obligation set, not relabel its process exit as an
+Oracle. It must also bind the implementation/evidence checked at that attempt,
+then publish controller-owned results and capabilities through the existing
+durable transition engine. Historical provenance and fresh acceptance are
+different: a resumed old observation must not certify changed implementation,
+and legitimate downstream writes must not be rejected merely because an older
+Workpack's whole repository snapshot differs. Keep dependency ownership and
+accepted transition lineage explicit instead of introducing recursive hashing
+or rerunning the complete historical chain at every stage.
 
 ## Reproduced gap
 

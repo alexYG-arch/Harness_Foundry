@@ -59,14 +59,14 @@ OPTIONAL_PYTHON_DEPENDENCIES = (
         "version_constraint": ">=4.18,<5",
         "extra": "runtime-audit",
         "profile": "OPTIONAL_WORKPACK_SCHEMA_AUDIT",
-        "required_for_commands": ["audit-completion"],
+        "required_for_commands": ["audit-completion", "LAB-PROTOCOL-CHECK"],
     },
     {
         "dependency_id": "referencing",
         "version_constraint": ">=0.28,<1",
         "extra": "runtime-audit",
         "profile": "OPTIONAL_WORKPACK_SCHEMA_AUDIT",
-        "required_for_commands": ["audit-completion"],
+        "required_for_commands": ["audit-completion", "LAB-PROTOCOL-CHECK"],
     },
 )
 EXCLUDED_SURFACES = (

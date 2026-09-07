@@ -120,6 +120,7 @@ FACTORY_IMPLEMENTATION_PATHS = (
     "src/harness_foundry_factory/workpack_evidence.py",
     "src/harness_foundry_factory/lab_protocol.py",
     "src/harness_foundry_factory/lab_protocol_checks.py",
+    "src/harness_foundry_factory/lab_protocol_contract_checks.py",
     "src/harness_foundry_factory/project_verification.py",
     "src/harness_foundry_factory/resources/lab_protocol_worker.py",
     "src/harness_foundry_factory/main_execution_package_validation.py",
@@ -12470,7 +12471,7 @@ def _write_lab_protocol_support(staging: Path) -> None:
     runtime_root.mkdir(parents=True, exist_ok=True)
     if not (runtime_root / "__init__.py").exists():
         _write_text(runtime_root / "__init__.py", '"""Portable Foundry protocol support."""\n')
-    for filename in ("lab_protocol.py", "lab_protocol_checks.py"):
+    for filename in ("lab_protocol.py", "lab_protocol_checks.py", "lab_protocol_contract_checks.py"):
         _write_text(runtime_root / filename, (Path(__file__).parent / filename).read_text(encoding="utf-8"))
     _write_text(staging / "tools/lab_protocol_worker.py",
                 (Path(__file__).parent / "resources/lab_protocol_worker.py").read_text(encoding="utf-8"))
