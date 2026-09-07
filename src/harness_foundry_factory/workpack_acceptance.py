@@ -74,6 +74,12 @@ def plan_workpack_completion(candidate_root, node_id, workpack_id):
         "declared_produced_capabilities": deepcopy(workpack.get("produces", [])),
         "command_execution_order": deepcopy(workpack["command_execution_order"]),
         "unit": deepcopy(unit), "artifacts": artifacts,
+        "artifact_production_groups": {
+            "acceptance_controller": [a["artifact_id"] for a in artifacts
+                                      if a.get("production_owner") == "WORKPACK_ACCEPTANCE_CONTROLLER"],
+            "task_executor": [a["artifact_id"] for a in artifacts
+                              if a.get("production_owner") != "WORKPACK_ACCEPTANCE_CONTROLLER"],
+        },
         # Preserve extensions (e.g. the Lab protocol/CLI contract) rather than
         # assuming that validating the artifact array covers every obligation.
         "semantic_contract": deepcopy(bundle),

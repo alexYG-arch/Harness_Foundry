@@ -7216,6 +7216,8 @@ def task_bundle_for_workpack(
                         f"{workpack_id}/{safe_name}.result.json"
                     ),
                     "artifact_kind": "WORKPACK_CONTROL_RESULT",
+                    "production_owner": "WORKPACK_ACCEPTANCE_CONTROLLER",
+                    "production_timing": "AFTER_NATIVE_COMMANDS_AND_ORACLES",
                     "schema": {
                         "type": "object",
                         "required": [
@@ -7236,8 +7238,9 @@ def task_bundle_for_workpack(
                         },
                     },
                     "production_rule": (
-                        "Produce only after every declared predecessor, command "
-                        "receipt, and capability precondition is current."
+                        "The acceptance controller, not the coding task or checked project, "
+                        "produces this result only after every declared predecessor, native "
+                        "command receipt, independent Oracle and capability precondition is current."
                     ),
                     "validation_rule": {
                         "validator_owner": "PROJECT_VALIDATOR",

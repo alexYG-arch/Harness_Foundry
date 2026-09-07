@@ -10,6 +10,8 @@ Latest slice: the native Lab protocol verifier now calls the selected project's
 implementation through the approved offline receiver and commits its actual
 protocol observation. Coding prerequisites, immutable verification arguments,
 read-only worker scope and a stop before Workpack acceptance are enforced.
+Post-observation control results now have a separate producer and are excluded
+from coding-command writes, while remaining mandatory Workpack outputs.
 Startup/offline process integration and the first coding-stage transport have
 temporary test evidence; real model transport and complete independent Workpack
 acceptance remain unverified. See [protocol support](LAB_PROTOCOL_SUPPORT.md) and
@@ -833,6 +835,41 @@ revision 191 remains `PREBUILD_APPROVED_EXECUTION_NOT_AUTHORIZED`, with only
 `REOPEN` available and no active delegated intents. No formal Candidate mutation,
 model turn, Workpack execution, installation, lifecycle advance or GitHub push
 occurred. Full owned-scope acceptance and successor integration remain open.
+
+## Structural receipt producer ownership
+
+After local checkpoint `12a0c98`, a normal produced Candidate regression proved
+that a coding command's effective write roots included its own future
+`WORKPACK_CONTROL_RESULT`. The artifact required completed command evidence and
+an independent Oracle, so assigning it to the preceding task created a circular
+production dependency (`ownership-before-write-domain.log`).
+
+The producer now labels these artifacts as acceptance-controller outputs after
+native commands and Oracles. Complete required artifact sets and overall
+Workpack/DAG domains stay unchanged. Both initial command materialization and
+semantic binding refresh exclude the controller roots from command writes.
+Factory and portable Validators independently check role/timing and the split
+write projection. The completion planner exposes the two producer groups and
+the coding prompt distinguishes task scope from the broader Workpack context.
+No new hashing or authorization layer is added.
+
+Five focused regressions passed in 2.510 seconds. The first wider integration
+run found a disposable-copy test permission error, not a product failure:
+`copytree` retained Candidate read-only file modes. The mutation test now makes
+only its two copied fixture files writable, retains the original Candidate,
+refreshes the directly affected binding and proves the specific semantic failure
+in both Oracles. That earlier 33-test run remains recorded as failed, not PASS.
+Updated core validation, `verify-spec`, `validate_skill.py` and `git diff --check`
+passed. The ownership slice's complete regression finished in 876.029 seconds:
+702 tests, 685 passed and 17 opt-in tests skipped
+(`build/project-verification.PpLizI/ownership-full.log`). This checkpoint is
+saved locally. The subsequently developed, as-yet unintegrated capability reader
+is not included in that 702-test result.
+
+Workpack acceptance, current implementation-byte evidence, capability provenance
+and successor integration still need implementation. Correct writer ownership
+does not publish a receipt or discharge those requirements. No formal Program,
+Candidate, execution grant, model service or GitHub state was changed.
 
 ## Reproduced gap
 

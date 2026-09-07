@@ -27,6 +27,15 @@ semantic scope. Checking only the structural result's schema cannot cover them.
 Missing semantic bundles remain explicit; a generic structural plan is not
 silently upgraded to a complete semantic contract.
 
+`artifact_production_groups` separates task-executor artifacts from acceptance-
+controller artifacts without removing anything from the required artifact set.
+`WORKPACK_CONTROL_RESULT` belongs to `WORKPACK_ACCEPTANCE_CONTROLLER`, after
+native command observations and independent Oracles. It is not a prerequisite
+file for the coding task to manufacture. The entire Workpack/DAG still includes
+its output domain; individual command scopes do not. The command manifest's
+`workpack_acceptance_write_roots` is a planned controller domain, not an active
+command grant. Coding and checked-project processes cannot write those roots.
+
 ## Implemented observations
 
 Command evidence comes from matched `COMMAND_RESULT_OBSERVED` and
@@ -101,14 +110,12 @@ its actual verified results may feed the existing controller's Workpack
 acceptance transition. Neither this inspection interface nor test fixtures
 replace that provider or close Lab/Linkage/Harness/video acceptance.
 
-The next producer/acceptance dependency is structural-result ownership. The
-current `task_bundle_for_workpack` fallback places `WORKPACK_CONTROL_RESULT`
-among coding-visible artifact obligations, but its production rule requires
-completed command receipts and its Oracle excludes target self-report. Those
-results must be published by the post-observation acceptance controller, not
-used as a prerequisite for the coding command that precedes verification.
-The follow-on implementation must separate implementation outputs from these
-acceptance-owned outputs, retain the complete Workpack obligation set, bind
-current implementation/evidence bytes, and prove required capabilities before
-publishing a result or selecting a successor. The protocol report added here
-does not silently resolve that ownership or certify the remaining obligations.
+Structural-result ownership is now explicit in the producer, coding prompt,
+completion plan and both static Validators. Five regressions cover exclusion
+from coding writes, preservation of every required artifact and business write
+scope, both normal static projections, owner/timing relabeling, and reintroduced
+receipt writes. This repairs a producer dependency cycle, not the remaining
+runtime acceptance implementation. That controller must still bind current
+implementation/evidence bytes, verify the complete owned semantic scope and
+required capabilities, then publish its result and select an eligible successor.
+The protocol report does not certify those remaining obligations.

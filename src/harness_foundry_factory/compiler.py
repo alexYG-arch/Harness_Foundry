@@ -2679,6 +2679,9 @@ def _repair_semantic_production_bindings(staging: Path) -> None:
             bundle_hash = _file_hash(bundle_path)
             required_ids = list(bundle["required_artifact_ids"])
             required_refs = list(bundle["required_artifact_refs"])
+            acceptance_write_roots = list(dict.fromkeys(
+                ref.rsplit("/", 1)[0] for ref in _acceptance_artifact_refs(bundle)
+            ))
             artifact_write_roots = list(
                 dict.fromkeys(
                     artifact_ref.rsplit("/", 1)[0]
@@ -2727,6 +2730,7 @@ def _repair_semantic_production_bindings(staging: Path) -> None:
                     "required_artifact_ids": required_ids,
                     "required_artifact_refs": required_refs,
                     "workpack_artifact_write_roots": artifact_write_roots,
+                    "workpack_acceptance_write_roots": acceptance_write_roots,
                     "workpack_auxiliary_write_roots": auxiliary_write_roots,
                     "workpack_artifact_read_roots": artifact_read_roots,
                     "workpack_shared_artifact_read_roots": (
@@ -2749,6 +2753,7 @@ def _repair_semantic_production_bindings(staging: Path) -> None:
                 artifact_read_roots,
                 workpack_id=workpack_id,
                 workpack_read_roots=workpack.get("allowed_read_paths", []),
+                acceptance_write_roots=acceptance_write_roots,
             )
             commands["manifest_sha256"] = _hash_without_field(
                 commands, "manifest_sha256"
@@ -4205,6 +4210,27 @@ def expected_matrix(dag_path: Path, dag: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def acceptance_write_roots(bundle: Mapping[str, Any] | None) -> list[str] | None:
+    if bundle is None:
+        return []
+    roots: list[str] = []
+    try:
+        for task in bundle["task_contracts"]:
+            for artifact in task["artifact_obligations"]:
+                control = artifact.get("artifact_kind") == "WORKPACK_CONTROL_RESULT"
+                if control != (artifact.get("production_owner") == "WORKPACK_ACCEPTANCE_CONTROLLER"):
+                    return None
+                if control:
+                    if artifact.get("production_timing") != "AFTER_NATIVE_COMMANDS_AND_ORACLES":
+                        return None
+                    root = artifact["artifact_ref"].rsplit("/", 1)[0]
+                    if root not in roots:
+                        roots.append(root)
+    except (KeyError, TypeError, AttributeError):
+        return None
+    return roots
+
+
 def check_project_workpack_write_projection(
     root: Path, dag: Mapping[str, Any]
 ) -> list[dict[str, str]]:
@@ -4264,6 +4290,15 @@ def check_project_workpack_write_projection(
             artifact_refs = item.get("required_artifact_refs", [])
             artifact_write_roots: list[str] = []
             artifact_root_binding_valid = isinstance(artifact_refs, list)
+            try:
+                bundle = (json.loads((index_path.parent / f"task_bundles/{workpack_id}.task_bundle.json").read_text())
+                          if item.get("task_bundle_ref") else None)
+                controller_roots = acceptance_write_roots(bundle)
+            except (OSError, UnicodeError, json.JSONDecodeError):
+                controller_roots = None
+            if controller_roots is None:
+                artifact_root_binding_valid = False
+                findings.append({"code": "WORKPACK_ARTIFACT_PRODUCTION_OWNER_INVALID", "message": workpack_id})
             for artifact_ref in artifact_refs if isinstance(artifact_refs, list) else []:
                 prefix = f"{EXECUTION_URI}/"
                 if (
@@ -4368,15 +4403,19 @@ def check_project_workpack_write_projection(
                     command_write_binding_valid = bool(
                         command_manifest.get("workpack_artifact_write_roots")
                         == artifact_write_roots
+                        and command_manifest.get("workpack_acceptance_write_roots") == controller_roots
                         and command_manifest.get("workpack_auxiliary_write_roots")
                         == auxiliary_write_roots
                         and isinstance(commands, list)
                         and commands
                         and command_scopes_valid
                         and set(declared_command_roots)
-                        == set(command_write_roots)
+                        == set(command_write_roots) - set(controller_roots or [])
                         and len(declared_command_roots)
-                        == len(command_write_roots)
+                        == len(set(command_write_roots) - set(controller_roots or []))
+                        and all(not any(contained(root, allowed) for root in (controller_roots or [])
+                                        for allowed in command.get("allowed_write_roots", []))
+                                for command in commands)
                     )
                 except (
                     OSError,
@@ -15851,6 +15890,14 @@ def _runtime_ownership(
     }
 
 
+def _acceptance_artifact_refs(bundle: Mapping[str, Any] | None) -> list[str]:
+    """Control results remain Workpack outputs, but are not task-writable."""
+    return [artifact["artifact_ref"]
+            for task in (bundle or {}).get("task_contracts", [])
+            for artifact in task["artifact_obligations"]
+            if artifact.get("artifact_kind") == "WORKPACK_CONTROL_RESULT"]
+
+
 def _required_artifact_refs_by_workpack(
     artifact_manifest: Mapping[str, Any] | None,
     *,
@@ -16225,12 +16272,15 @@ def _bind_commands_to_workpack_artifact_roots(
     *,
     workpack_id: str,
     workpack_read_roots: Sequence[str] = (),
+    acceptance_write_roots: Sequence[str] = (),
 ) -> list[dict[str, Any]]:
     """Declare semantic roots without granting one command every Job root."""
 
     job_scopes: dict[str, list[str]] = {}
     shared_roots: list[str] = []
     for artifact_root in artifact_write_roots:
+        if artifact_root in acceptance_write_roots:
+            continue
         marker = "/jobs/"
         if marker in artifact_root:
             suffix = artifact_root.split(marker, 1)[1]
@@ -19816,6 +19866,9 @@ def _materialize_project_workpack_contracts(
         artifact_write_roots = _artifact_write_paths(
             execution, required_artifact_refs
         )
+        acceptance_write_roots = _artifact_write_paths(
+            execution, _acceptance_artifact_refs(task_bundle)
+        )
         auxiliary_write_roots = _workpack_auxiliary_write_roots(
             execution, workpack_id
         )
@@ -19961,6 +20014,7 @@ This Workpack is declarative. Its semantic task contract may be frozen, but runt
             "required_artifact_ids": required_artifact_ids,
             "required_artifact_refs": required_artifact_refs,
             "workpack_artifact_write_roots": artifact_write_roots,
+            "workpack_acceptance_write_roots": acceptance_write_roots,
             "workpack_auxiliary_write_roots": auxiliary_write_roots,
             "workpack_artifact_read_roots": artifact_read_roots,
             "workpack_shared_artifact_read_roots": (
@@ -19973,6 +20027,7 @@ This Workpack is declarative. Its semantic task contract may be frozen, but runt
                 artifact_read_roots,
                 workpack_id=workpack_id,
                 workpack_read_roots=allowed_read_paths,
+                acceptance_write_roots=acceptance_write_roots,
             ),
         }
         if task_bundle is not None and task_bundle_ref is not None:

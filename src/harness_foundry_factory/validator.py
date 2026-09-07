@@ -758,6 +758,27 @@ def _expected_job_artifact_lease_contract(
     }
 
 
+def _acceptance_write_roots(bundle: Mapping[str, Any] | None) -> list[str] | None:
+    """Independently check the producer role of post-observation control results."""
+    if bundle is None:
+        return []
+    roots = []
+    try:
+        for task in bundle["task_contracts"]:
+            for artifact in task["artifact_obligations"]:
+                control = artifact.get("artifact_kind") == "WORKPACK_CONTROL_RESULT"
+                owner = artifact.get("production_owner") == "WORKPACK_ACCEPTANCE_CONTROLLER"
+                if control != owner or control and artifact.get("production_timing") != "AFTER_NATIVE_COMMANDS_AND_ORACLES":
+                    return None
+                if control:
+                    root = artifact["artifact_ref"].rsplit("/", 1)[0]
+                    if root not in roots:
+                        roots.append(root)
+    except (KeyError, TypeError, AttributeError):
+        return None
+    return roots
+
+
 def _expected_workpack_commands(
     commands_by_id: Mapping[str, Mapping[str, Any]],
     command_ids: Sequence[str],
@@ -766,10 +787,13 @@ def _expected_workpack_commands(
     *,
     workpack_id: str,
     workpack_read_roots: Sequence[str] = (),
+    acceptance_write_roots: Sequence[str] = (),
 ) -> list[dict[str, Any]] | None:
     job_scopes: dict[str, list[str]] = {}
     shared_roots: list[str] = []
     for artifact_root in artifact_write_roots:
+        if artifact_root in acceptance_write_roots:
+            continue
         marker = "/jobs/"
         if marker in artifact_root:
             suffix = artifact_root.split(marker, 1)[1]
@@ -15143,6 +15167,11 @@ def _check_project_workpack_execution_contracts(
                 continue
             required_artifact_refs = item.get("required_artifact_refs", [])
             required_artifact_ids = item.get("required_artifact_ids", [])
+            ownership_bundle = (_read_json(project_root / f"task_bundles/{workpack_id}.task_bundle.json", findings)
+                                if item.get("task_bundle_ref") else None)
+            acceptance_write_roots = _acceptance_write_roots(ownership_bundle)
+            if acceptance_write_roots is None:
+                findings.append(_finding("WORKPACK_ARTIFACT_PRODUCTION_OWNER_INVALID", workpack_id))
             artifact_write_roots = (
                 _artifact_write_roots_from_refs(
                     execution_root, required_artifact_refs
@@ -15204,6 +15233,7 @@ def _check_project_workpack_execution_contracts(
                     command_write_roots,
                     artifact_read_roots or [],
                     workpack_id=workpack_id,
+                    acceptance_write_roots=acceptance_write_roots or [],
                     workpack_read_roots=[
                         LOGICAL_CANDIDATE_ROOT if candidate_root == VIRTUAL_CANDIDATE_ROOT else str(candidate_root),
                         _contract_serialized_path(execution_root, f"project_start_packages/{directory}/repository"),
@@ -15226,6 +15256,7 @@ def _check_project_workpack_execution_contracts(
                 or per_commands.get("intent_atom_ids")
                 != expected_intent_atom_ids
                 or per_commands.get("commands") != expected_commands
+                or per_commands.get("workpack_acceptance_write_roots") != acceptance_write_roots
                 or any(
                     not isinstance(command, Mapping)
                     or not _job_artifact_lease_contract_is_valid(
