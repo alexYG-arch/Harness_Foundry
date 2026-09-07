@@ -12,6 +12,9 @@ protocol observation. Coding prerequisites, immutable verification arguments,
 read-only worker scope and a stop before Workpack acceptance are enforced.
 Post-observation control results now have a separate producer and are excluded
 from coding-command writes, while remaining mandatory Workpack outputs.
+The first coding preflight now consumes actual committed startup capability
+evidence, not just the expected startup order. Later Workpack capabilities remain
+unresolved until their independent acceptance provider is implemented.
 Startup/offline process integration and the first coding-stage transport have
 temporary test evidence; real model transport and complete independent Workpack
 acceptance remain unverified. See [protocol support](LAB_PROTOCOL_SUPPORT.md) and
@@ -870,6 +873,46 @@ Workpack acceptance, current implementation-byte evidence, capability provenance
 and successor integration still need implementation. Correct writer ownership
 does not publish a receipt or discharge those requirements. No formal Program,
 Candidate, execution grant, model service or GitHub state was changed.
+
+## Startup capability provenance and native observation reuse
+
+Local checkpoint `f5f3cc8` closes structural receipt ownership. The next normal
+startup fixture reproduced an execution-preflight gap: changing a task's required
+capability to one absent from the startup result was not rejected by
+`_predecessors`, which only checked startup order and the selected node
+(`capability-preflight-before.log`).
+This is a component-level missing evidence-consumption check, not proof of an
+end-to-end authorization bypass: fresh Candidate/task and Parent validation
+already reject a caller's rewritten task. The shared provenance reader provides
+the actual capability evidence needed by the subsequent acceptance controller.
+
+`workpack_evidence.py` now selects real observed-and-committed native attempts
+from the same approved Parent, Program, Candidate and attempt. The capability
+reader follows each required capability's declared startup node and checks the
+actual native result. Coding preflight consumes it; the read-only audit reports
+the same evidence. Command observation selection reuses this implementation
+while retaining exact project/task/command bindings and real process/model-turn
+completion checks. Producer packaging and independent closure validation include
+the new module; minimal startup bundles remain unchanged.
+
+Eight focused tests passed in 11.059 seconds using actual temporary Factory,
+startup and SQLite execution but no coding/model process. They cover provenance,
+missing observation/commit, another Program/Candidate/attempt, unsupported
+Workpack sources, missing capability, the consumer preflight and read-only audit.
+The broader coding/verification/acceptance integration suite completed in 209.401
+seconds: 53 tests, 52 passed and one opt-in sandbox test skipped. It includes the
+first seven new tests; the eighth audit test also passed in the separate focused
+run above. Core validation, `verify-spec`, `validate_skill.py` and
+`git diff --check` passed. The complete capability slice then passed 710 tests
+in 820.051 seconds: 693 passed and 17 opt-in tests skipped (`capability-full.log`).
+This source checkpoint is saved locally. The subsequently developed frozen-
+declaration checker is not included in that result.
+
+This is not full Workpack acceptance. The missing independent owned-scope Oracle,
+current implementation-byte evidence, Workpack-produced capability provider,
+acceptance receipt publication and successor integration remain explicit. No
+formal Candidate mutation, additional runtime authority, model call or GitHub
+push occurred. Logs are under `build/project-verification.PpLizI/capability-*`.
 
 ## Reproduced gap
 

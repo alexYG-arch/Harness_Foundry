@@ -117,6 +117,7 @@ FACTORY_IMPLEMENTATION_PATHS = (
     "src/harness_foundry_factory/coding_process.py",
     "src/harness_foundry_factory/coding_runtime.py",
     "src/harness_foundry_factory/workpack_acceptance.py",
+    "src/harness_foundry_factory/workpack_evidence.py",
     "src/harness_foundry_factory/lab_protocol.py",
     "src/harness_foundry_factory/lab_protocol_checks.py",
     "src/harness_foundry_factory/project_verification.py",
@@ -12497,6 +12498,7 @@ def _write_epoch4_runtime_store_dependency_closure(
                             "tools/harness_foundry_runtime/coding_process.py",
                             "tools/harness_foundry_runtime/coding_runtime.py",
                             "tools/harness_foundry_runtime/workpack_acceptance.py",
+                            "tools/harness_foundry_runtime/workpack_evidence.py",
                             "tools/harness_foundry_runtime/project_verification.py"))
     if include_package_validation_runtime:
         module_refs.append(EPOCH49_PACKAGE_VALIDATION_RUNTIME_MODULE_REF)

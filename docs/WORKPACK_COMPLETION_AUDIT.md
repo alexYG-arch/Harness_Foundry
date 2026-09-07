@@ -48,6 +48,17 @@ all-Job coverage, command-order acceptance or fresh execution authority.
 Agent-written result files and a stdout message saying PASS are not imported as
 controller evidence.
 
+`capability_observations` separately resolves required capabilities produced by
+the committed startup actions. The observation, commit and derived grant must
+name the same attempt, approved native Parent, Program and Candidate. The native
+result must actually contain the capability and identify its declared source
+node. Coding preflight consumes the same provenance reader. Existing command
+observations also use this shared selection, retaining their own task and
+process-result checks. Workpack-produced capabilities still report
+`PROVIDER_NOT_IMPLEMENTED`: a coding turn or protocol PASS cannot supply them.
+These records neither erase historical evidence when an old Parent expires nor
+grant authority under that expired Parent. No additional hash layer is created.
+
 For shared JSON artifacts the audit checks actual bytes against the declared
 JSON Schema 2020-12 contract. Missing files, invalid instances, unsupported
 representations/dialects and unresolvable schemas have distinct outcomes.
@@ -105,7 +116,7 @@ an artifact Oracle or a fresh implementation attestation.
 
 Next, complete the independent Workpack verifier for the remaining obligations,
 including the Lab implementation/self-tests, artifact validation/Oracles,
-predecessor capability provenance, Job lease reads, and failure returns. Only
+Workpack-produced capability provenance, Job lease reads, and failure returns. Only
 its actual verified results may feed the existing controller's Workpack
 acceptance transition. Neither this inspection interface nor test fixtures
 replace that provider or close Lab/Linkage/Harness/video acceptance.

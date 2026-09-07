@@ -6244,6 +6244,7 @@ def _check_controlled_workpack_runtime_executable_closure(
         "coding_process": "tools/harness_foundry_runtime/coding_process.py",
         "coding_runtime": "tools/harness_foundry_runtime/coding_runtime.py",
         "workpack_acceptance": "tools/harness_foundry_runtime/workpack_acceptance.py",
+        "workpack_evidence": "tools/harness_foundry_runtime/workpack_evidence.py",
         "lab_protocol": "tools/harness_foundry_runtime/lab_protocol.py",
         "lab_protocol_checks": "tools/harness_foundry_runtime/lab_protocol_checks.py",
         "project_verification": "tools/harness_foundry_runtime/project_verification.py",

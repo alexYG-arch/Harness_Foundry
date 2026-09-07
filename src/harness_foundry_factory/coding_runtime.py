@@ -20,6 +20,7 @@ from .models import content_sha256
 from .startup_runtime import CONTROL_DB_REF, project_startup_views, verify_startup_views
 from .store import ControlEventStore
 from .workpack_runtime import RuntimeContractError
+from .workpack_evidence import predecessor_capability_observations
 
 
 CODING_MODE = "CODEX_CODING_SERVICE"
@@ -150,6 +151,15 @@ def _predecessors(store, parent, task):
              and rows[-1]["result"]["native_transaction"]["next_state_payload"]["next_node"] == data["selection"]["node_id"],
              "later coding tasks need independent Workpack acceptance, which is not implemented",
              "CODING_PREDECESSOR_ACCEPTANCE_REQUIRED")
+    capabilities = predecessor_capability_observations(store.list_events(parent["program_id"]), {
+        "program_id": data["selection"]["program_id"],
+        "candidate_tree_sha256": data["selection"]["candidate_tree_sha256"],
+        "required_capabilities": data["workpack"]["requires"],
+        "capability_sources": data["workpack"]["requirement_sources"],
+    })
+    _require(all(row["status"] == "OBSERVED" for row in capabilities),
+             "required capabilities need observed and committed evidence from their exact declared producer",
+             "CODING_REQUIRED_CAPABILITY_EVIDENCE_MISSING")
 
 
 class CodingRuntimeAdapter:

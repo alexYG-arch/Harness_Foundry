@@ -14,11 +14,12 @@ import sqlite3
 import tempfile
 from collections.abc import Mapping
 
-from .control_kernel import ControlKernelError, START_PACKAGE_BINDING_KIND, rebuild_control_projections
+from .control_kernel import ControlKernelError
 from .local_runtime import _uri
-from .models import FactoryError, content_sha256
+from .models import FactoryError
 from .store import ControlEventStore
 from .workpack_runtime import RuntimeContractError, candidate_identity, plan_workpack_node
+from .workpack_evidence import committed_native_attempts, predecessor_capability_observations
 
 
 def _require(condition, message):
@@ -131,56 +132,37 @@ def _read_events(database, program):
 
 def _command_observations(events, plan):
     """Use observed + committed native attempts, never result files/stdout PASS."""
-    projections = rebuild_control_projections(events)
-    parents = projections["grant_ledger"]["parents"]
-    grants = projections["grant_ledger"]["derived_grants"]
-    observations = {event["payload"]["grant_id"]: event for event in events
-                    if event["event_type"] == "COMMAND_RESULT_OBSERVED"}
     expected = {command["command_id"]: command for command in plan["unit"]["commands"]}
     results = {key: [] for key in expected}
-    for event in events:
-        if event["event_type"] != "TRANSITION_COMMITTED":
+    for attempt in committed_native_attempts(events, plan["program_id"], plan["candidate_tree_sha256"]):
+        key = attempt["kind"]
+        if key not in {"coding_execution", "local_execution"}:
             continue
+        transition, grant, event = attempt["transition"], attempt["grant"], attempt["commit"]
         row = event["payload"]
-        grant = grants.get(row.get("grant_id"), {})
-        parent = parents.get(grant.get("parent_authorization_id"), {})
-        if (not parent.get("approval_receipt_sha256")
-                or parent.get("bindings", {}).get("binding_kind") != START_PACKAGE_BINDING_KIND
-                or parent["bindings"].get("candidate_tree_sha256") != plan["candidate_tree_sha256"]):
+        invocation = transition["command_contract"].get(
+            "coding_invocation" if key == "coding_execution" else "local_invocation", {})
+        task = invocation.get("task_input", {}) if key == "coding_execution" else invocation
+        selected = task.get("selection", task)
+        native = task.get("native_command", {})
+        command_id = native.get("command_id")
+        if (selected.get("workpack_id") != plan["workpack_id"]
+                or selected.get("project_id") != plan["project_id"]
+                or expected.get(command_id) != native):
             continue
-        for key in ("coding_execution", "local_execution"):
-            transition = parent.get(key, {}).get("transitions", {}).get(row["transition_id"], {})
-            if not transition or grant.get("transition_contract_sha256") != content_sha256(transition):
-                continue
-            invocation = transition["command_contract"].get(
-                "coding_invocation" if key == "coding_execution" else "local_invocation", {})
-            task = invocation.get("task_input", {}) if key == "coding_execution" else invocation
-            selected = task.get("selection", task)
-            native = task.get("native_command", {})
-            command_id = native.get("command_id")
-            if (selected.get("workpack_id") != plan["workpack_id"]
-                    or selected.get("project_id") != plan["project_id"]
-                    or expected.get(command_id) != native):
-                continue
-            if key == "coding_execution" and any(task.get(field) != plan["unit"][field]
-                    for field in ("workpack", "capsule", "task_bundle")):
-                continue
-            observation = observations.get(row.get("grant_id"))
-            if not observation or observation["payload"].get("result") != row.get("result"):
-                continue
-            result = row["result"]
-            if result.get("status") != "PASS":
-                continue
-            coding = key == "coding_execution"
-            process = result.get("model_result" if coding else "process_result", {})
-            complete = (process.get("status") == "MODEL_TURN_COMPLETED" if coding else
-                        process.get("exit_code") == 0 and process.get("timed_out") is False
-                        and process.get("workload_started") is not False)
-            if complete:
-                results[command_id].append({"grant_id": grant["grant_id"],
-                    "attempt_id": row["attempt_id"], "observation_event_hash": observation["event_hash"],
-                    "commit_event_hash": event["event_hash"], "job_id": selected.get("job_id"),
-                    "evidence_scope": "MODEL_TURN_ONLY" if coding else "PROCESS_EXIT_ONLY"})
+        if key == "coding_execution" and any(task.get(field) != plan["unit"][field]
+                for field in ("workpack", "capsule", "task_bundle")):
+            continue
+        coding = key == "coding_execution"
+        process = attempt["result"].get("model_result" if coding else "process_result", {})
+        complete = (process.get("status") == "MODEL_TURN_COMPLETED" if coding else
+                    process.get("exit_code") == 0 and process.get("timed_out") is False
+                    and process.get("workload_started") is not False)
+        if complete:
+            results[command_id].append({"grant_id": grant["grant_id"],
+                "attempt_id": row["attempt_id"], "observation_event_hash": attempt["observation"]["event_hash"],
+                "commit_event_hash": event["event_hash"], "job_id": selected.get("job_id"),
+                "evidence_scope": "MODEL_TURN_ONLY" if coding else "PROCESS_EXIT_ONLY"})
     # These are historical observations for this Candidate. Parent expiry or
     # revocation does not erase them, and they do not grant current authority.
     return [{"command_id": key, "status": "OBSERVED" if results[key] else "MISSING",
@@ -255,17 +237,21 @@ intentionally cannot be used to advance the runtime.
     _require(database.resolve() == database, "controller path is linked")
     events, controller_status = _read_events(database, plan["program_id"])
     commands = _command_observations(events, plan)
+    capabilities = predecessor_capability_observations(events, plan)
     artifacts = [_schema_observation(candidate, execution, item) for item in plan["artifacts"]]
     unresolved = ["INDEPENDENT_WORKPACK_VERIFIER_NOT_IMPLEMENTED"]
     if plan["semantic_contract"] is None:
         unresolved.append("NATIVE_SEMANTIC_TASK_BUNDLE_MISSING")
     if any(item["status"] != "OBSERVED" for item in commands):
         unresolved.append("NATIVE_COMMAND_OBSERVATIONS_MISSING")
+    if any(item["status"] != "OBSERVED" for item in capabilities):
+        unresolved.append("PREDECESSOR_CAPABILITY_EVIDENCE_INCOMPLETE")
     if any(item["schema"] != "PASS" for item in artifacts):
         unresolved.append("ARTIFACT_SCHEMA_EVIDENCE_INCOMPLETE")
     _require(candidate_identity(candidate) == plan["candidate_tree_sha256"], "Candidate changed during audit")
     return {"status": "WORKPACK_EVIDENCE_INCOMPLETE", "plan": plan,
         "controller_status": controller_status, "command_observations": commands,
+        "capability_observations": capabilities,
         "artifact_observations": artifacts, "unresolved_requirements": unresolved,
         "remaining_semantic_scope": {"predecessor_nodes": plan["required_predecessor_nodes"],
             "prior_workpacks": plan["required_prior_workpacks"], "capabilities": plan["required_capabilities"],
