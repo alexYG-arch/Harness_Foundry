@@ -119,6 +119,8 @@ FACTORY_IMPLEMENTATION_PATHS = (
     "src/harness_foundry_factory/workpack_acceptance.py",
     "src/harness_foundry_factory/lab_protocol.py",
     "src/harness_foundry_factory/lab_protocol_checks.py",
+    "src/harness_foundry_factory/project_verification.py",
+    "src/harness_foundry_factory/resources/lab_protocol_worker.py",
     "src/harness_foundry_factory/main_execution_package_validation.py",
     "src/harness_foundry_factory/service.py",
     "src/harness_foundry_factory/models.py",
@@ -1373,8 +1375,8 @@ def compile_start_package(
         candidate,
         artifact_manifest,
     )
-    if artifact_manifest is not None:
-        # Semantic Task Bundles declare this support even on compatibility
+    if (staging / "project_start_packages/external_lab/COMMAND_MANIFEST.json").is_file():
+        # The Lab's native verifier declares this support even on compatibility
         # routes without the local Workpack runtime. Materialize by dependency,
         # not by a historical control-plane profile or Requirement epoch.
         _write_lab_protocol_support(staging)
@@ -5733,10 +5735,11 @@ def check_control_kernel(
     matrix = documents["correction"]
     module_hashes = manifest.get("runtime_module_sha256")
     schema_hashes = manifest.get("schema_sha256")
-    actual_modules = {
-        path.relative_to(root).as_posix()
-        for path in (root / "tools/harness_foundry_runtime").glob("*.py")
-        if path.is_file()
+    expected_modules = {
+        "tools/harness_foundry_runtime/" + name for name in (
+            "__init__.py", "constants.py", "models.py", "store.py", "control_kernel.py",
+            "local_runtime.py", "local_process.py", "startup_runtime.py", "requirement_completion.py",
+        )
     }
     actual_schemas = {
         path.relative_to(root).as_posix()
@@ -5759,7 +5762,7 @@ def check_control_kernel(
         or not isinstance(schema_hashes, Mapping)
     ):
         findings.append({"code": "V2_9_CONTROL_KERNEL_MANIFEST_INVALID", "message": "manifest authority or semantic binding is invalid"})
-    if not isinstance(module_hashes, Mapping) or set(module_hashes) != actual_modules:
+    if not isinstance(module_hashes, Mapping) or set(module_hashes) != expected_modules:
         findings.append({"code": "V2_9_CONTROL_KERNEL_MODULE_HASH_INVALID", "message": "runtime module inventory differs"})
     else:
         for relative, digest in module_hashes.items():
@@ -10777,9 +10780,11 @@ def _write_release_closure_control_plane_bundle(
         if not source.is_file():
             raise ValueError(f"Epoch 2 runtime source is missing: {filename}")
         _write_text(runtime_root / filename, source.read_text(encoding="utf-8"))
+    # This control-plane manifest owns its declared module set, not every
+    # component colocated in the portable runtime namespace.
     module_hashes = {
-        path.relative_to(staging).as_posix(): _file_hash(path)
-        for path in sorted(runtime_root.glob("*.py"))
+        (runtime_root / filename).relative_to(staging).as_posix(): _file_hash(runtime_root / filename)
+        for filename in sorted(("__init__.py", *EPOCH2_RUNTIME_MODULES))
     }
 
     trust_root_source = repository_root / "AUTHORITY_TRUST_ROOT.json"
@@ -11276,9 +11281,11 @@ def _write_control_kernel_bundle(
             raise ValueError(f"v2.9 control runtime source is missing: {filename}")
         _write_text(runtime_root / filename, source.read_text(encoding="utf-8"))
 
+    # Keep unrelated project support in the whole-package inventory, not in
+    # this control kernel's authority-bearing implementation manifest.
     module_hashes = {
-        path.relative_to(staging).as_posix(): _file_hash(path)
-        for path in sorted(runtime_root.glob("*.py"))
+        (runtime_root / filename).relative_to(staging).as_posix(): _file_hash(runtime_root / filename)
+        for filename in sorted(("__init__.py", *runtime_sources))
     }
     evaluator_ref = "tools/harness_foundry_runtime/control_kernel.py"
     evaluator_sha256 = module_hashes[evaluator_ref]
@@ -12425,6 +12432,8 @@ def _write_lab_protocol_support(staging: Path) -> None:
         _write_text(runtime_root / "__init__.py", '"""Portable Foundry protocol support."""\n')
     for filename in ("lab_protocol.py", "lab_protocol_checks.py"):
         _write_text(runtime_root / filename, (Path(__file__).parent / filename).read_text(encoding="utf-8"))
+    _write_text(staging / "tools/lab_protocol_worker.py",
+                (Path(__file__).parent / "resources/lab_protocol_worker.py").read_text(encoding="utf-8"))
 
 
 def _write_epoch4_runtime_store_dependency_closure(
@@ -12448,7 +12457,8 @@ def _write_epoch4_runtime_store_dependency_closure(
                             "tools/harness_foundry_runtime/coding_protocol.py",
                             "tools/harness_foundry_runtime/coding_process.py",
                             "tools/harness_foundry_runtime/coding_runtime.py",
-                            "tools/harness_foundry_runtime/workpack_acceptance.py"))
+                            "tools/harness_foundry_runtime/workpack_acceptance.py",
+                            "tools/harness_foundry_runtime/project_verification.py"))
     if include_package_validation_runtime:
         module_refs.append(EPOCH49_PACKAGE_VALIDATION_RUNTIME_MODULE_REF)
     for module_ref in module_refs:
@@ -16351,6 +16361,12 @@ def _bind_commands_to_workpack_artifact_roots(
             command["test_repository_write_policy"] = (
                 "FORBIDDEN_VERIFY_SNAPSHOT_BEFORE_AFTER"
             )
+        if command.get("executor_role") == "INDEPENDENT_PROJECT_VERIFIER":
+            # The supervisor records stdout in the controller. The checked
+            # implementation cannot rewrite itself or a structural PASS file.
+            command["allowed_write_roots"] = []
+            command["shared_artifact_write_roots"] = []
+            command["artifact_write_scope_mode"] = "NONE"
         command["command_sha256"] = _hash_without_field(
             command, "command_sha256"
         )
@@ -19579,6 +19595,8 @@ def _project_planned_interface_commands(
         }
     ]
     if directory == "external_lab":
+        from .project_verification import lab_protocol_command
+        commands.append(lab_protocol_command())
         lab_python = str(
             execution_root
             / "project_start_packages/external_lab/.venv/bin/python"

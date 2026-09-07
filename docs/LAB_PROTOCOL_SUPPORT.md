@@ -1,8 +1,10 @@
 # Lab protocol implementation support
 
 Status: executable pure protocol primitives and independently defined behavior
-probes are implemented and packaged. This is **not a built external Lab, a
-Workpack acceptance adapter, or permission to execute target code**.
+probes are implemented and packaged. A Candidate-owned command now runs those
+probes against the selected project's API through the existing offline receiver.
+This is **not a complete external Lab, a Workpack acceptance adapter, or permission
+to execute target code without the separate runtime approval**.
 
 ## Implementation rather than declared PASS
 
@@ -27,10 +29,36 @@ and invalid requests, unknown lookup cases, immutable identity, input preservati
 and renderer/content separation. Deliberately stubbed APIs fail these probes.
 
 The suite accepts the actual API object and the frozen public Job request schema.
-A future execution adapter must invoke it inside an authorized isolated worker
-with the selected project's implementation, never import untrusted project code
-into the controller. Present tests invoke the shipped library in temporary
-packaged Candidates, not code produced by a model or a formal target Workpack.
+`LAB-PROTOCOL-CHECK` is now a native command after `LAB-CODEX-CODING` in the
+`LAB-PROTOCOL` Workpack. Its frozen recipe runs `tools/lab_protocol_worker.py`
+against the selected repository's `external_lab/protocol.py`. Missing or broken
+project code cannot fall back to checking the shipped support library. The
+project can deliberately reuse that library, but must expose its own API entry.
+Project imports and API calls occur only in the child, never in the controller.
+
+`tools/workpack_runtime.py verification-plan` retains the complete native
+Workpack completion plan and supplies the frozen argument tail. Planning does
+not create directories, run imports or confer authority. Runtime hydration may
+bind the already approved Python resource; it cannot replace the worker,
+project or schema with `python --version` or a project-authored self-test.
+
+The existing offline Parent, durable Grant and process receiver are reused.
+Both approval preparation and dispatch compare the current Candidate command.
+Dispatch additionally requires its actual prior coding observation and commit.
+The verifier has no workload write roots: stdout is captured by the supervisor
+and stored in the existing controller event stream. A valid result requires
+successful finite process capture, the complete ordered 28-case set and all
+behavior outcomes; a bare stdout PASS is not evidence. These are protocol-only
+observations. Hydration removes inherited successors/retries and Parent
+validation rejects their reintroduction. No Workpack capability is granted.
+
+Temporary tests cover real worker subprocesses and a TEST-only coding/receiver
+fixture, without calling a model. A separate opt-in test uses the actual offline
+OS sandbox to verify normal behavior and denial of implementation-file rewrites.
+Its explicit host Python dependency reads are test/runtime bindings, not a new
+portable default or an installation permission. Recovery consumes a previously
+observed result without rerunning changed project code; that historical result
+does not attest to the current implementation bytes or satisfy fresh acceptance.
 
 JSON Schema support uses the existing optional `runtime-audit` dependencies.
 Importing the protocol and running its standard-library operations needs no
@@ -63,8 +91,9 @@ evaluator algorithms, Job leases, command receipts or Workpack acceptance. A
 synthetically supplied source identity is not a source-resolution attestation;
 captured bytes are not a read lease. Those distinctions are not optional.
 
-The next integration dependency is a Candidate-native independent verification
-command that runs the selected implementation and the full owned verification
-scope under an approved local Parent, then commits its real observation. Only
-verified Workpack results and prerequisite provenance may unlock the next coding
-stage in the existing SQLite controller. Protocol probe PASS alone cannot do so.
+The native command and real protocol observation are implemented. Remaining
+integration must verify the full owned semantic/artifact scope, predecessor
+capability provenance and current implementation/evidence bytes, then produce
+genuine Workpack acceptance before unlocking the next coding stage. The read-only
+completion audit still reports those unresolved requirements. Protocol probe
+PASS alone cannot satisfy the structural result's independent acceptance Oracle.

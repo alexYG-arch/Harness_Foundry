@@ -1884,6 +1884,12 @@ class Epoch2CandidateTests(unittest.TestCase):
         )
         self.assertEqual(manifest["architecture_epoch"], 2)
         self.assertEqual(manifest["requirement_epoch"], 26)
+        portable = json.loads((self.candidate / "validation/PORTABLE_FILE_MANIFEST.json").read_text())
+        for filename in ("lab_protocol.py", "lab_protocol_checks.py"):
+            ref = "tools/harness_foundry_runtime/" + filename
+            self.assertTrue((self.candidate / ref).is_file())
+            self.assertIn(ref, portable["files"])
+            self.assertNotIn(ref, manifest["runtime_module_sha256"])
         self.assertTrue(set(EPOCH24_CASES).issubset(manifest["required_adversarial_cases"]))
         self.assertEqual(
             manifest["source_authority_required_adversarial_cases"],

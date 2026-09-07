@@ -6,13 +6,13 @@ Current engineering objective: Foundry execution startup and its regressions.
 The user removed complete target Harness/media delivery from the active goal;
 this does not edit the separate frozen target Requirement or grant execution.
 
-Latest slice: executable Lab protocol foundations and independent behavior
-probes are packaged, and actual schema loading exposed and repaired the public
-Job request's invalid canonical schema ID. Current Workpack implementation
-ownership is separated from later shared Lab interface context. Startup/offline
-process integration and the first coding-stage transport have temporary test
-evidence; real model transport and native independent Workpack acceptance remain
-unverified. See [protocol support](LAB_PROTOCOL_SUPPORT.md) and
+Latest slice: the native Lab protocol verifier now calls the selected project's
+implementation through the approved offline receiver and commits its actual
+protocol observation. Coding prerequisites, immutable verification arguments,
+read-only worker scope and a stop before Workpack acceptance are enforced.
+Startup/offline process integration and the first coding-stage transport have
+temporary test evidence; real model transport and complete independent Workpack
+acceptance remain unverified. See [protocol support](LAB_PROTOCOL_SUPPORT.md) and
 [completion audit](WORKPACK_COMPLETION_AUDIT.md) for the boundaries. The sections
 below retain earlier checkpoints in chronological order; their test counts
 describe those individual source states.
@@ -744,6 +744,95 @@ protocol support does not dispatch that worker, implement every domain-specific
 Lab/target algorithm, or claim Workpack acceptance. A real model transport check
 also remains separate from TEST-only subprocess evidence. Completing the target
 video products is no longer the active Foundry engineering goal's endpoint.
+
+## Native project verification command and runtime integration
+
+`LAB-PROTOCOL` previously declared only its coding command, while independent
+verification was prose. The producer now adds `LAB-PROTOCOL-CHECK` after coding,
+materializes its worker by the declared Lab dependency on every relevant route,
+and projects a read-only command with no artifact-write roots. The independent
+Validator checks the worker/project/schema recipe, role, order and write scope.
+The native Task Bundle identifies the project's `external_lab.protocol` API.
+
+The public packaged `verification-plan` is read-only. The existing offline
+runtime binds its interpreter resource under the approved Parent, compares the
+fresh native recipe and requires the actual committed coding observation before
+dispatch. It imports no project code in the controller. The worker calls all
+28 independent behavior probes, capturing its structured report in the existing
+process result and SQLite observation/commit flow. Missing code, a broken schema
+implementation, incomplete output and worker substitution are not successful
+verification. A protocol PASS still grants no Workpack capability or successor.
+
+Integration also reproduced an inherited-continuation gap: the generic local
+hydrator retained an input transition's successor/retry policy for the new
+verification command. The producer-side hydrator now removes both and Parent
+validation rejects reintroduction. This fixes execution flow, not just validation
+labels. The earlier full regression was interrupted for this actual source
+change; it is not counted as a completed passing run.
+
+The initial 6-test integration suite passed in 32.769 seconds. The broader
+runtime/acceptance suite passed 35 tests in 183.320 seconds, including failed
+behavior and recovery without redispatch. The producer suite's 96 tests found
+one test-fixture path error: the new worker lives directly under `tools/`, not
+inside the runtime package. The fixture now uses that actual path; no missing-file
+check was removed. A focused invocation also needed the existing `tests` import
+path for a legacy shared test helper.
+
+Actual offline OS-sandbox verification passed in 2.684 seconds: correct project
+behavior runs and a project implementation's attempt to rewrite itself raises
+`PermissionError`, with the temporary tree unchanged. The first restricted
+attempt could not apply a nested sandbox and dispatched no worker. An outer
+runner approval preserved the inner sandbox; the subsequent venv startup failure
+was resolved by explicitly binding the verified host Python installation and
+loader/link metadata reads. The production receiver did not widen permissions,
+change argv to a different Python or fall back to unsandboxed execution.
+
+The next full run reproduced a minimal-startup packaging regression:
+`local_runtime.py` directly imported the newly optional Workpack verification
+component, which that small bundle does not provide. The shared receiver now
+loads it only for a native independent-verification command, following the
+existing optional coding-component pattern. Full Workpack bundles still ship
+and require the component; minimal bundles report provider unavailable if that
+unsupported route is selected. The original portable self-check stays intact.
+Its regression also executes an actual import and ordinary-command provider
+selection from the relocated minimal package. The corrected closure suite ran
+17 tests in 65.495 seconds, with 16 passed and one opt-in OS test skipped.
+The 28-test normal-project focused run passed 27 with one skip. Both interrupted
+full runs at that point were retained separately, not counted as successful
+complete regressions.
+
+Historical release-closure coverage then exposed a separate composition defect:
+the Epoch 1/2 producer hashed every Python module in the shared runtime directory
+into its control-plane manifest. Adding unrelated Lab support therefore changed
+the claimed control-plane implementation set. Both producers now derive that
+manifest from the exact module list they own. Epoch 2's independent and standalone
+Validators retain their original exact-set checks. Epoch 1's standalone checker
+had the same directory-scan coupling and its Factory checker lacked exact-set
+validation; both now independently require the declared control module set.
+Whole-package inventory still covers the Lab files. Regression assertions verify
+this separation on both
+control-plane generations. The Epoch 38 fixture's module-set and byte-copy
+expectations now include the genuinely declared Lab dependency. The two concrete
+failure reproductions passed after correction; the interrupted full run and the
+fresh complete/legacy-suite runs remain separately logged. The broader 86-test
+legacy run confirmed the Epoch 2 repair but exposed three Epoch 1 standalone
+failures; those are retained, not reported as a pass. A new regression rejects
+both omitted control modules and unrelated Lab-module records even when their
+file digests and surrounding inventory are internally consistent.
+
+The corrected complete legacy group passed 87 tests in 150.546 seconds. Latest
+core validation, `verify-spec`, `validate_skill.py` and `git diff --check` passed.
+The final integrated full regression completed in 755.144 seconds: 697 tests,
+680 passed and 17 explicitly opt-in tests skipped (`unittest-final-integrated.log`).
+The separate actual offline sandbox result above is additional evidence, not a
+claim that the 17 skipped tests ran. This verified source checkpoint is saved
+locally; no remote publication is included.
+
+Logs remain under ignored `build/project-verification.PpLizI/`. Formal Program
+revision 191 remains `PREBUILD_APPROVED_EXECUTION_NOT_AUTHORIZED`, with only
+`REOPEN` available and no active delegated intents. No formal Candidate mutation,
+model turn, Workpack execution, installation, lifecycle advance or GitHub push
+occurred. Full owned-scope acceptance and successor integration remain open.
 
 ## Reproduced gap
 

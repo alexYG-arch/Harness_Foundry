@@ -87,9 +87,28 @@ Oracles remain `NOT_EVALUATED`. `workpack_accepted` is false, no produced
 capability is granted and no successor starts. The full retained semantic
 contract defines the missing scope rather than hiding it behind a green check.
 
-Next, implement and bind the independent project verifier to those obligations,
+The native `LAB-PROTOCOL-CHECK` now invokes the project's actual protocol API and
+stores independent behavior observations through the approved offline receiver;
+see [protocol support](LAB_PROTOCOL_SUPPORT.md). Its scope is protocol primitives,
+not full Workpack acceptance. This audit conservatively still classifies command
+rows as process observations; it does not promote the nested protocol report to
+an artifact Oracle or a fresh implementation attestation.
+
+Next, complete the independent Workpack verifier for the remaining obligations,
 including the Lab implementation/self-tests, artifact validation/Oracles,
 predecessor capability provenance, Job lease reads, and failure returns. Only
 its actual verified results may feed the existing controller's Workpack
 acceptance transition. Neither this inspection interface nor test fixtures
 replace that provider or close Lab/Linkage/Harness/video acceptance.
+
+The next producer/acceptance dependency is structural-result ownership. The
+current `task_bundle_for_workpack` fallback places `WORKPACK_CONTROL_RESULT`
+among coding-visible artifact obligations, but its production rule requires
+completed command receipts and its Oracle excludes target self-report. Those
+results must be published by the post-observation acceptance controller, not
+used as a prerequisite for the coding command that precedes verification.
+The follow-on implementation must separate implementation outputs from these
+acceptance-owned outputs, retain the complete Workpack obligation set, bind
+current implementation/evidence bytes, and prove required capabilities before
+publishing a result or selecting a successor. The protocol report added here
+does not silently resolve that ownership or certify the remaining obligations.

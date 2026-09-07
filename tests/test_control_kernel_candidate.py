@@ -211,6 +211,12 @@ class ControlKernelCandidateTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
+        portable = json.loads((self.candidate / "validation/PORTABLE_FILE_MANIFEST.json").read_text())
+        for filename in ("lab_protocol.py", "lab_protocol_checks.py"):
+            ref = "tools/harness_foundry_runtime/" + filename
+            self.assertTrue((self.candidate / ref).is_file())
+            self.assertIn(ref, portable["files"])
+            self.assertNotIn(ref, manifest["runtime_module_sha256"])
         graph = json.loads(
             (self.candidate / "CONTROL_PLANE_PROGRAM_GRAPH.json").read_text(
                 encoding="utf-8"
@@ -329,6 +335,26 @@ class ControlKernelCandidateTests(unittest.TestCase):
         )
         self.assertIn("V2_9_CONTROL_KERNEL_MANIFEST_INVALID", self.finding_codes())
         self.assertIn("V2_9_CONTROL_KERNEL_MODULE_HASH_INVALID", self.finding_codes())
+
+    def test_control_manifest_rejects_missing_or_unrelated_owned_module_records(self) -> None:
+        self.compile()
+        path = self.candidate / "V2_9_CONTROL_KERNEL_MANIFEST.json"
+        original = json.loads(path.read_text())
+        for mutation in ("missing", "unrelated"):
+            with self.subTest(mutation=mutation):
+                manifest = deepcopy(original)
+                if mutation == "missing":
+                    manifest["runtime_module_sha256"].pop("tools/harness_foundry_runtime/constants.py")
+                else:
+                    ref = "tools/harness_foundry_runtime/lab_protocol.py"
+                    manifest["runtime_module_sha256"][ref] = hashlib.sha256((self.candidate / ref).read_bytes()).hexdigest()
+                manifest["manifest_sha256"] = json_hash({key: value for key, value in manifest.items() if key != "manifest_sha256"})
+                write_json(path, manifest)
+                self.refresh_closure_and_portable_hashes()
+                self.assertIn("V2_9_CONTROL_KERNEL_MODULE_HASH_INVALID", self.finding_codes())
+                result = self.run_self_check()
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn("V2_9_CONTROL_KERNEL_MODULE_HASH_INVALID", result.stdout)
 
     def test_hash_consistent_correction_mapping_tamper_fails_both_oracles(
         self,

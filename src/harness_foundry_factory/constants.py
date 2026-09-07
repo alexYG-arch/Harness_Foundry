@@ -79,7 +79,7 @@ PROJECT_WORKPACK_CONTRACTS = {
             "SHARED_PROTOCOL_LOCK_VALID": "ENGINEERING_DAG:SHARED_CONTROL_BASELINE_LOCK",
         },
         "produces": ("LAB_PROTOCOL_SCHEMA_PASS",),
-        "command_ids": ("LAB-CODEX-CODING",),
+        "command_ids": ("LAB-CODEX-CODING", "LAB-PROTOCOL-CHECK"),
         "execution_mode": "WORKPACK_EXECUTION",
     },
     "LAB-CLI": {

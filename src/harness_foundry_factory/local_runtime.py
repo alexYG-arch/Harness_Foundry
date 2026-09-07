@@ -65,6 +65,20 @@ def _offline_native(native):
              "code generation and Driver commands require their own transport")
 
 
+def _verification_provider(native):
+    if native.get("command_id") != "LAB-PROTOCOL-CHECK" and native.get("executor_role") != "INDEPENDENT_PROJECT_VERIFIER":
+        return None
+    # Like the coding adapter, this is an optional Workpack transport component.
+    # Minimal startup bundles share this local receiver but do not ship the
+    # complete Workpack planner. Ordinary offline commands must still work.
+    from importlib import import_module
+    try:
+        return import_module(__package__ + ".project_verification")
+    except ModuleNotFoundError as exc:
+        raise ControlKernelError("PROJECT_VERIFICATION_PROVIDER_UNAVAILABLE",
+                                 "this runtime does not include the project verification component") from exc
+
+
 def _selected_scope(native, job_id):
     contract = native.get("job_artifact_lease_contract")
     required = native.get("job_artifact_lease_required", False)
@@ -144,6 +158,8 @@ def bind_local_workpack_transition(transition, *, native_command, project_id, wo
     }
     result["result_schema"] = deepcopy(LOCAL_RESULT_SCHEMA)
     result["risk"].update(network_mode="DENY", secret_access=False)
+    if native_command.get("executor_role") == "INDEPENDENT_PROJECT_VERIFIER":
+        result.update(next_transition_id=None, stop_gate=None, retry_policy={"max_retries": 0})
     return result
 
 
@@ -220,6 +236,12 @@ def validate_local_execution(parent):
         for digest in (invocation["executable_sha256"], plan["receiver"]["executable_sha256"]):
             _require(isinstance(digest, str) and len(digest) == 64
                      and all(char in "0123456789abcdef" for char in digest), "executable byte binding is missing")
+        verification_provider = _verification_provider(native)
+        if verification_provider is not None:
+            verification_provider.validate_verification_invocation(parent, invocation)
+            _require(transition.get("next_transition_id") is None and transition.get("stop_gate") is None
+                     and transition.get("retry_policy") == {"max_retries": 0},
+                     "protocol verification must stop before Workpack acceptance or another command")
     return plan
 
 
@@ -287,6 +309,9 @@ class LocalRuntimeAdapter:
         expires = datetime.fromisoformat(parent["expires_at"].replace("Z", "+00:00"))
         _require(now < expires, "local Parent expired before process dispatch", "PARENT_AUTHORIZATION_EXPIRED")
         invocation = transition["command_contract"]["local_invocation"]
+        verification_provider = _verification_provider(invocation["native_command"])
+        if verification_provider is not None:
+            verification_provider.validate_verification_invocation(parent, invocation, events=events)
         roots, selected = _effective_roots(invocation["native_command"], invocation["job_id"], invocation["runtime_read_refs"])
         lease = {}
         result = {"status": "VALIDATION_FAILED", "reason_code": "LOCAL_PROCESS_PREFLIGHT_FAILED",
@@ -320,6 +345,13 @@ class LocalRuntimeAdapter:
         try:
             observed = CodexSandboxRunner(receiver["executable_abs"]).run(command)
             result.update(status=observed["status"], reason_code=observed["reason_code"], process_result=observed)
+            if verification_provider is not None:
+                proof = verification_provider.observe_project_verification(observed)
+                observed["project_verification"] = proof
+                if observed["status"] == "PASS":
+                    result.update(status="PASS" if proof["status"] == "PASS" else "VALIDATION_FAILED",
+                                  reason_code="PROJECT_PROTOCOL_VERIFIED_NOT_WORKPACK_ACCEPTED" if proof["status"] == "PASS"
+                                  else "PROJECT_VERIFICATION_EVIDENCE_INVALID")
         except (OSError, LocalProcessError) as exc:
             # Receiver errors after dispatch can follow partial command effects.
             # Do not report them as a proven pre-effect failure or retry them.

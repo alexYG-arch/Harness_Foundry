@@ -7471,6 +7471,9 @@ def task_bundle_for_workpack(
                 "check_scope": "LAB_PROTOCOL_PRIMITIVES_ONLY",
                 "optional_dependencies_extra": "runtime-audit",
                 "worker_rule": "CALL_IMPLEMENTATION_ONLY_INSIDE_AUTHORIZED_ISOLATED_WORKER",
+                "project_api_entrypoint": "external_lab.protocol",
+                "verification_command_id": "LAB-PROTOCOL-CHECK",
+                "worker_ref": "harness-resource://candidate/tools/lab_protocol_worker.py",
                 "not_covered": ["FULL_DYNAMIC_ARTIFACT_GRAPH", "EVALUATOR_ALGORITHMS", "JOB_LEASES",
                                 "COMMAND_RECEIPTS", "WORKPACK_ACCEPTANCE"],
             }

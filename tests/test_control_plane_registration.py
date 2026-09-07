@@ -549,6 +549,16 @@ class ControlPlaneRegistrationTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stdout)
         self.assertEqual(json.loads(completed.stdout)["status"], "PASS")
+        # This deliberately minimal startup closure has the shared local
+        # receiver, not the optional full Workpack verification planner.
+        self.assertFalse((self.candidate / "tools/harness_foundry_runtime/project_verification.py").exists())
+        code = ("import sys; sys.path.insert(0, 'tools'); "
+                "from harness_foundry_runtime.local_runtime import _verification_provider; "
+                "assert _verification_provider({'command_id':'TEST-LOCAL','executor_role':'LOCAL_PROCESS'}) is None; "
+                "print('BASE_LOCAL_RECEIVER_IMPORT_PASS')")
+        imported = subprocess.run([sys.executable, "-B", "-c", code], cwd=self.candidate,
+                                  capture_output=True, text=True, check=False)
+        self.assertEqual(imported.returncode, 0, imported.stdout + imported.stderr)
 
     def test_registration_commits_once_without_starting_driver_or_workpack(self) -> None:
         before = self._candidate_snapshot()

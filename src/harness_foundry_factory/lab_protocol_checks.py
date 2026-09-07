@@ -10,6 +10,19 @@ import hashlib
 import json
 
 
+PROTOCOL_CASE_IDS = (
+    "schema-valid", "schema-type", "schema-bound", "schema-missing", "schema-extra",
+    "schema-external-ref", "schema-wrong-dialect", "public-job-unlisted-url",
+    "public-job-duration_target_seconds", "public-job-output_video_count",
+    "public-job-target_skill_execution_enabled", "public-job-skill_entrypoint_ref",
+    "registry-load", "registry-resolve", "registry-unknown", "registry-malformed",
+    "operator-known", "operator-unknown", "evidence-exact-bytes", "evidence-unknown",
+    "evidence-not-bytes", "url-normalization", "url-not-repository", "job-immutable-identity",
+    "job-revision-not-identity", "job-resolution-fields-required", "schema-content-binding",
+    "schema-renderer-is-not-content",
+)
+
+
 def verify_protocol_primitives(api, job_request_schema):
     """Call actual API behavior; neither stdout PASS nor self-tests are inputs.
 

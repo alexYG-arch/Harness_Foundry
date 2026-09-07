@@ -903,6 +903,10 @@ def _expected_workpack_commands(
             command["test_repository_write_policy"] = (
                 "FORBIDDEN_VERIFY_SNAPSHOT_BEFORE_AFTER"
             )
+        if command.get("executor_role") == "INDEPENDENT_PROJECT_VERIFIER":
+            command["allowed_write_roots"] = []
+            command["shared_artifact_write_roots"] = []
+            command["artifact_write_scope_mode"] = "NONE"
         command["command_sha256"] = _hash_without_field(
             command, "command_sha256"
         )
@@ -6218,6 +6222,8 @@ def _check_controlled_workpack_runtime_executable_closure(
         "workpack_acceptance": "tools/harness_foundry_runtime/workpack_acceptance.py",
         "lab_protocol": "tools/harness_foundry_runtime/lab_protocol.py",
         "lab_protocol_checks": "tools/harness_foundry_runtime/lab_protocol_checks.py",
+        "project_verification": "tools/harness_foundry_runtime/project_verification.py",
+        "lab_protocol_worker": "tools/lab_protocol_worker.py",
         "entrypoint": "tools/workpack_runtime.py",
         "contract": "validation/CONTROLLED_WORKPACK_RUNTIME_CONTRACT.json",
         "commands": f"commands/{workpack_id}.commands.json",
@@ -7299,6 +7305,12 @@ def _check_v2_9_generic_control_kernel(root: Path) -> list[dict[str, Any]]:
 
     module_hashes = manifest.get("runtime_module_sha256")
     schema_hashes = manifest.get("schema_sha256")
+    expected_control_modules = {"tools/harness_foundry_runtime/" + name for name in (
+        "__init__.py", "constants.py", "models.py", "store.py", "control_kernel.py",
+        "local_runtime.py", "local_process.py", "startup_runtime.py", "requirement_completion.py",
+    )}
+    if not isinstance(module_hashes, Mapping) or set(module_hashes) != expected_control_modules:
+        findings.append(_finding("V2_9_CONTROL_KERNEL_MODULE_HASH_INVALID", "control implementation module set differs"))
     if (
         manifest.get("manifest_sha256")
         != _hash_without_field(manifest, "manifest_sha256")
@@ -14897,6 +14909,25 @@ def _check_three_projects(root: Path) -> list[dict[str, Any]]:
     return findings
 
 
+def _project_verification_command_findings(command: Mapping[str, Any]) -> list[dict[str, Any]]:
+    if command.get("command_id") != "LAB-PROTOCOL-CHECK":
+        return []
+    worker = "harness-resource://candidate/tools/lab_protocol_worker.py"
+    repository = "harness-resource://execution/project_start_packages/external_lab/repository"
+    schema = "harness-resource://candidate/validation/PUBLIC_SKILL_JOB_INTERFACE.json"
+    executable = "harness-resource://execution/project_start_packages/external_lab/.venv/bin/python"
+    expected = {"protocol": "LAB_PROTOCOL_BEHAVIOR_V1", "node_id": "LAB_BOOTSTRAP", "workpack_id": "LAB-PROTOCOL",
+                "worker_ref": worker, "project_repository_ref": repository, "project_api_module": "external_lab.protocol",
+                "schema_ref": schema, "evidence_scope": "LAB_PROTOCOL_PRIMITIVES_ONLY", "workpack_accepted": False}
+    if (command.get("verification_contract") != expected or command.get("executor_role") != "INDEPENDENT_PROJECT_VERIFIER"
+            or command.get("argv") != [executable, "-I", "-B", worker, "--project-root", repository, "--schema-file", schema]
+            or command.get("cwd_absolute") != repository or command.get("allowed_write_roots") != []
+            or command.get("expected_exit_codes") != [0] or command.get("auto_execute") is not False
+            or command.get("authorization_ref") is not None or command.get("shell") is not False):
+        return [_finding("PROJECT_VERIFICATION_COMMAND_INVALID", "LAB-PROTOCOL-CHECK")]
+    return []
+
+
 def _check_project_workpack_execution_contracts(
     root: Path,
     *,
@@ -14988,6 +15019,7 @@ def _check_project_workpack_execution_contracts(
         for command in global_commands:
             if not isinstance(command, dict) or not command.get("command_id"):
                 continue
+            findings.extend(_project_verification_command_findings(command))
             command_id = str(command["command_id"])
             commands_by_id[command_id] = command
             executable = _contract_path(

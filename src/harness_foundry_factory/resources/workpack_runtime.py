@@ -44,6 +44,11 @@ def main(argv: list[str] | None = None) -> int:
     coding.add_argument("--workpack-id", required=True)
     coding.add_argument("--command-id", required=True)
     coding.add_argument("--job-id")
+    verification = subparsers.add_parser("verification-plan", help="plan the Candidate-owned project verifier; never execute it")
+    verification.add_argument("--candidate-root", type=Path, required=True)
+    verification.add_argument("--node-id", required=True)
+    verification.add_argument("--workpack-id", required=True)
+    verification.add_argument("--command-id", required=True)
     for command_name in ("completion-plan", "audit-completion"):
         completion = subparsers.add_parser(command_name, help="read completion obligations/evidence; never accept or execute a Workpack")
         completion.add_argument("--candidate-root", type=Path, required=True)
@@ -72,6 +77,9 @@ def main(argv: list[str] | None = None) -> int:
             protocol = importlib.import_module("harness_foundry_runtime.coding_protocol")
             result = protocol.plan_coding_command(args.candidate_root, args.node_id, args.workpack_id,
                                                   args.command_id, job_id=args.job_id)
+        elif args.command == "verification-plan":
+            verifier = importlib.import_module("harness_foundry_runtime.project_verification")
+            result = verifier.plan_project_verification(args.candidate_root, args.node_id, args.workpack_id, args.command_id)
         elif args.command in {"completion-plan", "audit-completion"}:
             acceptance = importlib.import_module("harness_foundry_runtime.workpack_acceptance")
             if args.command == "completion-plan":
@@ -118,7 +126,7 @@ def main(argv: list[str] | None = None) -> int:
     # that outcome to the caller instead of treating JSON serialization as PASS.
     return 0 if result.get("status") in {
         "PASS", "READY_FOR_A3_PREPARATION", "DECLARED_WORKPACK_PLAN", "DECLARED_CODING_TASK",
-        "DECLARED_WORKPACK_COMPLETION_PLAN",
+        "DECLARED_WORKPACK_COMPLETION_PLAN", "DECLARED_PROJECT_VERIFICATION",
     } else 1
 
 
