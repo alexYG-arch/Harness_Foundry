@@ -38,6 +38,12 @@ def main(argv: list[str] | None = None) -> int:
     plan = subparsers.add_parser("plan")
     plan.add_argument("--candidate-root", type=Path, required=True)
     plan.add_argument("--node-id", required=True)
+    coding = subparsers.add_parser("coding-plan", help="read a project coding task; never invoke a model")
+    coding.add_argument("--candidate-root", type=Path, required=True)
+    coding.add_argument("--node-id", required=True)
+    coding.add_argument("--workpack-id", required=True)
+    coding.add_argument("--command-id", required=True)
+    coding.add_argument("--job-id")
     hydrate = subparsers.add_parser("hydrate")
     hydrate.add_argument("--candidate-root", type=Path, required=True)
     hydrate.add_argument("--execution-root", type=Path, required=True)
@@ -55,6 +61,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "plan":
             result = plan_workpack_node(args.candidate_root, args.node_id)
+        elif args.command == "coding-plan":
+            protocol = importlib.import_module("harness_foundry_runtime.coding_protocol")
+            result = protocol.plan_coding_command(args.candidate_root, args.node_id, args.workpack_id,
+                                                  args.command_id, job_id=args.job_id)
         elif args.command == "hydrate":
             result = hydrate_workpack_runtime(
                 args.candidate_root,
@@ -93,7 +103,7 @@ def main(argv: list[str] | None = None) -> int:
     # A completed provider call can still report a failed Workpack. Propagate
     # that outcome to the caller instead of treating JSON serialization as PASS.
     return 0 if result.get("status") in {
-        "PASS", "READY_FOR_A3_PREPARATION", "DECLARED_WORKPACK_PLAN",
+        "PASS", "READY_FOR_A3_PREPARATION", "DECLARED_WORKPACK_PLAN", "DECLARED_CODING_TASK",
     } else 1
 
 

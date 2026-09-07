@@ -13,6 +13,7 @@ import sys
 import unittest
 
 from harness_foundry_factory import workpack_runtime as runtime
+from harness_foundry_factory.coding_protocol import plan_coding_command
 from harness_foundry_factory.compiler import compile_start_package
 from harness_foundry_factory.local_runtime import bind_local_workpack_transition
 from harness_foundry_factory.models import content_sha256
@@ -30,6 +31,14 @@ class NormalWorkpackRuntimeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         startup.NormalLocalStartupTests.setUpClass.__func__(cls)
+        cls.semantic_candidate = cls.root / "coding-semantic-candidate"
+        ir = semantic_support.semantic_ir(cls.semantic_candidate, cls.root / "coding-planned-execution")
+        ir["target"].update(cls.target_overrides)
+        compile_start_package(
+            ir, spec_root=startup.ROOT.parent / "Harness_Foundry_v2_8_Start_Package",
+            staging_root=cls.root / "coding-semantic-staging", candidate_root=cls.semantic_candidate,
+            created_at="2026-09-07T00:00:00Z",
+        )
 
     @classmethod
     def tearDownClass(cls):
@@ -87,6 +96,57 @@ class NormalWorkpackRuntimeTests(unittest.TestCase):
         self.assertFalse(plan["writes_performed"])
         self.assertEqual(before, runtime.candidate_identity(self.candidate))
 
+    def test_project_coding_input_keeps_the_complete_task_and_real_order(self):
+        before = runtime._tree_snapshot(self.root)
+        node = runtime.plan_workpack_node(self.semantic_candidate, "LAB_BOOTSTRAP")
+        for index, unit in enumerate(node["units"]):
+            planned = plan_coding_command(self.semantic_candidate, "LAB_BOOTSTRAP", unit["workpack_id"], "LAB-CODEX-CODING")
+            task = planned["task_input"]
+            self.assertEqual(task["task_bundle"], unit["task_bundle"])
+            self.assertEqual(task["capsule"], unit["capsule"])
+            self.assertEqual(task["native_command"], unit["commands"][0])
+            self.assertEqual(task["required_prior_workpacks"], [item["workpack_id"] for item in node["units"][:index]])
+            self.assertEqual(task["required_predecessor_nodes"], ["PROGRAM_DRIVER_RUNTIME_VERIFIED"])
+            self.assertEqual(json.loads(planned["stdin_prompt"].split("\n", 1)[1]), task)
+            self.assertFalse(planned["model_invoked"])
+        self.assertEqual(before, runtime._tree_snapshot(self.root))
+
+    def test_coding_selection_cannot_cross_ownership_or_relabel_an_offline_command(self):
+        for node, workpack, command in [
+            ("LAB_BOOTSTRAP", "LINK-PROTOCOL", "LINK-CODEX-CODING"),
+            ("LAB_SELF_CONFORMANCE_PASS", "LAB-SELFTEST", "LAB-SELFTEST"),
+        ]:
+            with self.subTest(node=node), self.assertRaises(runtime.RuntimeContractError):
+                plan_coding_command(self.candidate, node, workpack, command)
+        root = runtime.plan_workpack_node(self.candidate, runtime.NODE_ID)["units"][0]
+        with self.assertRaises(runtime.RuntimeContractError) as caught:
+            plan_coding_command(self.candidate, runtime.NODE_ID, root["workpack_id"], "ROOT-CODEX-CODING")
+        self.assertEqual(caught.exception.code, "CODING_TASK_BUNDLE_REQUIRED")
+
+    def test_packaged_coding_plan_is_read_only_and_does_not_claim_runtime_readiness(self):
+        before = runtime._tree_snapshot(self.root)
+        completed = subprocess.run([
+            sys.executable, "-B", str(self.semantic_candidate / runtime.RUNTIME_ENTRYPOINT_REF), "coding-plan",
+            "--candidate-root", str(self.semantic_candidate), "--node-id", "LINKAGE_BOOTSTRAP",
+            "--workpack-id", "LINK-CLI", "--command-id", "LINK-CODEX-CODING",
+        ], capture_output=True, text=True, timeout=60)
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["status"], "DECLARED_CODING_TASK")
+        self.assertEqual(result["task_input"]["required_prior_workpacks"], ["LINK-PROTOCOL"])
+        self.assertFalse(result["execution_authorized"])
+        self.assertFalse(result["model_invoked"])
+        self.assertTrue(result["unresolved_runtime_bindings"])
+        self.assertEqual(before, runtime._tree_snapshot(self.root))
+
+    def test_coding_plan_does_not_invent_a_job_or_a_missing_semantic_task(self):
+        with self.assertRaises(runtime.RuntimeContractError) as missing:
+            plan_coding_command(self.candidate, "LAB_BOOTSTRAP", "LAB-PROTOCOL", "LAB-CODEX-CODING")
+        self.assertEqual(missing.exception.code, "CODING_TASK_BUNDLE_REQUIRED")
+        with self.assertRaises(runtime.RuntimeContractError):
+            plan_coding_command(self.semantic_candidate, "LAB_BOOTSTRAP", "LAB-PROTOCOL", "LAB-CODEX-CODING",
+                                job_id="UNDECLARED-JOB")
+
     def test_native_local_command_keeps_repository_reads_through_final_projection(self):
         # Previously this final native command had no reads at all. Checking
         # only the initial producer helper missed the later refresh overwrite.
@@ -128,7 +188,7 @@ class NormalWorkpackRuntimeTests(unittest.TestCase):
         self.assertIn("PROJECT_WORKPACK_COMMAND_BINDING_INVALID", {item["code"] for item in report["blocking_findings"]})
 
     def test_candidate_packages_local_runtime_import_closure(self):
-        for name in ("local_runtime.py", "local_process.py", "startup_runtime.py"):
+        for name in ("local_runtime.py", "local_process.py", "startup_runtime.py", "coding_protocol.py"):
             ref = f"tools/harness_foundry_runtime/{name}"
             self.assertEqual((self.candidate / ref).read_bytes(),
                              (startup.ROOT / "src/harness_foundry_factory" / name).read_bytes())
@@ -203,6 +263,15 @@ class NormalWorkpackRuntimeTests(unittest.TestCase):
         make_path_writable(path.parent)
         path.unlink()
         findings = _check_controlled_workpack_runtime_executable_closure(missing)
+        self.assertIn("CONTROLLED_WORKPACK_RUNTIME_ARTIFACT_MISSING", {item["code"] for item in findings})
+
+    def test_independent_validator_requires_the_coding_protocol_in_workpack_bundle(self):
+        candidate = self.root / "missing-coding-protocol"
+        shutil.copytree(self.candidate, candidate)
+        path = candidate / "tools/harness_foundry_runtime/coding_protocol.py"
+        make_path_writable(path.parent)
+        path.unlink()
+        findings = _check_controlled_workpack_runtime_executable_closure(candidate)
         self.assertIn("CONTROLLED_WORKPACK_RUNTIME_ARTIFACT_MISSING", {item["code"] for item in findings})
 
     def test_plan_rejects_index_identity_drift_even_when_file_inventory_is_current(self):

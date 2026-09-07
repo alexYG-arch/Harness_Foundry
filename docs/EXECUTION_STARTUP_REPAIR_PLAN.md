@@ -525,6 +525,52 @@ native Workpack/artifact acceptance, complete Lab/Linkage/Harness execution and
 the three target videos. This entrypoint is a tested prerequisite, not evidence
 that those deliverables exist.
 
+### Coding input and result protocol
+
+The first Lab Workpack is a native coding command, not an offline local
+process. The new [coding protocol boundary](CODING_COMMAND_PROTOCOL.md)
+provides Candidate-derived input planning through the packaged `coding-plan`
+entrypoint and classifies the observed Codex JSONL lifecycle. It retains the
+full selected task/capsule, native Job scope and declared ordering; it does not
+activate any of them. The producer packages the helper and the independent
+Validator requires that runtime module. A missing semantic task bundle is an
+explicit unsupported input, not a generic prompt fallback.
+
+The initial focused test incorrectly expected structural-only fixtures to
+contain semantic task bundles. The corrected tests retain that case as a
+negative and use the existing explicit-production Requirement fixture for
+positive task-planning checks. Both Candidates are normally compiled without
+mocking the Compiler/Validator or injecting startup execution contracts. This
+did not require changing the Requirement semantics or weakening validation.
+The first 25-test focused protocol/normal-Workpack suite passed in 7.112 seconds.
+The complete regression then found a packaging regression introduced in this
+slice: adding the coding helper to the common control bundle gave historical
+control-only configurations a missing Workpack import. The failed full run was
+stopped and its log retained. The producer now includes the helper only with
+the Workpack provider, and its independent completeness check lives at that
+same boundary. A missing-helper test and the historical control-only suites
+cover the correction; this is not a Validator exemption.
+
+After correction, the focused protocol, normal Workpack and historical
+control-only/registration suite passed all 45 tests in 26.372 seconds. The final
+complete suite passed 647 tests in 617.640 seconds (631 passed, 16 opt-in real
+sandbox tests skipped). The unchanged sandbox receiver was not exercised live
+again in this slice. Official core validation passed 26 selectors covering 41
+capabilities; `verify-spec`, `validate_skill.py` and `git diff --check` passed.
+Raw failed-run, focused and final-run output is retained in the ignored local
+`build/coding-protocol.uMRiw2/` directory. The formal Program remained revision
+191 at `PREBUILD_APPROVED_EXECUTION_NOT_AUTHORIZED`; its Candidate, Execution
+Root, grant and frozen Requirement were not changed.
+
+Installed Codex CLI 0.153.3 help and current official documentation were checked
+without calling a model. Protocol tests include a real local Python process
+that echoes TEST JSON; this is not Codex generation. A complete model turn is
+classified separately from Workpack acceptance. Missing/truncated/malformed
+captures and timeout cannot authorize a retry. The model dispatch adapter,
+effective configuration/service authorization, durable model outcome capture
+and independent native Workpack acceptance remain unimplemented. This slice
+must not be reported as the full execution connector or a completed build.
+
 ## Reproduced gap
 
 The normal producer declares `SHARED_CONTROL_BASELINE_LOCK` but previously

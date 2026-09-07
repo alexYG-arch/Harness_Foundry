@@ -6207,6 +6207,7 @@ def _check_controlled_workpack_runtime_executable_closure(
         return findings + [_finding("CONTROLLED_WORKPACK_RUNTIME_CONTRACT_INVALID", "no applicable runtime profile")]
     refs = {
         "provider": "tools/harness_foundry_runtime/workpack_runtime.py",
+        "coding_protocol": "tools/harness_foundry_runtime/coding_protocol.py",
         "entrypoint": "tools/workpack_runtime.py",
         "contract": "validation/CONTROLLED_WORKPACK_RUNTIME_CONTRACT.json",
         "commands": f"commands/{workpack_id}.commands.json",

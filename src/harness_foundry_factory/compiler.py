@@ -113,6 +113,7 @@ FACTORY_IMPLEMENTATION_PATHS = (
     "src/harness_foundry_factory/resources/workpack_runtime.py",
     "src/harness_foundry_factory/resources/main_execution_package_validation.py",
     "src/harness_foundry_factory/workpack_runtime.py",
+    "src/harness_foundry_factory/coding_protocol.py",
     "src/harness_foundry_factory/main_execution_package_validation.py",
     "src/harness_foundry_factory/service.py",
     "src/harness_foundry_factory/models.py",
@@ -12424,7 +12425,8 @@ def _write_epoch4_runtime_store_dependency_closure(
     )
     module_refs = list(EPOCH40_CONTROL_RUNTIME_MODULE_REFS)
     if include_workpack_runtime:
-        module_refs.append(EPOCH45_WORKPACK_RUNTIME_MODULE_REF)
+        module_refs.extend((EPOCH45_WORKPACK_RUNTIME_MODULE_REF,
+                            "tools/harness_foundry_runtime/coding_protocol.py"))
     if include_package_validation_runtime:
         module_refs.append(EPOCH49_PACKAGE_VALIDATION_RUNTIME_MODULE_REF)
     for module_ref in module_refs:
