@@ -2,13 +2,13 @@
 
 Status: IN_PROGRESS. A bound Execution Root is not a running Harness.
 
-Latest slice: public runtime readback, human approval and revocation now reach
-the existing native startup and offline Job path in actual temporary integration
-tests. Fresh-controller initialization and startup are implemented; model
-transport, native Workpack acceptance, the full build DAG and target media remain
-unverified. See
-[Public runtime authorization entrypoints](#public-runtime-authorization-entrypoints)
-for the current boundary. The sections below retain earlier checkpoints in
+Latest slice: completion planning/evidence audit now retains the full Workpack
+contract and separates command observations and shared-artifact Schema checks
+from still-unimplemented semantic acceptance. Startup/offline process integration
+and the first coding-stage transport have temporary test evidence; real model
+generation, native Workpack acceptance, the full build DAG and target media remain
+unverified. See [Workpack completion audit](WORKPACK_COMPLETION_AUDIT.md) for the
+current boundary. The sections below retain earlier checkpoints in
 chronological order; their test counts describe those individual source states.
 
 ## Cumulative implementation evidence
@@ -626,6 +626,56 @@ then permit its declared successor only from accepted evidence. Do not derive
 that capability from the model message, JSONL completion, file existence or an
 offline process exit alone. Until that provider exists, keep the explicit
 predecessor stop instead of inserting a synthetic acceptance receipt.
+
+## Workpack completion planning and observation checkpoint
+
+The producer now packages `completion-plan` and `audit-completion` with their
+runtime import closure; the independent Validator checks that closure. The
+planner retains complete native Workpack/task contracts, not only their output
+schemas. The audit observes matched committed command attempts and shared JSON
+schemas. It explicitly leaves semantic validation and Oracles unevaluated,
+does not read Job artifacts without a lease, and never grants a capability or
+advances a successor. This is not the independent acceptance provider described
+in the next implementation dependency above.
+
+The first read-only audit test reproduced SQLite sidecar writes. The audit now
+opens only a disposable copy of the database and its WAL, with source-change
+detection, leaving the source controller and its auxiliary files untouched.
+A test-fixture correction was also required: an open connection alone did not
+retain the committed WAL; the test now holds an actual read transaction. This
+diagnostic copy is not used as a transactionally locked backup or runtime
+authorization source. See [the audit boundary](WORKPACK_COMPLETION_AUDIT.md).
+
+Integration also reproduced an undeclared-dependency failure in `package-local`
+and thus core validation. The portable producer now derives import declarations
+and its optional-dependency manifest from the same route table, verifies the
+matching installation extras, and diagnoses a missing manifest route. The new
+dependencies remain optional: actual relocated `-S` startup passes, and an
+audit without the extras reports unavailable Schema evidence. This fixes the
+producer contract rather than simply bypassing the dependency scanner.
+
+The corrected focused portable/Workpack suite passed 38 tests in 36.086 seconds.
+An earlier targeted invocation failed to import an existing shared test helper;
+the successful invocation includes the repository's `tests` path. The first
+full run was stopped after the actual portable failure was identified and before
+the source correction; it is not a completed regression. Failed/interrupted and
+corrected logs are retained under ignored `build/workpack-completion.onL38N/`.
+
+The final complete suite ran 674 tests in 665.735 seconds: 658 passed and the
+16 opt-in offline sandbox tests were skipped by the restricted runner. Those
+16 are not claimed as executed in this slice; their separately run evidence
+belongs to the preceding checkpoint. Core validation (26 exact selectors),
+`verify-spec`, `validate_skill.py` and `git diff --check` passed. No real model
+request, target installation, media generation or formal Workpack ran.
+
+Read-only formal handoff still rejects the epoch 29 Candidate under the repaired
+current Validator: its old startup/runtime artifacts and command/read bindings
+do not meet the current producer contract. Program revision 191 remains
+`PREBUILD_APPROVED_EXECUTION_NOT_AUTHORIZED`, with only `REOPEN` allowed and no
+active delegated intents. No formal Candidate, authoring state or Execution
+Root was changed. Fresh authoring authority and an independent semantic
+acceptance provider are still required; these tests do not close the target
+Harness, Lab/Linkage or the three requested videos.
 
 ## Reproduced gap
 

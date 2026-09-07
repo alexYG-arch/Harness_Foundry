@@ -12,6 +12,7 @@ import sys
 import tempfile
 import unittest
 
+from harness_foundry_factory.models import content_sha256
 from harness_foundry_factory.portable import (
     PACKAGE_ROOT_URI,
     PORTABLE_MANIFEST_NAME,
@@ -67,8 +68,13 @@ class PortableLocalCliTests(unittest.TestCase):
         self.assertFalse(manifest["certification_claimed"])
         self.assertEqual(
             [item["dependency_id"] for item in manifest["dependencies"]],
-            ["python", "cryptography", "HARNESS_FOUNDRY_V2_8_START_PACKAGE"],
+            ["python", "cryptography", "jsonschema", "referencing", "HARNESS_FOUNDRY_V2_8_START_PACKAGE"],
         )
+        for dependency in manifest["dependencies"]:
+            if dependency["dependency_id"] in {"jsonschema", "referencing"}:
+                self.assertFalse(dependency["required_for_core_startup"])
+                self.assertEqual(dependency["extra"], "runtime-audit")
+                self.assertEqual(dependency["required_for_commands"], ["audit-completion"])
         self.assertEqual(manifest["dependency_discovery"]["undeclared_external_imports"], [])
         self.assertFalse(any(path.startswith("runs/") for path in manifest["files"]))
         self.assertFalse(any(path.startswith("tests/") for path in manifest["files"]))
@@ -87,7 +93,7 @@ class PortableLocalCliTests(unittest.TestCase):
                 "-S",
                 "-B",
                 "-c",
-                "import harness_foundry_factory.compiler; print('CORE_IMPORT_PASS')",
+                "import harness_foundry_factory.compiler; import harness_foundry_factory.workpack_acceptance; print('CORE_IMPORT_PASS')",
             ],
             cwd=ROOT,
             env=environment,
@@ -125,6 +131,7 @@ class PortableLocalCliTests(unittest.TestCase):
         check = subprocess.run(
             [
                 sys.executable,
+                "-S",  # Real relocated startup without site-packages/optional extras.
                 "-B",
                 "tools/hffactory.py",
                 "self-check-diagnostic",
@@ -148,6 +155,37 @@ class PortableLocalCliTests(unittest.TestCase):
         self.assertFalse(diagnostic["security_authority"])
         self.assertFalse(diagnostic["certification_claimed"])
         self.assertFalse(diagnostic["candidate_self_proof_claimed"])
+        for dependency in diagnostic["dependencies"]:
+            if dependency["dependency_id"] in {"cryptography", "jsonschema", "referencing"}:
+                self.assertFalse(dependency["available"])
+
+    def test_portable_optional_imports_require_the_matching_install_extra(self) -> None:
+        source = self.root / "source-missing-extra"
+        self._copy_source(source)
+        metadata = source / "pyproject.toml"
+        metadata.write_text(metadata.read_text().replace(
+            'runtime-audit = ["jsonschema>=4.18,<5", "referencing>=0.28,<1"]',
+            'runtime-audit = []'))
+        output = self.root / "missing-extra-output"
+        with self.assertRaises(PortablePackageError) as blocked:
+            package_local(output, source_root=source)
+        self.assertEqual(blocked.exception.code, "OPTIONAL_DEPENDENCY_DECLARATION_INVALID")
+        self.assertFalse(output.exists())
+
+    def test_self_check_detects_missing_optional_route_even_with_valid_manifest_digest(self) -> None:
+        output = self.root / "missing-audit-route"
+        package_local(output)
+        path = output / PORTABLE_MANIFEST_NAME
+        manifest = json.loads(path.read_text())
+        manifest["dependencies"] = [item for item in manifest["dependencies"]
+                                    if item["dependency_id"] != "referencing"]
+        manifest.pop("manifest_sha256")
+        manifest["manifest_sha256"] = content_sha256(manifest)
+        path.write_text(json.dumps(manifest))
+        completed = self._run_cli("self-check-diagnostic", "--package-root", str(output))
+        self.assertEqual(completed.returncode, 6, completed.stdout)
+        self.assertIn("DEPENDENCY_DECLARATION_MISMATCH",
+                      {item["code"] for item in json.loads(completed.stdout)["findings"]})
 
     def test_self_check_hash_failure_is_diagnostic_and_read_only(self) -> None:
         output = self.root / "portable-tamper"

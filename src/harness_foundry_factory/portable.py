@@ -44,7 +44,31 @@ ALLOWED_TREES = (
     ("src/harness_foundry_factory", {".py"}),
     ("tools", {".py"}),
 )
-DECLARED_EXTERNAL_IMPORTS = {"cryptography"}
+# One route declaration feeds both import discovery and the portable manifest.
+# Package names equal import names for these three explicitly supported extras.
+OPTIONAL_PYTHON_DEPENDENCIES = (
+    {
+        "dependency_id": "cryptography",
+        "version_constraint": ">=45,<49",
+        "extra": "security",
+        "profile": "OPTIONAL_SECURITY_HARDENING_AND_LEGACY_CANDIDATE_VALIDATION",
+        "required_for_commands": ["candidate-authoring", "validate-candidate"],
+    },
+    {
+        "dependency_id": "jsonschema",
+        "version_constraint": ">=4.18,<5",
+        "extra": "runtime-audit",
+        "profile": "OPTIONAL_WORKPACK_SCHEMA_AUDIT",
+        "required_for_commands": ["audit-completion"],
+    },
+    {
+        "dependency_id": "referencing",
+        "version_constraint": ">=0.28,<1",
+        "extra": "runtime-audit",
+        "profile": "OPTIONAL_WORKPACK_SCHEMA_AUDIT",
+        "required_for_commands": ["audit-completion"],
+    },
+)
 EXCLUDED_SURFACES = (
     ".git",
     "AUTHORITY_TRUST_ROOT.json",
@@ -284,6 +308,13 @@ def self_check_diagnostic(package_root: str | Path) -> dict[str, Any]:
                         "message": "declared dependency discovery is stale",
                     }
                 )
+            if manifest.get("dependencies") != _declared_dependencies(root):
+                findings.append(
+                    {
+                        "code": "DEPENDENCY_DECLARATION_MISMATCH",
+                        "message": "portable dependencies differ from the source route declarations",
+                    }
+                )
         except PortablePackageError as exc:
             findings.append(
                 {"code": exc.code, "message": exc.message, **exc.details}
@@ -452,7 +483,8 @@ def _scan_source(root: Path, files: list[str]) -> dict[str, Any]:
                         local_imports,
                         external_imports,
                     )
-    undeclared = external_imports - DECLARED_EXTERNAL_IMPORTS
+    declared = {item["dependency_id"] for item in _optional_python_dependencies(root)}
+    undeclared = external_imports - declared
     if undeclared:
         raise PortablePackageError(
             "UNDECLARED_RUNTIME_DEPENDENCY",
@@ -467,6 +499,52 @@ def _scan_source(root: Path, files: list[str]) -> dict[str, Any]:
         "external_imports": sorted(external_imports),
         "undeclared_external_imports": [],
     }
+
+
+def _optional_python_dependencies(root: Path) -> list[dict[str, Any]]:
+    """Verify that every portable optional route is installable via its extra."""
+    try:
+        project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+        extras = project["project"]["optional-dependencies"]
+        if not isinstance(extras, dict):
+            raise ValueError("optional-dependencies must be a table")
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise PortablePackageError(
+            "OPTIONAL_DEPENDENCY_DECLARATION_INVALID", "Cannot read optional dependency extras"
+        ) from exc
+    result = []
+    for item in OPTIONAL_PYTHON_DEPENDENCIES:
+        requirement = item["dependency_id"] + item["version_constraint"]
+        declarations = extras.get(item["extra"], [])
+        if not isinstance(declarations, list) or requirement not in declarations:
+            raise PortablePackageError(
+                "OPTIONAL_DEPENDENCY_DECLARATION_INVALID",
+                "Portable dependency must match its pyproject optional extra",
+                details={"extra": item["extra"], "requirement": requirement},
+            )
+        result.append({**item, "kind": "OPTIONAL_PYTHON_PACKAGE",
+                       "required_for_core_startup": False,
+                       "discovery": "importlib.util.find_spec"})
+    return result
+
+
+def _declared_dependencies(root: Path) -> list[dict[str, Any]]:
+    return [
+        {
+            "dependency_id": "python", "kind": "RUNTIME",
+            "version_constraint": ">=3.11,<4", "required_for_core_startup": True,
+            "discovery": "sys.version_info",
+        },
+        *_optional_python_dependencies(root),
+        {
+            "dependency_id": HF28_PACKAGE_ID,
+            "kind": "OPTIONAL_PHYSICAL_SIBLING_PACKAGE",
+            "physical_sibling_name": "Harness_Foundry_v2_8_Start_Package",
+            "required_for_core_startup": False,
+            "required_for_commands": ["verify-spec", "candidate-authoring"],
+            "discovery": "package_root.parent / physical_sibling_name",
+        },
+    ]
 
 
 def _build_manifest(
@@ -487,35 +565,7 @@ def _build_manifest(
             }
             for relative in files
         },
-        "dependencies": [
-            {
-                "dependency_id": "python",
-                "kind": "RUNTIME",
-                "version_constraint": ">=3.11,<4",
-                "required_for_core_startup": True,
-                "discovery": "sys.version_info",
-            },
-            {
-                "dependency_id": "cryptography",
-                "kind": "OPTIONAL_PYTHON_PACKAGE",
-                "version_constraint": ">=45,<49",
-                "required_for_core_startup": False,
-                "profile": "OPTIONAL_SECURITY_HARDENING_AND_LEGACY_CANDIDATE_VALIDATION",
-                "required_for_commands": [
-                    "candidate-authoring",
-                    "validate-candidate",
-                ],
-                "discovery": "importlib.util.find_spec",
-            },
-            {
-                "dependency_id": HF28_PACKAGE_ID,
-                "kind": "OPTIONAL_PHYSICAL_SIBLING_PACKAGE",
-                "physical_sibling_name": "Harness_Foundry_v2_8_Start_Package",
-                "required_for_core_startup": False,
-                "required_for_commands": ["verify-spec", "candidate-authoring"],
-                "discovery": "package_root.parent / physical_sibling_name",
-            },
-        ],
+        "dependencies": _declared_dependencies(root),
         "dependency_discovery": dict(dependency_discovery),
         "entrypoints": [
             {

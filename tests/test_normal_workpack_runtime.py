@@ -189,13 +189,14 @@ class NormalWorkpackRuntimeTests(unittest.TestCase):
 
     def test_candidate_packages_local_runtime_import_closure(self):
         for name in ("local_runtime.py", "local_process.py", "startup_runtime.py", "coding_protocol.py",
-                     "coding_process.py", "coding_runtime.py"):
+                     "coding_process.py", "coding_runtime.py", "workpack_acceptance.py"):
             ref = f"tools/harness_foundry_runtime/{name}"
             self.assertEqual((self.candidate / ref).read_bytes(),
                              (startup.ROOT / "src/harness_foundry_factory" / name).read_bytes())
         code = ("from harness_foundry_runtime.local_runtime import LOCAL_MODE; "
                 "from harness_foundry_runtime.startup_runtime import STARTUP_MODE; "
-                "from harness_foundry_runtime.coding_runtime import CODING_MODE; print(LOCAL_MODE)")
+                "from harness_foundry_runtime.coding_runtime import CODING_MODE; "
+                "from harness_foundry_runtime.workpack_acceptance import plan_workpack_completion; print(LOCAL_MODE)")
         env = dict(os.environ, PYTHONPATH=str(self.candidate / "tools"), PYTHONDONTWRITEBYTECODE="1")
         completed = subprocess.run([sys.executable, "-B", "-c", code], cwd=self.root,
                                    capture_output=True, text=True, env=env, timeout=20)
@@ -268,7 +269,7 @@ class NormalWorkpackRuntimeTests(unittest.TestCase):
         self.assertIn("CONTROLLED_WORKPACK_RUNTIME_ARTIFACT_MISSING", {item["code"] for item in findings})
 
     def test_independent_validator_requires_the_coding_protocol_in_workpack_bundle(self):
-        for module in ("coding_protocol", "coding_process", "coding_runtime"):
+        for module in ("coding_protocol", "coding_process", "coding_runtime", "workpack_acceptance"):
             with self.subTest(module=module):
                 candidate = self.root / ("missing-" + module)
                 shutil.copytree(self.candidate, candidate)

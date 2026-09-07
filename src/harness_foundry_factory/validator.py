@@ -6210,6 +6210,7 @@ def _check_controlled_workpack_runtime_executable_closure(
         "coding_protocol": "tools/harness_foundry_runtime/coding_protocol.py",
         "coding_process": "tools/harness_foundry_runtime/coding_process.py",
         "coding_runtime": "tools/harness_foundry_runtime/coding_runtime.py",
+        "workpack_acceptance": "tools/harness_foundry_runtime/workpack_acceptance.py",
         "entrypoint": "tools/workpack_runtime.py",
         "contract": "validation/CONTROLLED_WORKPACK_RUNTIME_CONTRACT.json",
         "commands": f"commands/{workpack_id}.commands.json",

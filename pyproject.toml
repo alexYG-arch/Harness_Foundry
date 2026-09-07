@@ -12,6 +12,7 @@ dependencies = []
 [project.optional-dependencies]
 security = ["cryptography>=45,<49"]
 test = ["jsonschema>=4.18,<5"]
+runtime-audit = ["jsonschema>=4.18,<5", "referencing>=0.28,<1"]
 
 [project.scripts]
 hffactory = "harness_foundry_factory.cli:main"

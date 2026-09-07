@@ -44,6 +44,13 @@ def main(argv: list[str] | None = None) -> int:
     coding.add_argument("--workpack-id", required=True)
     coding.add_argument("--command-id", required=True)
     coding.add_argument("--job-id")
+    for command_name in ("completion-plan", "audit-completion"):
+        completion = subparsers.add_parser(command_name, help="read completion obligations/evidence; never accept or execute a Workpack")
+        completion.add_argument("--candidate-root", type=Path, required=True)
+        completion.add_argument("--node-id", required=True)
+        completion.add_argument("--workpack-id", required=True)
+        if command_name == "audit-completion":
+            completion.add_argument("--execution-root", type=Path, required=True)
     hydrate = subparsers.add_parser("hydrate")
     hydrate.add_argument("--candidate-root", type=Path, required=True)
     hydrate.add_argument("--execution-root", type=Path, required=True)
@@ -65,6 +72,13 @@ def main(argv: list[str] | None = None) -> int:
             protocol = importlib.import_module("harness_foundry_runtime.coding_protocol")
             result = protocol.plan_coding_command(args.candidate_root, args.node_id, args.workpack_id,
                                                   args.command_id, job_id=args.job_id)
+        elif args.command in {"completion-plan", "audit-completion"}:
+            acceptance = importlib.import_module("harness_foundry_runtime.workpack_acceptance")
+            if args.command == "completion-plan":
+                result = acceptance.plan_workpack_completion(args.candidate_root, args.node_id, args.workpack_id)
+            else:
+                result = acceptance.audit_workpack_completion(args.candidate_root, args.execution_root,
+                                                              args.node_id, args.workpack_id)
         elif args.command == "hydrate":
             result = hydrate_workpack_runtime(
                 args.candidate_root,
@@ -104,6 +118,7 @@ def main(argv: list[str] | None = None) -> int:
     # that outcome to the caller instead of treating JSON serialization as PASS.
     return 0 if result.get("status") in {
         "PASS", "READY_FOR_A3_PREPARATION", "DECLARED_WORKPACK_PLAN", "DECLARED_CODING_TASK",
+        "DECLARED_WORKPACK_COMPLETION_PLAN",
     } else 1
 
 
