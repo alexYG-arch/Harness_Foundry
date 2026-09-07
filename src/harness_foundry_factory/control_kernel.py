@@ -337,8 +337,44 @@ def prepare_parent_authorization_challenge(
     if "startup_execution" in parent:
         from copy import deepcopy
         challenge["startup_execution"] = deepcopy(parent["startup_execution"])
+    plan = parent.get("startup_execution", parent.get("local_execution"))
+    if plan is not None:
+        challenge["controller_effects"] = {
+            "control_db": plan["control_db"],
+            "execution_root": plan["execution_root"],
+            "may_create_execution_root": True,
+            "may_initialize_native_control_database": True,
+            "records_parent_authorization": True,
+            "executes_commands": False,
+        }
     challenge["challenge_sha256"] = content_sha256(challenge)
     return challenge
+
+
+def prepare_parent_approval_receipt(parent, challenge, approval):
+    """Validate the existing approval protocol before any controller creation."""
+    expected_bindings = parent.get("bindings")
+    if not isinstance(expected_bindings, Mapping):
+        raise ControlKernelError("RUNTIME_STALE_BINDING", "Parent binding is missing")
+    expected_challenge = prepare_parent_authorization_challenge(parent, expected_bindings=expected_bindings)
+    if dict(challenge) != expected_challenge:
+        raise ControlKernelError("PARENT_CHALLENGE_STALE", "Readable Parent challenge is stale")
+    actor = approval.get("approved_by")
+    if (approval.get("decision") != "APPROVE"
+            or approval.get("challenge_sha256") != expected_challenge["challenge_sha256"]
+            or not isinstance(actor, Mapping) or actor.get("type") != "HUMAN_VIA_CODEX_CHAT"
+            or not isinstance(approval.get("approved_at"), str)):
+        raise ControlKernelError("PARENT_APPROVAL_INVALID", "Parent approval must bind the exact readable challenge")
+    normalized = validate_parent_authorization(parent)
+    receipt = {
+        "schema_version": "2.9", "receipt_kind": "PARENT_AUTHORIZATION_DERIVATION_RECEIPT",
+        "status": "APPROVED", "authorization_id": parent["authorization_id"],
+        "parent_authorization_sha256": normalized["parent_authorization_sha256"],
+        "challenge_sha256": expected_challenge["challenge_sha256"],
+        "approved_by": dict(actor), "approved_at": approval["approved_at"], "manual_child_hash_input": False,
+    }
+    receipt["receipt_sha256"] = content_sha256(receipt)
+    return receipt
 
 
 def derive_attempt_grant(
@@ -646,50 +682,11 @@ class GenericTransitionEngine:
         approval: Mapping[str, Any],
         *,
         created_at: str,
+        exclusive_program: bool = False,
     ) -> dict[str, Any]:
         """Register one Parent only after an exact readable challenge approval."""
 
-        expected_bindings = parent.get("bindings")
-        if not isinstance(expected_bindings, Mapping):
-            raise ControlKernelError(
-                "RUNTIME_STALE_BINDING", "Parent binding is missing"
-            )
-        expected_challenge = prepare_parent_authorization_challenge(
-            parent,
-            expected_bindings=expected_bindings,
-        )
-        if dict(challenge) != expected_challenge:
-            raise ControlKernelError(
-                "PARENT_CHALLENGE_STALE", "Readable Parent challenge is stale"
-            )
-        actor = approval.get("approved_by")
-        if (
-            approval.get("decision") != "APPROVE"
-            or approval.get("challenge_sha256")
-            != expected_challenge["challenge_sha256"]
-            or not isinstance(actor, Mapping)
-            or actor.get("type") != "HUMAN_VIA_CODEX_CHAT"
-            or not isinstance(approval.get("approved_at"), str)
-        ):
-            raise ControlKernelError(
-                "PARENT_APPROVAL_INVALID",
-                "Parent approval must bind the exact readable challenge",
-            )
-        normalized = validate_parent_authorization(parent)
-        receipt = {
-            "schema_version": "2.9",
-            "receipt_kind": "PARENT_AUTHORIZATION_DERIVATION_RECEIPT",
-            "status": "APPROVED",
-            "authorization_id": parent["authorization_id"],
-            "parent_authorization_sha256": normalized[
-                "parent_authorization_sha256"
-            ],
-            "challenge_sha256": expected_challenge["challenge_sha256"],
-            "approved_by": dict(actor),
-            "approved_at": approval["approved_at"],
-            "manual_child_hash_input": False,
-        }
-        receipt["receipt_sha256"] = content_sha256(receipt)
+        receipt = prepare_parent_approval_receipt(parent, challenge, approval)
         previous = self._last_event_hash(str(parent["program_id"]))
         self.event_store.append_batch(
             str(parent["program_id"]),
@@ -698,10 +695,8 @@ class GenericTransitionEngine:
                     "event_type": "PARENT_AUTHORIZATION_GRANTED",
                     "payload": {
                         "authorization": dict(parent),
-                        "parent_authorization_sha256": normalized[
-                            "parent_authorization_sha256"
-                        ],
-                        "challenge": expected_challenge,
+                        "parent_authorization_sha256": receipt["parent_authorization_sha256"],
+                        "challenge": dict(challenge),
                         "approval_receipt": receipt,
                         "manual_hash_input": False,
                     },
@@ -710,19 +705,24 @@ class GenericTransitionEngine:
             idempotency_key=f"PARENT-AUTH:{parent['authorization_id']}",
             created_at=created_at,
             expected_previous_event_hash=previous,
+            exclusive_program=exclusive_program,
         )
         return receipt
 
     def revoke_parent_authorization(
-        self, program_id: str, authorization_id: str, *, created_at: str
+        self, program_id: str, authorization_id: str, *, created_at: str,
+        revoked_by: Mapping[str, Any] | None = None, reason: str | None = None,
     ) -> None:
         previous = self._last_event_hash(program_id)
+        payload = {"authorization_id": authorization_id}
+        if revoked_by is not None:
+            payload.update(revoked_by=dict(revoked_by), reason=reason)
         self.event_store.append_batch(
             program_id,
             [
                 {
                     "event_type": "PARENT_AUTHORIZATION_REVOKED",
-                    "payload": {"authorization_id": authorization_id},
+                    "payload": payload,
                 }
             ],
             idempotency_key=f"PARENT-REVOKE:{authorization_id}",

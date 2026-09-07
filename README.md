@@ -45,6 +45,10 @@ python3 tools/hffactory.py package-local --json
 或 Workpack。执行启动链的已验证范围与剩余工作见
 [启动链修复计划](docs/EXECUTION_STARTUP_REPAIR_PLAN.md)。
 
+另行授权的本地运行阶段可使用[公开运行时授权入口](docs/LOCAL_RUNTIME_AUTHORIZATION.md)
+展示完整 Parent 范围、记录真实用户批准或撤销授权。批准只初始化控制库并登记
+Parent，不自动运行命令，也不代表 Lab、Workpack 或目标 Harness 已完成。
+
 ## 兼容路线运行实例
 
 ```text

@@ -727,6 +727,7 @@ class ControlEventStore:
         created_at: str,
         expected_previous_event_hash: str | None = None,
         require_new: bool = False,
+        exclusive_program: bool = False,
     ) -> list[dict[str, Any]]:
         """Atomically append a Hash-chained batch exactly once.
 
@@ -758,6 +759,10 @@ class ControlEventStore:
 
         with self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            if exclusive_program and connection.execute(
+                "SELECT 1 FROM control_events WHERE program_id != ? LIMIT 1", (program_id,)
+            ).fetchone() is not None:
+                raise StateConflictError("local controller already belongs to a different Program")
             replay = connection.execute(
                 """
                 SELECT request_sha256, events_json
@@ -908,6 +913,12 @@ class ControlEventStore:
             }
             for row in rows
         ]
+
+    def list_program_ids(self) -> list[str]:
+        """Read controller ownership without creating a new Program stream."""
+        with self._connection() as connection:
+            return [str(row[0]) for row in connection.execute(
+                "SELECT DISTINCT program_id FROM control_events ORDER BY program_id")]
 
     def verify_stream(self, program_id: str) -> dict[str, Any]:
         events = self.list_events(program_id)

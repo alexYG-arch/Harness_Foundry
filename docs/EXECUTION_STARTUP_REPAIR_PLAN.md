@@ -2,11 +2,12 @@
 
 Status: IN_PROGRESS. A bound Execution Root is not a running Harness.
 
-Latest slice: the three native startup actions and an approved offline Job
-process now share one SQLite controller in an actual temporary integration
-test. Fresh-controller startup is implemented; model transport, native Workpack
-acceptance, the full build DAG and target media remain unverified. See
-[Native startup under the existing SQLite controller](#native-startup-under-the-existing-sqlite-controller)
+Latest slice: public runtime readback, human approval and revocation now reach
+the existing native startup and offline Job path in actual temporary integration
+tests. Fresh-controller initialization and startup are implemented; model
+transport, native Workpack acceptance, the full build DAG and target media remain
+unverified. See
+[Public runtime authorization entrypoints](#public-runtime-authorization-entrypoints)
 for the current boundary. The sections below retain earlier checkpoints in
 chronological order; their test counts describe those individual source states.
 
@@ -468,6 +469,61 @@ authoring delegation remain unchanged; repaired output needs fresh authoring
 authority. Lab, Linkage
 and the target's three narrated animated videos have not been built by these
 tests. A test Job exit code is not evidence for any of those deliverables.
+
+### Public runtime authorization entrypoints
+
+The public CLI now exposes `prepare-runtime-authorization`,
+`approve-runtime-authorization` and `revoke-runtime-authorization`, documented in
+[Local runtime authorization](LOCAL_RUNTIME_AUTHORIZATION.md). This closes the
+operator-entrypoint gap noted in the previous slice without a second grant
+database, fabricated human receipt or automatic command dispatch.
+
+Readback checks the actual Factory/Candidate and shows the complete existing
+Parent plan, including controller initialization effects. Approval validation is
+factored from the existing kernel protocol into a pure receipt builder, so it
+runs before root or database creation. Registration still writes the same native
+Parent event. The public route checks Program ownership again inside that same
+SQLite transaction. A native empty store can resume initialization; incompatible
+or another Program's stores and unowned legacy control files are not adopted.
+
+The existing kernel revoke operation now optionally retains the human actor and
+reason. The public revocation path does not require a still-valid Factory
+decision: cancellation remains possible after REOPEN or expiry. It prevents
+future dispatch/commit, not OS-process termination or rollback of earlier
+effects. Approval and revocation reentry do not grant a second budget or revive
+a revoked Parent. No model transport or target-build approval is implied.
+
+Actual temporary Candidate tests enter these public commands without calling
+the internal registration API. They cover absent-root readback, initialization,
+exact decision replay, native startup, another separately approved Parent and a
+real sandbox Job output. Negative coverage checks changed scope, missing/human
+identity, delegated actor substitution, bad decision time, stale Factory state,
+path substitution, existing non-native database preservation, revocation and a
+Program ownership change after preflight. That last failure test injects a real
+competing stream after the real live verifier; it does not fake a success result.
+
+The initial integration test identified a legitimate read-only macOS locator
+alias (`/var` versus `/private/var`). Overlap checks now use its resolved physical
+identity while preserving the approved locator spelling. Canonical, unlinked
+write roots remain required. The 24-test focused authorization/kernel run passed
+with one opt-in sandbox skip. The actual public-authorization/startup/approval
+suite then passed all 33 tests in 215.645 seconds; the separate existing
+receiver/adapter suite passed all 28 tests in 13.112 seconds. Together these runs
+include all 16 opt-in sandbox tests. They used Codex CLI 0.153.3 and Python
+3.14.5, with raw output under ignored `build/runtime-authorization.TuD4V6/`.
+Official core validation passed its 26 selectors for 41 capabilities;
+`verify-spec`, `validate_skill.py` and whitespace checks passed. The complete
+suite ran 634 tests in 859.009 seconds: 618 passed and the 16 opt-in sandbox
+tests were skipped in the restricted runner. Its raw output is retained in
+`unittest.log` alongside the two actual sandbox logs.
+
+The formal Program remains revision 191 at
+`PREBUILD_APPROVED_EXECUTION_NOT_AUTHORIZED`. Its immutable epoch 29 Candidate
+has not been regenerated, and no target runtime approval was submitted. The
+remaining build work is lost-process reconciliation, model-service transport,
+native Workpack/artifact acceptance, complete Lab/Linkage/Harness execution and
+the three target videos. This entrypoint is a tested prerequisite, not evidence
+that those deliverables exist.
 
 ## Reproduced gap
 

@@ -118,6 +118,16 @@ def build_parser() -> argparse.ArgumentParser:
     runtime_advance.add_argument("--control-db", required=True)
     _add_json_flag(runtime_advance)
 
+    for name, help_text in (
+        ("prepare-runtime-authorization", "Read the local Parent risk challenge without initializing a runtime"),
+        ("approve-runtime-authorization", "Record an exact human Parent approval; starts no commands"),
+        ("revoke-runtime-authorization", "Revoke a recorded local Parent without executing commands"),
+    ):
+        command = subparsers.add_parser(name, help=help_text)
+        command.add_argument("--request", required=True)
+        command.add_argument("--control-db", required=True)
+        _add_json_flag(command)
+
     checkpoint = subparsers.add_parser(
         "checkpoint", help="Append a durable Runtime Checkpoint and Resume Capsule"
     )
@@ -229,6 +239,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             ).advance_authoring_until_gate(args.program_id)
         elif args.command == "advance-until-gate":
             result = _runtime_advance(args)
+        elif args.command in {"prepare-runtime-authorization", "approve-runtime-authorization", "revoke-runtime-authorization"}:
+            result = _runtime_authorization(args)
         elif args.command == "checkpoint":
             result = _runtime_checkpoint(args)
         elif args.command == "resume":
@@ -369,6 +381,27 @@ def _version_result() -> dict[str, Any]:
             f"implementation={FACTORY_VERSION}"
         ),
     }
+
+
+def _runtime_authorization(args: argparse.Namespace) -> dict[str, Any]:
+    from .runtime_authorization import (
+        prepare_runtime_authorization, approve_runtime_authorization, revoke_runtime_authorization,
+    )
+    request = _load_request(args.request)
+    if args.command == "revoke-runtime-authorization":
+        expected = {"program_id", "parent_authorization_id", "revoked_by", "reason"}
+    else:
+        expected = {"parent"} | ({"challenge", "approval"} if args.command == "approve-runtime-authorization" else set())
+    if set(request) != expected:
+        raise ControlKernelError("RUNTIME_AUTHORIZATION_INVALID", "request fields differ from the selected authority operation")
+    if args.command == "prepare-runtime-authorization":
+        return prepare_runtime_authorization(_required_mapping(request, "parent"), args.control_db)
+    if args.command == "approve-runtime-authorization":
+        return approve_runtime_authorization(_required_mapping(request, "parent"),
+            _required_mapping(request, "challenge"), _required_mapping(request, "approval"), args.control_db)
+    return revoke_runtime_authorization(_required_string(request, "program_id"),
+        _required_string(request, "parent_authorization_id"), _required_mapping(request, "revoked_by"),
+        _required_string(request, "reason"), args.control_db)
 
 
 def _runtime_advance(args: argparse.Namespace) -> dict[str, Any]:
