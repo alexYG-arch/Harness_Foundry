@@ -47,6 +47,12 @@ PROGRAM_GRAPH_BINDING_FIELDS = (
     "architecture_lock_sha256",
     "compiled_contract_sha256",
 )
+START_PACKAGE_BINDING_KIND = "FACTORY_APPROVED_START_PACKAGE"
+START_PACKAGE_BINDING_FIELDS = (
+    "binding_kind", "program_id", "requirement_epoch", "architecture_epoch", "control_plane_epoch",
+    "requirement_ir_sha256", "candidate_tree_sha256", "factory_candidate_content_sha256",
+    "factory_state_hash", "decision_event_ref",
+)
 
 
 class ControlKernelError(RuntimeError):
@@ -562,9 +568,22 @@ class GenericTransitionEngine:
         self,
         event_store: ControlEventStore,
         command_adapters: Mapping[str, CommandAdapter],
+        *,
+        binding_verifier: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
     ) -> None:
         self.event_store = event_store
         self.command_adapters = dict(command_adapters)
+        self.binding_verifier = binding_verifier
+
+    def _verify_execution_binding(self, parent: Mapping[str, Any], transition: Mapping[str, Any] | None = None) -> None:
+        bindings = parent.get("bindings", {})
+        if not isinstance(bindings, Mapping) or "binding_kind" not in bindings:
+            return
+        _validate_runtime_bindings(bindings, parent, (transition,) if transition is not None else ())
+        if self.binding_verifier is None:
+            raise ControlKernelError("RUNTIME_BINDING_VERIFIER_REQUIRED", "Start Package execution needs live Factory verification")
+        if self.binding_verifier(parent) != bindings:
+            raise ControlKernelError("RUNTIME_STALE_BINDING", "live Factory binding differs from the approved Parent")
 
     def record_architecture_freeze(
         self, program_id: str, freeze_id: str, *, created_at: str
@@ -792,6 +811,7 @@ class GenericTransitionEngine:
             parent = projections["grant_ledger"]["parents"].get(parent_authorization_id)
             if not isinstance(parent, Mapping) or parent.get("status") not in {"GRANTED", "ACTIVE"}:
                 raise ControlKernelError("PARENT_AUTHORIZATION_NOT_ACTIVE", "command has no active Parent Risk Envelope")
+            self._verify_execution_binding(parent, transition)
             attempt_previous_event_hash = (
                 str(events[-1]["event_hash"]) if events else None
             )
@@ -903,6 +923,9 @@ class GenericTransitionEngine:
                 attempt_previous_event_hash = observed[-1]["event_hash"]
             if durable and inject_crash_after_command:
                 raise InjectedKernelCrash("AFTER_OBSERVATION_BEFORE_TRANSITION_COMMIT")
+            # Keep the observed process outcome even if Factory approval changed
+            # during execution; do not commit a stale transition or redispatch it.
+            self._verify_execution_binding(parent, transition)
             if status == "VALIDATION_FAILED":
                 batch = common_events + [
                     {
@@ -1353,6 +1376,7 @@ class GenericTransitionEngine:
         bindings = _validate_runtime_bindings(
             expected_bindings, parent, ()
         )
+        self._verify_execution_binding(parent)
         parent_sha256 = _projected_parent_authorization_sha256(parent)
         completed_artifacts = _completed_artifacts(projection)
         side_effect_inventory, unknown_side_effects = _side_effect_inventory(
@@ -1543,6 +1567,7 @@ class GenericTransitionEngine:
         bindings = _validate_runtime_bindings(
             expected_bindings, parent, (transition,)
         )
+        self._verify_execution_binding(parent, transition)
         if capsule.get("bindings") != bindings:
             raise ControlKernelError(
                 "RUNTIME_STALE_BINDING", "Resume Capsule binding is stale"
@@ -1931,6 +1956,8 @@ def _validate_program_graph_bindings(
     contracts: Mapping[str, Mapping[str, Any]],
     expected_bindings: Mapping[str, Any],
 ) -> dict[str, Any]:
+    if "binding_kind" in expected_bindings:
+        return _validate_start_package_bindings(expected_bindings, (profile, graph_template, *contracts.values()))
     if any(field not in expected_bindings for field in PROGRAM_GRAPH_BINDING_FIELDS):
         raise ControlKernelError(
             "PROGRAM_GRAPH_STALE_BINDING",
@@ -1983,6 +2010,11 @@ def _validate_runtime_bindings(
     parent: Mapping[str, Any],
     transitions: Any,
 ) -> dict[str, Any]:
+    if "binding_kind" in expected_bindings:
+        bindings = _validate_start_package_bindings(expected_bindings, (parent, *tuple(transitions)))
+        if bindings["program_id"] != parent.get("program_id"):
+            raise ControlKernelError("RUNTIME_STALE_BINDING", "Start Package binding belongs to another Program")
+        return bindings
     if any(field not in expected_bindings for field in PROGRAM_GRAPH_BINDING_FIELDS):
         raise ControlKernelError(
             "RUNTIME_STALE_BINDING", "Runtime binding is incomplete"
@@ -2042,6 +2074,40 @@ def _validate_runtime_bindings(
                 "RUNTIME_STALE_BINDING", "Runtime source lock binding is stale"
             )
     return normalized
+
+
+def _validate_start_package_bindings(expected: Mapping[str, Any], sources: Any) -> dict[str, Any]:
+    """A Candidate approval is not a dual-lock hash tuple or an Architecture lock.
+
+    Retain actual Requirement nulls. Portable zero sentinels and execution-control
+    counters must not be substituted for Requirement Architecture epochs.
+    Structural checks here do not replace live Factory verification at dispatch.
+    """
+    if set(expected) != set(START_PACKAGE_BINDING_FIELDS) or expected.get("binding_kind") != START_PACKAGE_BINDING_KIND:
+        raise ControlKernelError("RUNTIME_STALE_BINDING", "Start Package binding fields or kind differ")
+    requirement = expected["requirement_epoch"]
+    architecture, control = expected["architecture_epoch"], expected["control_plane_epoch"]
+    if (not isinstance(requirement, int) or isinstance(requirement, bool) or requirement < 1
+            or not (architecture is None and control is None
+                    or isinstance(architecture, int) and not isinstance(architecture, bool) and architecture > 0
+                    and isinstance(control, int) and not isinstance(control, bool) and control == architecture)):
+        raise ControlKernelError("RUNTIME_MIXED_EPOCH", "Start Package must preserve a matching positive pair or the actual null pair")
+    if any(not isinstance(expected[field], str) or len(expected[field]) != 64
+           or any(char not in "0123456789abcdef" for char in expected[field])
+           for field in START_PACKAGE_BINDING_FIELDS[5:9]):
+        raise ControlKernelError("RUNTIME_STALE_BINDING", "Start Package evidence binding is invalid")
+    program = expected["program_id"]
+    if (not isinstance(program, str) or not program or "/" in program or ".." in program
+            or not isinstance(expected["decision_event_ref"], str)
+            or not expected["decision_event_ref"].startswith(f"factory-event://{program}/")
+            or not expected["decision_event_ref"].removeprefix(f"factory-event://{program}/")):
+        raise ControlKernelError("RUNTIME_STALE_BINDING", "Start Package decision does not identify this Program")
+    for source in sources:
+        binding = source.get("bindings") if isinstance(source, Mapping) else None
+        if (binding != expected or any(type(binding[field]) is not type(expected[field])
+                                       for field in ("requirement_epoch", "architecture_epoch", "control_plane_epoch"))):
+            raise ControlKernelError("RUNTIME_STALE_BINDING", "Parent, graph and transition must retain the complete same approval binding")
+    return dict(expected)
 
 
 def _decision_receipt(

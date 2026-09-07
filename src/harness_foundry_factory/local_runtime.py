@@ -15,7 +15,7 @@ import tempfile
 from typing import Any, Mapping
 from urllib.parse import urlsplit
 
-from .control_kernel import ControlKernelError, DURABLE_DELIVERY_MODE, rebuild_control_projections
+from .control_kernel import ControlKernelError, DURABLE_DELIVERY_MODE, START_PACKAGE_BINDING_KIND, rebuild_control_projections
 from .local_process import CodexSandboxRunner, LocalCommand, LocalProcessError
 from .models import content_sha256
 from .store import ControlEventStore
@@ -150,9 +150,18 @@ def bind_local_workpack_transition(transition, *, native_command, project_id, wo
 def validate_local_execution(parent):
     """Validate the local plan structurally, without reading tools or paths."""
     plan = parent.get("local_execution")
-    _require(isinstance(plan, Mapping) and set(plan) == {
+    binding = parent.get("bindings", {})
+    factory_bound = isinstance(binding, Mapping) and binding.get("binding_kind") == START_PACKAGE_BINDING_KIND
+    fields = {
         "mode", "candidate_root", "execution_root", "control_db", "receiver", "runtime_resources", "transitions"
-    } and plan.get("mode") == LOCAL_MODE, "Parent local execution plan is incomplete")
+    } | ({"factory_source"} if factory_bound else set())
+    _require(isinstance(plan, Mapping) and set(plan) == fields and plan.get("mode") == LOCAL_MODE,
+             "Parent local execution plan is incomplete")
+    if factory_bound:
+        source = plan["factory_source"]
+        _require(isinstance(source, Mapping) and set(source) == {"database_path", "runs_root"}
+                 and all(isinstance(value, str) and Path(value).is_absolute() and ".." not in Path(value).parts
+                         for value in source.values()), "Factory read locator must be part of the approved local plan")
     _require(_strings(parent.get("allowed_read_roots")) and parent.get("network_mode") == "DENY"
              and parent.get("secret_access") is False, "offline Parent needs explicit reads and no network/secrets")
     _require(isinstance(plan["receiver"], Mapping) and set(plan["receiver"]) == {"executable_abs", "executable_sha256"},

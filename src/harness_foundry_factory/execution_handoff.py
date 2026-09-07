@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 
 from .models import FactoryError, content_sha256
+from .control_kernel import START_PACKAGE_BINDING_KIND
 from .prebuild_delegation import APPROVED_STOP, DELEGATE
 from .resources.shared_control_baseline import ContractError, candidate_identity
 
@@ -138,6 +139,14 @@ def prepare_execution_handoff(service, program_id):
         "program_id": program_id, "requirement_epoch": snapshot["requirement_epoch"],
         "candidate_root": str(root), "approval_receipt_ref": APPROVAL_RECEIPT_REF,
         "approval_receipt": receipt, "startup_bindings": bindings,
+        "runtime_bindings": {
+            "binding_kind": START_PACKAGE_BINDING_KIND, "program_id": program_id,
+            "requirement_epoch": snapshot["requirement_epoch"],
+            "architecture_epoch": snapshot["requirement_ir"]["target"].get("architecture_epoch"),
+            "control_plane_epoch": snapshot["requirement_ir"]["target"].get("control_plane_epoch"),
+            **{field: receipt[field] for field in ("requirement_ir_sha256", "candidate_tree_sha256",
+                "factory_candidate_content_sha256", "factory_state_hash", "decision_event_ref")},
+        },
         "next_required_action": "EXPLICIT_EXECUTION_AUTHORIZATION",
         "writes_performed": False, "execution_started": False,
     }
@@ -148,3 +157,21 @@ def validate_live_handoff(service, program_id, handoff):
     current = prepare_execution_handoff(service, program_id)
     _require(current == handoff, "HANDOFF_STALE", "handoff no longer matches live Factory approval and Candidate")
     return current
+
+
+def verify_runtime_factory_binding(parent):
+    """Re-read the approved locator, not a caller-supplied PASS or cached receipt."""
+    from .constants import default_spec_root
+    from .service import FactoryService
+    from .store import SQLiteEventStore
+
+    plan = parent["local_execution"]
+    source = plan["factory_source"]
+    service = FactoryService(SQLiteEventStore(source["database_path"], read_only=True),
+                             spec_root=default_spec_root(), runs_root=source["runs_root"])
+    current = prepare_execution_handoff(service, parent["program_id"])
+    _require(current["candidate_root"] == plan["candidate_root"], "HANDOFF_ROOT_MISMATCH",
+             "approved local root is not the live published Candidate")
+    _require(current["runtime_bindings"] == parent["bindings"], "HANDOFF_STALE",
+             "approved runtime binding no longer matches live Factory state")
+    return current["runtime_bindings"]

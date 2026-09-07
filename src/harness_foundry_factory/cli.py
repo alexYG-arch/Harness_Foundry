@@ -431,6 +431,10 @@ def _runtime_advance(args: argparse.Namespace) -> dict[str, Any]:
 
 def _runtime_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
     request = _load_request(args.request)
+    if request.get("adapter_mode") == "LOCAL_OFFLINE_PROCESSES":
+        return _runtime_local(args, request, checkpoint=True)
+    if "binding_kind" in _required_mapping(request, "expected_bindings"):
+        raise ControlKernelError("LOCAL_RUNTIME_REQUEST_INVALID", "Start Package checkpoints require the real-clock local mode")
     program_id = _required_string(request, "program_id")
     _validate_runtime_program_id(program_id)
     store = ControlEventStore(Path(args.control_db).expanduser().resolve())
@@ -500,8 +504,11 @@ def _runtime_resume(args: argparse.Namespace) -> dict[str, Any]:
     )
 
 
-def _runtime_local(args: argparse.Namespace, request: Mapping[str, Any], *, resume: bool = False) -> dict[str, Any]:
+def _runtime_local(args: argparse.Namespace, request: Mapping[str, Any], *, resume: bool = False,
+                   checkpoint: bool = False) -> dict[str, Any]:
     from .local_runtime import LOCAL_CLASS, prepare_local_runtime
+    from .execution_handoff import verify_runtime_factory_binding
+    from .control_kernel import rebuild_control_projections
 
     if "test_adapter_results" in request or "created_at" in request:
         raise ControlKernelError("LOCAL_RUNTIME_REQUEST_INVALID", "production requests cannot supply results or wall-clock time")
@@ -511,14 +518,25 @@ def _runtime_local(args: argparse.Namespace, request: Mapping[str, Any], *, resu
     parent_id = _required_string(identity, "parent_authorization_id")
     _validate_runtime_program_id(program_id)
     transition = _required_mapping(request, "transition") if resume else None
-    contracts = {transition["transition_id"]: transition} if resume else _required_mapping(request, "contracts")
+    if checkpoint:
+        read_store = ControlEventStore(Path(args.control_db).expanduser().resolve(), read_only=True)
+        parent = rebuild_control_projections(read_store.list_events(program_id))["grant_ledger"]["parents"].get(parent_id, {})
+        resume_node = _required_string(request, "resume_node")
+        selected = parent.get("local_execution", {}).get("transitions", {}).get(resume_node)
+        if not isinstance(selected, Mapping):
+            raise ControlKernelError("LOCAL_RUNTIME_REQUEST_INVALID", "checkpoint resume node is not in the approved local plan")
+        contracts = {resume_node: selected}
+    else:
+        contracts = {_required_string(transition, "transition_id"): transition} if resume else _required_mapping(request, "contracts")
     adapter = prepare_local_runtime(Path(args.control_db).expanduser().resolve(), program_id, parent_id, contracts)
-    engine = GenericTransitionEngine(adapter.store, {LOCAL_CLASS: adapter})
+    engine = GenericTransitionEngine(adapter.store, {LOCAL_CLASS: adapter}, binding_verifier=verify_runtime_factory_binding)
     current_time = datetime.now(timezone.utc).isoformat()
     common = dict(expected_bindings=_required_mapping(request, "expected_bindings"),
                   expected_control_state_sha256=_required_string(request, "expected_control_state_sha256"),
                   environment_manifest=request.get("environment_manifest"),
                   artifact_manifest=request.get("artifact_manifest"), created_at=current_time)
+    if checkpoint:
+        return engine.create_checkpoint(program_id, parent_id, resume_node=resume_node, **common)
     if resume:
         return engine.resume_from_capsule(capsule, transition, _required_mapping(request, "inputs"),
                                           expected_fencing_token=request.get("expected_fencing_token"), **common)

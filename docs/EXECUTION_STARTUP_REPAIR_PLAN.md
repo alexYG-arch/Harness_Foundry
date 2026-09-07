@@ -324,6 +324,68 @@ build artifacts, not a published Candidate or a production execution receipt.
 The formal Program still reports revision 191 and
 `PREBUILD_APPROVED_EXECUTION_NOT_AUTHORIZED`.
 
+### Approved Start Package binding and recovery entrypoints
+
+The local runtime now distinguishes `FACTORY_APPROVED_START_PACKAGE` from the
+core dual-lock tuple. Its binding retains the actual Requirement Architecture
+and Control Plane epochs: a null pair remains null; a matching positive pair
+remains positive. The legacy dual-lock contract still rejects nulls. Portable
+zero sentinels and the execution controller's counter are not Architecture locks.
+No Requirement, Candidate, or approval digest is renamed to a fabricated lock
+digest. The new shape reuses the existing Requirement digest, two distinct
+Candidate identity domains, Factory state identity, and decision event reference.
+
+`prepare-execution-handoff` returns that binding without authoring or runtime
+writes. A separate runtime Parent must disclose the physical Candidate root,
+read-only Factory database/runs locator, local process plan, Job scopes and
+budgets in its readable approval challenge. This projection is not a Parent
+grant, and the delegated pre-build actor is not relabelled as a human.
+
+The public local `advance-until-gate`, `checkpoint` and `resume` paths read the
+current Factory event/decision chain and published Candidate before reserving a
+command or recording new recovery events. The kernel takes an injected host
+verifier rather than importing the Factory service into its portable runtime.
+The Start Package binding cannot dispatch without that verifier. A second live
+check after durable result observation prevents a changed approval from being
+committed as a current transition; the observation is retained and reentry does
+not replay the effect. Returning an already recorded historical result is not
+new execution authority. This is a local freshness check, not an atomic
+transaction spanning Factory state, the process effect and the runtime database.
+
+Production checkpoint requests use the same real-clock local mode as startup
+and resume. They select a resume node from the persisted Parent plan, not a
+caller-provided command. Caller timestamps and test-result payloads remain
+invalid in this mode. Recovery still obeys the existing Parent, environment,
+artifact, event-tip and fencing checks; unknown process outcomes are not turned
+into successful results or automatic retries.
+
+The new integration fixtures generate and approve an actual temporary ordinary
+Candidate with null epochs, without mocking compilation, validation or the live
+handoff. They cover unchanged byte domains, absent runtime authority, typed
+epoch/Program mismatches, missing verifier, REOPEN and published byte drift,
+wrong physical root, approval invalidation after an observed effect, and public
+checkpoint/recovery rejection before new events. Two opt-in tests execute real
+local Python through the public CLI and sandbox: direct startup, and checkpoint
+followed by resume. All fixture approvals are explicitly TEST ONLY; these tests
+do not approve or execute the target Program.
+
+This closes the null-epoch and live Candidate-decision binding slice for scoped
+local processes, not the whole build. One-controller startup/migration, a lost
+process outcome with no observation, model transport, native Workpack acceptance
+and the complete ordinary build DAG remain open. The existing epoch 29 Candidate
+is unchanged and still requires fresh authoring authority and regeneration.
+
+Verification (2026-09-07): the full suite ran 613 tests in 528.003 seconds,
+with 599 passing and 14 opt-in sandbox tests skipped. The separate actual
+receiver/adapter/approval run passed all 42 tests in 53.003 seconds, including
+those 14 sandbox tests, on Codex CLI 0.153.3 and Python 3.14.5. The focused
+kernel/CLI/handoff run passed 48 tests with 6 opt-in skips. Official core
+validation passed its 26 selectors covering 41 capabilities; `verify-spec`,
+`validate_skill.py` and whitespace checks passed. Raw verification output is
+retained under ignored `build/approved-start-package-runtime.fXODxd/`.
+The formal Program is still revision 191 with no execution authority, and its
+existing Execution Root still contains only the runtime binding file.
+
 ## Reproduced gap
 
 The normal producer declares `SHARED_CONTROL_BASELINE_LOCK` but previously
