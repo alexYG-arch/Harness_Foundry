@@ -273,6 +273,12 @@ def validate_parent_authorization(parent: Mapping[str, Any]) -> dict[str, Any]:
     if "local_execution" in parent:
         from .local_runtime import validate_local_execution
         validate_local_execution(parent)
+    if "startup_execution" in parent:
+        from .startup_runtime import validate_startup_execution
+        validate_startup_execution(parent)
+        if "local_execution" in parent and any(parent["startup_execution"][field] != parent["local_execution"][field]
+                                               for field in ("candidate_root", "execution_root", "control_db", "factory_source")):
+            raise ControlKernelError("PARENT_AUTHORIZATION_INVALID", "startup and local stages must share the same approved roots and controller")
     normalized["parent_authorization_sha256"] = content_sha256(parent)
     return normalized
 
@@ -328,6 +334,9 @@ def prepare_parent_authorization_challenge(
         # command/Job selection, not merely an opaque plan digest.
         from copy import deepcopy
         challenge["local_execution"] = deepcopy(parent["local_execution"])
+    if "startup_execution" in parent:
+        from copy import deepcopy
+        challenge["startup_execution"] = deepcopy(parent["startup_execution"])
     challenge["challenge_sha256"] = content_sha256(challenge)
     return challenge
 

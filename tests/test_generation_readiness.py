@@ -685,6 +685,7 @@ class GenerationReadinessTests(unittest.TestCase):
                     "control_kernel.py",
                     "local_runtime.py",
                     "local_process.py",
+                    "startup_runtime.py",
                     "models.py",
                     "store.py",
                 },
@@ -694,6 +695,7 @@ class GenerationReadinessTests(unittest.TestCase):
                 "control_kernel.py",
                 "local_runtime.py",
                 "local_process.py",
+                "startup_runtime.py",
                 "models.py",
                 "store.py",
             ):

@@ -5336,9 +5336,29 @@ def _control_startup_profile_ref(root: Path, findings: list[dict[str, Any]]) -> 
         "start_package_assurance_profile": LOCAL_EXEC_UNTRUSTED_INPUT,
         "assurance_profile": "SELF_USE_LOCAL_TRUSTED_OPERATOR",
         "profile_source": "FROZEN_REQUIREMENT_ASSURANCE_RESOLUTION",
+        "sqlite_controller_contract": {
+            "mode": "START_PACKAGE_SQLITE_REGISTRATION",
+            "authority_ref": "harness-resource://execution/.harness-foundry/control.sqlite3",
+            "preparation_entrypoint": "prepare_action",
+            "proposal_is_commit": False,
+            "transaction_journal": "SQLITE_CONTROL_EVENTS",
+            "legacy_transaction_protocol": "NOT_EXECUTED_BY_SQLITE_ROUTE",
+            "compatibility_files_authoritative": False,
+            "legacy_writer_when_sqlite_present": "REJECT",
+            "driver_start_allowed": False,
+            "workpack_execution_allowed": False,
+        },
         "execution_authorized": False,
     }:
         findings.append(_finding("CONTROL_STARTUP_PROFILE_INVALID", "local startup profile is missing or differs from frozen Requirement"))
+    for module in ("shared_control_baseline", "control_plane_registration", "program_driver_runtime_verification"):
+        path = root / "tools" / (module + ".py")
+        try:
+            functions = {node.name for node in ast.parse(path.read_text(encoding="utf-8")).body if isinstance(node, ast.FunctionDef)}
+        except (OSError, SyntaxError, UnicodeError):
+            functions = set()
+        if "prepare_action" not in functions:
+            findings.append(_finding("CONTROL_ACTION_PREPARATION_MISSING", f"{module} lacks its read-only controller preparation API"))
     return ref
 
 
@@ -5361,6 +5381,7 @@ def _check_control_plane_registration_executable_closure(
         "tools/harness_foundry_runtime/control_kernel.py",
         "tools/harness_foundry_runtime/local_runtime.py",
         "tools/harness_foundry_runtime/local_process.py",
+        "tools/harness_foundry_runtime/startup_runtime.py",
         "tools/harness_foundry_runtime/store.py",
         "tools/harness_foundry_runtime/models.py",
         "tools/harness_foundry_runtime/constants.py",

@@ -2,7 +2,15 @@
 
 Status: IN_PROGRESS. A bound Execution Root is not a running Harness.
 
-## Current implementation evidence
+Latest slice: the three native startup actions and an approved offline Job
+process now share one SQLite controller in an actual temporary integration
+test. Fresh-controller startup is implemented; model transport, native Workpack
+acceptance, the full build DAG and target media remain unverified. See
+[Native startup under the existing SQLite controller](#native-startup-under-the-existing-sqlite-controller)
+for the current boundary. The sections below retain earlier checkpoints in
+chronological order; their test counts describe those individual source states.
+
+## Cumulative implementation evidence
 
 Steps 1 and 2 are implemented in the Producer, portable action resources and
 independent Validator. `tests/test_default_startup_contracts.py` adds ten
@@ -385,6 +393,81 @@ validation passed its 26 selectors covering 41 capabilities; `verify-spec`,
 retained under ignored `build/approved-start-package-runtime.fXODxd/`.
 The formal Program is still revision 191 with no execution authority, and its
 existing Execution Root still contains only the runtime binding file.
+
+### Native startup under the existing SQLite controller
+
+`startup_runtime.py` now connects the three Candidate-native startup actions to
+the same `ControlEventStore` used by the approved local process adapter. The
+public `advance-until-gate`, `checkpoint` and `resume` routes accept
+`START_PACKAGE_SQLITE_REGISTRATION`. This route requires an existing approved
+Parent and controller; it does not create either authority or an execution root.
+The complete startup plan, actual roots, Factory locator and audited approval
+projection are visible in the Parent challenge. Its three transitions come from
+the published Candidate DAG and stop before `LAB_BOOTSTRAP`.
+
+The native providers expose `prepare_action`, reusing their original semantic
+input validation and payload construction without acquiring a second lease or
+committing a native result, journal, event or state. The third action invokes
+the actual fixed read-only Driver probes, not a Driver loop. Their environment
+does not forward caller secrets or Python startup hooks. These trusted probe
+processes are not the separately sandboxed Job receiver. The probe's whole-tree
+mutation check requires full execution-root reads, which the startup plan now
+discloses rather than claiming a narrower Job read scope.
+
+The adapter projects each native one-shot authorization from the SQLite
+Parent's actually reserved Grant. Candidate-decision provenance remains intact,
+including a delegated actor; no machine grant becomes a fabricated human
+approval. A native `PREPARED` proposal is durably observed before the kernel's
+live binding recheck and authoritative commit. Result files, native state and
+JSONL events are reconstructible views of committed SQLite records. The
+Producer profile and independent Validator explicitly identify SQLite as the
+journal and mark the old native transaction protocol as unexecuted by this
+route. Static API inspection checks availability, not behavioral read-only
+correctness; the latter has actual execution tests.
+
+The legacy three startup writers and legacy hydrated Workpack runner reject a
+SQLite-owned control root. Local process preparation accepts native views only
+when this same SQLite stream owns all three startup results and their bytes
+match. Existing unowned JSONL history is neither imported nor overwritten;
+historical migration remains a separate, unimplemented operation. The portable
+runtime inventory includes the adapter and tests its real import closure.
+
+Temporary ordinary Candidates, generated through the actual Factory without
+Compiler or Validator mocks, exercise native startup, checkpoint/resume,
+observed-proposal recovery without repeat preparation, reconstruction of damaged
+derived views, refusal of unowned legacy state and legacy writers, stale Factory
+approval, missing Parent and skipped predecessors. An input-publication failure
+is observed as failure and is not replayed. A separate real sandbox test then
+executes a narrowed Job process under a new approved TEST ONLY Parent in the
+same controller, producing its expected bytes. Its fourth committed transition
+proves controller/receiver continuity, not Workpack acceptance or a skipped Lab.
+
+The final actual startup/receiver/approval suite passed all 51 tests in 103.405
+seconds on 2026-09-07, including the 15 opt-in real sandbox tests, using Codex CLI
+0.153.3 and Python 3.14.5. Raw logs are retained locally under ignored
+`build/startup-sqlite-runtime.VK98wO/`; they are not production execution
+receipts. The first complete run found one old exact module-inventory assertion
+that omitted the new startup module. Updating that expected inventory preserved
+the completeness check; no Producer or Validator relaxation was used. The
+corrected full suite ran 624 tests in 521.609 seconds: 609 passed and the 15
+opt-in sandbox tests were skipped in the restricted runner. The final full log
+is `unittest-final.log`; the earlier failure remains in `unittest.log`.
+Official core validation passed 26 selectors covering 41 capabilities;
+`verify-spec`, `validate_skill.py` and `git diff --check` passed. Read-only
+inspection still reports the formal Program at revision 191 and
+`PREBUILD_APPROVED_EXECUTION_NOT_AUTHORIZED`; its existing Execution Root has
+only the original runtime binding file.
+
+This closes the fresh-controller startup integration slice, not the full build.
+Runtime initialization and Parent approval currently use the kernel API; an
+operator-facing CLI bootstrap/approval path is not implemented by this slice.
+Still open: that entrypoint, reconciliation when a process has no observed
+outcome, model-service transport, native Workpack/artifact acceptance and the
+complete ordinary build DAG. The immutable epoch 29 Candidate and its completed
+authoring delegation remain unchanged; repaired output needs fresh authoring
+authority. Lab, Linkage
+and the target's three narrated animated videos have not been built by these
+tests. A test Job exit code is not evidence for any of those deliverables.
 
 ## Reproduced gap
 

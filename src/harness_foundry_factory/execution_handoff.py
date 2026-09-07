@@ -165,7 +165,7 @@ def verify_runtime_factory_binding(parent):
     from .service import FactoryService
     from .store import SQLiteEventStore
 
-    plan = parent["local_execution"]
+    plan = parent.get("startup_execution", parent.get("local_execution"))
     source = plan["factory_source"]
     service = FactoryService(SQLiteEventStore(source["database_path"], read_only=True),
                              spec_root=default_spec_root(), runs_root=source["runs_root"])
@@ -174,4 +174,7 @@ def verify_runtime_factory_binding(parent):
              "approved local root is not the live published Candidate")
     _require(current["runtime_bindings"] == parent["bindings"], "HANDOFF_STALE",
              "approved runtime binding no longer matches live Factory state")
+    if "startup_execution" in parent:
+        _require(current["approval_receipt"] == plan["approval_receipt"], "HANDOFF_STALE",
+                 "startup approval projection differs from the audited decision")
     return current["runtime_bindings"]

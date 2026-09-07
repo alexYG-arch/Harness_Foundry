@@ -128,11 +128,12 @@ class NormalWorkpackRuntimeTests(unittest.TestCase):
         self.assertIn("PROJECT_WORKPACK_COMMAND_BINDING_INVALID", {item["code"] for item in report["blocking_findings"]})
 
     def test_candidate_packages_local_runtime_import_closure(self):
-        for name in ("local_runtime.py", "local_process.py"):
+        for name in ("local_runtime.py", "local_process.py", "startup_runtime.py"):
             ref = f"tools/harness_foundry_runtime/{name}"
             self.assertEqual((self.candidate / ref).read_bytes(),
                              (startup.ROOT / "src/harness_foundry_factory" / name).read_bytes())
-        code = "from harness_foundry_runtime.local_runtime import LOCAL_MODE; print(LOCAL_MODE)"
+        code = ("from harness_foundry_runtime.local_runtime import LOCAL_MODE; "
+                "from harness_foundry_runtime.startup_runtime import STARTUP_MODE; print(LOCAL_MODE)")
         env = dict(os.environ, PYTHONPATH=str(self.candidate / "tools"), PYTHONDONTWRITEBYTECODE="1")
         completed = subprocess.run([sys.executable, "-B", "-c", code], cwd=self.root,
                                    capture_output=True, text=True, env=env, timeout=20)

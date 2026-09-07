@@ -373,7 +373,7 @@ def _version_result() -> dict[str, Any]:
 
 def _runtime_advance(args: argparse.Namespace) -> dict[str, Any]:
     request = _load_request(args.request)
-    if request.get("adapter_mode") == "LOCAL_OFFLINE_PROCESSES":
+    if request.get("adapter_mode") in {"LOCAL_OFFLINE_PROCESSES", "START_PACKAGE_SQLITE_REGISTRATION"}:
         return _runtime_local(args, request)
     _require_test_adapter_mode(request)
     program_id = request.get("program_id")
@@ -431,7 +431,7 @@ def _runtime_advance(args: argparse.Namespace) -> dict[str, Any]:
 
 def _runtime_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
     request = _load_request(args.request)
-    if request.get("adapter_mode") == "LOCAL_OFFLINE_PROCESSES":
+    if request.get("adapter_mode") in {"LOCAL_OFFLINE_PROCESSES", "START_PACKAGE_SQLITE_REGISTRATION"}:
         return _runtime_local(args, request, checkpoint=True)
     if "binding_kind" in _required_mapping(request, "expected_bindings"):
         raise ControlKernelError("LOCAL_RUNTIME_REQUEST_INVALID", "Start Package checkpoints require the real-clock local mode")
@@ -456,7 +456,7 @@ def _runtime_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
 
 def _runtime_resume(args: argparse.Namespace) -> dict[str, Any]:
     request = _load_request(args.request)
-    if request.get("adapter_mode") == "LOCAL_OFFLINE_PROCESSES":
+    if request.get("adapter_mode") in {"LOCAL_OFFLINE_PROCESSES", "START_PACKAGE_SQLITE_REGISTRATION"}:
         return _runtime_local(args, request, resume=True)
     _require_test_adapter_mode(request)
     capsule = _required_mapping(request, "resume_capsule")
@@ -509,6 +509,7 @@ def _runtime_local(args: argparse.Namespace, request: Mapping[str, Any], *, resu
     from .local_runtime import LOCAL_CLASS, prepare_local_runtime
     from .execution_handoff import verify_runtime_factory_binding
     from .control_kernel import rebuild_control_projections
+    from .startup_runtime import STARTUP_MODE, STARTUP_CLASS, prepare_startup_runtime, project_startup_views
 
     if "test_adapter_results" in request or "created_at" in request:
         raise ControlKernelError("LOCAL_RUNTIME_REQUEST_INVALID", "production requests cannot supply results or wall-clock time")
@@ -517,19 +518,25 @@ def _runtime_local(args: argparse.Namespace, request: Mapping[str, Any], *, resu
     program_id = _required_string(identity, "program_id")
     parent_id = _required_string(identity, "parent_authorization_id")
     _validate_runtime_program_id(program_id)
+    startup = request.get("adapter_mode") == STARTUP_MODE
+    plan_key = "startup_execution" if startup else "local_execution"
     transition = _required_mapping(request, "transition") if resume else None
     if checkpoint:
         read_store = ControlEventStore(Path(args.control_db).expanduser().resolve(), read_only=True)
         parent = rebuild_control_projections(read_store.list_events(program_id))["grant_ledger"]["parents"].get(parent_id, {})
         resume_node = _required_string(request, "resume_node")
-        selected = parent.get("local_execution", {}).get("transitions", {}).get(resume_node)
+        selected = parent.get(plan_key, {}).get("transitions", {}).get(resume_node)
         if not isinstance(selected, Mapping):
             raise ControlKernelError("LOCAL_RUNTIME_REQUEST_INVALID", "checkpoint resume node is not in the approved local plan")
         contracts = {resume_node: selected}
     else:
         contracts = {_required_string(transition, "transition_id"): transition} if resume else _required_mapping(request, "contracts")
-    adapter = prepare_local_runtime(Path(args.control_db).expanduser().resolve(), program_id, parent_id, contracts)
-    engine = GenericTransitionEngine(adapter.store, {LOCAL_CLASS: adapter}, binding_verifier=verify_runtime_factory_binding)
+    prepare = prepare_startup_runtime if startup else prepare_local_runtime
+    options = {"entry_node": (resume_node if checkpoint else transition["transition_id"] if resume
+                               else _required_string(request, "start_transition_id"))} if startup else {}
+    adapter = prepare(Path(args.control_db).expanduser().resolve(), program_id, parent_id, contracts, **options)
+    engine = GenericTransitionEngine(adapter.store, {STARTUP_CLASS if startup else LOCAL_CLASS: adapter},
+                                     binding_verifier=verify_runtime_factory_binding)
     current_time = datetime.now(timezone.utc).isoformat()
     common = dict(expected_bindings=_required_mapping(request, "expected_bindings"),
                   expected_control_state_sha256=_required_string(request, "expected_control_state_sha256"),
@@ -538,11 +545,17 @@ def _runtime_local(args: argparse.Namespace, request: Mapping[str, Any], *, resu
     if checkpoint:
         return engine.create_checkpoint(program_id, parent_id, resume_node=resume_node, **common)
     if resume:
-        return engine.resume_from_capsule(capsule, transition, _required_mapping(request, "inputs"),
-                                          expected_fencing_token=request.get("expected_fencing_token"), **common)
-    return engine.runtime_advance_until_gate(program_id, parent_id, contracts,
-        _required_mapping(request, "inputs_by_transition"), start_transition_id=_required_string(request, "start_transition_id"),
-        max_transitions=request.get("max_transitions"), **common)
+        result = engine.resume_from_capsule(capsule, transition, _required_mapping(request, "inputs"),
+                                            expected_fencing_token=request.get("expected_fencing_token"), **common)
+    else:
+        result = engine.runtime_advance_until_gate(program_id, parent_id, contracts,
+            _required_mapping(request, "inputs_by_transition"), start_transition_id=_required_string(request, "start_transition_id"),
+            max_transitions=request.get("max_transitions"), **common)
+    if startup:
+        parent = rebuild_control_projections(adapter.store.list_events(program_id))["grant_ledger"]["parents"][parent_id]
+        verify_runtime_factory_binding(parent)
+        project_startup_views(adapter.store, program_id, parent[plan_key]["execution_root"], write=True)
+    return result
 
 
 def _require_test_adapter_mode(request: Mapping[str, Any]) -> None:

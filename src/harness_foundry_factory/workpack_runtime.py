@@ -879,6 +879,8 @@ def execute_hydrated_workpack(
     """Execute one authorized Workpack; never advances the successor node."""
 
     candidate, execution = _resolved_roots(candidate_root, execution_root)
+    _require(not (execution / ".harness-foundry/control.sqlite3").exists(),
+             "SQLITE_CONTROLLER_OWNS_STATE", "legacy Workpack execution cannot bypass the authoritative SQLite controller")
     _require(
         hydration.get("hydration_sha256")
         == hash_without(hydration, "hydration_sha256")

@@ -581,6 +581,7 @@ EPOCH40_CONTROL_RUNTIME_MODULE_REFS = (
     "tools/harness_foundry_runtime/control_kernel.py",
     "tools/harness_foundry_runtime/local_runtime.py",
     "tools/harness_foundry_runtime/local_process.py",
+    "tools/harness_foundry_runtime/startup_runtime.py",
     *EPOCH32_RUNTIME_MODULE_REFS,
 )
 EPOCH45_WORKPACK_RUNTIME_MODULE_REF = (
@@ -1406,6 +1407,18 @@ def compile_start_package(
                 "start_package_assurance_profile": LOCAL_EXEC_UNTRUSTED_INPUT,
                 "assurance_profile": "SELF_USE_LOCAL_TRUSTED_OPERATOR",
                 "profile_source": "FROZEN_REQUIREMENT_ASSURANCE_RESOLUTION",
+                "sqlite_controller_contract": {
+                    "mode": "START_PACKAGE_SQLITE_REGISTRATION",
+                    "authority_ref": "harness-resource://execution/.harness-foundry/control.sqlite3",
+                    "preparation_entrypoint": "prepare_action",
+                    "proposal_is_commit": False,
+                    "transaction_journal": "SQLITE_CONTROL_EVENTS",
+                    "legacy_transaction_protocol": "NOT_EXECUTED_BY_SQLITE_ROUTE",
+                    "compatibility_files_authoritative": False,
+                    "legacy_writer_when_sqlite_present": "REJECT",
+                    "driver_start_allowed": False,
+                    "workpack_execution_allowed": False,
+                },
                 "execution_authorized": False,
             })
             _write_epoch4_runtime_store_dependency_closure(staging, include_workpack_runtime=True)
@@ -11243,6 +11256,7 @@ def _write_control_kernel_bundle(
         "control_kernel.py",
         "local_runtime.py",
         "local_process.py",
+        "startup_runtime.py",
         "requirement_completion.py",
     )
     for filename in runtime_sources:

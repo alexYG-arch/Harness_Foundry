@@ -696,56 +696,9 @@ def _validate_recovery_inputs(
     }
 
 
-def execute_action(
-    candidate_root: Path,
-    execution_root: Path,
-    command_manifest_path: Path,
-    authorization_path: Path,
-    *,
-    crash_after: str | None = None,
-) -> dict[str, Any]:
-    if candidate_root.is_symlink() or execution_root.is_symlink():
-        raise ContractError("CANDIDATE_EXECUTION_ROOT_OVERLAP", "root symlinks are forbidden")
-    candidate_root = candidate_root.resolve()
-    execution_root = execution_root.resolve()
-    if candidate_root == execution_root or candidate_root in execution_root.parents or execution_root in candidate_root.parents:
-        raise ContractError("CANDIDATE_EXECUTION_ROOT_OVERLAP", "Candidate and execution roots must be disjoint")
-    if crash_after is not None and crash_after not in CRASH_POINTS:
-        raise ContractError("CRASH_POINT_INVALID", crash_after)
-    for supplied, label in ((command_manifest_path, "command manifest"), (authorization_path, "authorization")):
-        resolved = supplied.resolve()
-        if supplied.is_symlink() or not resolved.is_relative_to(execution_root):
-            raise ContractError("CONTROL_ACTION_INPUT_INVALID", f"{label} must be under the execution root")
-
-    transaction_path = execution_root / TRANSACTION_REF
+def _prepare_transaction(candidate_root: Path, execution_root: Path, runtime: Mapping[str, Any]) -> dict[str, Any]:
+    """Build validated payloads; never commit a lease, journal, result or state."""
     schema = read_json(candidate_root / RESULT_SCHEMA_REF)
-    if transaction_path.exists():
-        transaction = read_json(transaction_path, "TRANSACTION_JOURNAL_INVALID")
-        runtime = _validate_recovery_inputs(candidate_root, execution_root, command_manifest_path, authorization_path, transaction)
-        _validate_transaction(transaction, runtime["contract"], schema)
-        disposition = _commit_transaction(execution_root, transaction, crash_after, was_recovery=True)
-        result = read_json(execution_root / RESULT_REF, "CONTROL_PLANE_REGISTRATION_RESULT_INVALID")
-        validate_result_document(result, schema, runtime["contract"])
-        return {"status": "PASS", "disposition": disposition, "result": result}
-
-    runtime = _validate_runtime_inputs(candidate_root, execution_root, command_manifest_path, authorization_path)
-    lease_path = execution_root / LEASE_REF
-    lease_payload = {
-        "schema_version": "1.0",
-        "action_id": ACTION_ID,
-        "lease_id": runtime["lease_id"],
-        "idempotency_key": runtime["idempotency_key"],
-        "fencing_token": runtime["fencing_token"],
-        "status": "ACQUIRED",
-    }
-    if lease_path.exists():
-        require_equal(read_json(lease_path), lease_payload, "LEASE_CONFLICT", "lease")
-    else:
-        try:
-            exclusive_json(lease_path, lease_payload)
-        except FileExistsError:
-            require_equal(read_json(lease_path), lease_payload, "LEASE_CONFLICT", "lease")
-
     started_at = utc_now()
     result = {
         "schema_version": "1.0",
@@ -833,6 +786,83 @@ def execute_action(
         "transaction_sha256": "",
     }
     prepared["transaction_sha256"] = hash_without(prepared, "transaction_sha256")
+    return prepared
+
+
+def prepare_action(candidate_root: Path, execution_root: Path, command_manifest_path: Path,
+                   authorization_path: Path) -> dict[str, Any]:
+    """Read-only preparation for a controller that owns the authoritative commit.
+
+    The returned proposal is not a committed action or execution permission.
+    Its controller must revalidate its own authority and compare-and-swap the
+    input state before committing. Driver probes remain read-only verification.
+    """
+    if candidate_root.is_symlink() or execution_root.is_symlink():
+        raise ContractError("CANDIDATE_EXECUTION_ROOT_OVERLAP", "root symlinks are forbidden")
+    candidate, execution = candidate_root.resolve(), execution_root.resolve()
+    if candidate == execution or candidate in execution.parents or execution in candidate.parents:
+        raise ContractError("CANDIDATE_EXECUTION_ROOT_OVERLAP", "Candidate and execution roots must be disjoint")
+    for path in (command_manifest_path, authorization_path):
+        if path.is_symlink() or not path.resolve().is_relative_to(execution):
+            raise ContractError("CONTROL_ACTION_INPUT_INVALID", "action inputs must be under the execution root")
+    runtime = _validate_runtime_inputs(candidate, execution, command_manifest_path.resolve(), authorization_path.resolve())
+    return _prepare_transaction(candidate, execution, runtime)
+
+
+def execute_action(
+    candidate_root: Path,
+    execution_root: Path,
+    command_manifest_path: Path,
+    authorization_path: Path,
+    *,
+    crash_after: str | None = None,
+) -> dict[str, Any]:
+    if (execution_root / ".harness-foundry/control.sqlite3").exists():
+        raise ContractError("SQLITE_CONTROLLER_OWNS_STATE", "use read-only preparation through the authoritative controller")
+    if candidate_root.is_symlink() or execution_root.is_symlink():
+        raise ContractError("CANDIDATE_EXECUTION_ROOT_OVERLAP", "root symlinks are forbidden")
+    candidate_root = candidate_root.resolve()
+    execution_root = execution_root.resolve()
+    if candidate_root == execution_root or candidate_root in execution_root.parents or execution_root in candidate_root.parents:
+        raise ContractError("CANDIDATE_EXECUTION_ROOT_OVERLAP", "Candidate and execution roots must be disjoint")
+    if crash_after is not None and crash_after not in CRASH_POINTS:
+        raise ContractError("CRASH_POINT_INVALID", crash_after)
+    for supplied, label in ((command_manifest_path, "command manifest"), (authorization_path, "authorization")):
+        resolved = supplied.resolve()
+        if supplied.is_symlink() or not resolved.is_relative_to(execution_root):
+            raise ContractError("CONTROL_ACTION_INPUT_INVALID", f"{label} must be under the execution root")
+
+    transaction_path = execution_root / TRANSACTION_REF
+    schema = read_json(candidate_root / RESULT_SCHEMA_REF)
+    if transaction_path.exists():
+        transaction = read_json(transaction_path, "TRANSACTION_JOURNAL_INVALID")
+        runtime = _validate_recovery_inputs(candidate_root, execution_root, command_manifest_path, authorization_path, transaction)
+        _validate_transaction(transaction, runtime["contract"], schema)
+        disposition = _commit_transaction(execution_root, transaction, crash_after, was_recovery=True)
+        result = read_json(execution_root / RESULT_REF, "CONTROL_PLANE_REGISTRATION_RESULT_INVALID")
+        validate_result_document(result, schema, runtime["contract"])
+        return {"status": "PASS", "disposition": disposition, "result": result}
+
+    runtime = _validate_runtime_inputs(candidate_root, execution_root, command_manifest_path, authorization_path)
+    lease_path = execution_root / LEASE_REF
+    lease_payload = {
+        "schema_version": "1.0",
+        "action_id": ACTION_ID,
+        "lease_id": runtime["lease_id"],
+        "idempotency_key": runtime["idempotency_key"],
+        "fencing_token": runtime["fencing_token"],
+        "status": "ACQUIRED",
+    }
+    if lease_path.exists():
+        require_equal(read_json(lease_path), lease_payload, "LEASE_CONFLICT", "lease")
+    else:
+        try:
+            exclusive_json(lease_path, lease_payload)
+        except FileExistsError:
+            require_equal(read_json(lease_path), lease_payload, "LEASE_CONFLICT", "lease")
+
+    prepared = _prepare_transaction(candidate_root, execution_root, runtime)
+    result = prepared["result_payload"]
     try:
         exclusive_json(transaction_path, prepared)
     except FileExistsError:

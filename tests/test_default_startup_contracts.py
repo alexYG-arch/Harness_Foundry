@@ -76,6 +76,17 @@ class DefaultStartupContractTests(unittest.TestCase):
         self.assertEqual(len(self.action.read_events(execution / self.action.CONTROL_EVENTS_REF)), 1)
         self.assertEqual(before, self._candidate_snapshot())
 
+    def test_shared_preparation_does_not_commit_a_result_lease_or_control_event(self):
+        self._load_action()
+        execution, command, authorization = self._runtime_inputs("shared-prepare-only")
+        from harness_foundry_factory.service import _tree_hash
+        before = _tree_hash(self.root)
+        prepared = self.action.prepare_action(self.candidate, execution, command, authorization)
+        self.assertEqual(prepared["transaction_state"], "PREPARED")
+        self.assertEqual(prepared["result_payload"]["status"], "PASS")
+        self.assertEqual(before, _tree_hash(self.root))
+        self.assertFalse((execution / self.action.RESULT_REF).exists())
+
     def test_independent_validator_does_not_skip_the_default_contract(self):
         self._load_action()
         contract = self.candidate / "validation/SHARED_CONTROL_BASELINE_ACTION_CONTRACT.json"
@@ -146,6 +157,29 @@ class NormalLocalStartupTests(unittest.TestCase):
                                    capture_output=True, text=True, check=False, timeout=60)
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
         self.assertEqual(json.loads(completed.stdout)["status"], "PASS")
+
+    def test_registration_and_driver_preparation_are_read_only(self):
+        from harness_foundry_factory.service import _tree_hash
+        from unittest.mock import patch
+        import os
+        for action, prepare in ((self.registration, self._registration_inputs),
+                                (self.verification, self._verification_inputs)):
+            with self.subTest(node=action.NODE_ID):
+                execution, command, authorization = prepare("prepare-only-" + action.NODE_ID)
+                before = _tree_hash(self.root)
+                if action is self.verification:
+                    with patch.dict(os.environ, {"OPENAI_API_KEY": "TEST_ONLY_MUST_NOT_FORWARD", "PYTHONSTARTUP": "/test-only-hook"}), \
+                         patch.object(action.subprocess, "run", wraps=action.subprocess.run) as spy:
+                        proposal = action.prepare_action(self.candidate, execution, command, authorization)
+                    self.assertEqual(spy.call_count, 3)
+                    for call in spy.call_args_list:
+                        self.assertNotIn("OPENAI_API_KEY", call.kwargs["env"])
+                        self.assertNotIn("PYTHONSTARTUP", call.kwargs["env"])
+                else:
+                    proposal = action.prepare_action(self.candidate, execution, command, authorization)
+                self.assertEqual(proposal["transaction_state"], "PREPARED")
+                self.assertEqual(before, _tree_hash(self.root))
+                self.assertFalse((execution / action.RESULT_REF).exists())
 
     def test_revoked_registration_authorization_never_commits(self):
         execution, command, authorization = self._registration_inputs("revoked-register")

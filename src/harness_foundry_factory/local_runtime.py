@@ -342,9 +342,10 @@ def prepare_local_runtime(control_db, program_id, parent_id, contracts):
              "local Candidate and execution roots must already exist and be disjoint")
     _require(Path(control_db).resolve().is_relative_to(execution / ".harness-foundry"),
              "control database must remain in the execution controller domain")
-    _require(not any((execution / ".harness-foundry/control" / name).exists()
-                     for name in ("PROGRAM_CONTROL_EVENTS.jsonl", "PROGRAM_CONTROL_STATE.json")),
-             "legacy controller must be migrated, not dual-written", "LOCAL_LEGACY_CONTROLLER_PRESENT")
+    if any((execution / ".harness-foundry/control" / name).exists()
+           for name in ("PROGRAM_CONTROL_EVENTS.jsonl", "PROGRAM_CONTROL_STATE.json")):
+        from .startup_runtime import verify_startup_views
+        verify_startup_views(store, program_id, execution, parent.get("bindings", {}))
     _require(isinstance(contracts, Mapping) and bool(contracts)
              and all(plan["transitions"].get(key) == value for key, value in contracts.items()),
              "requested transitions differ from the approved local plan")
