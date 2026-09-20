@@ -62,6 +62,12 @@ python3 devtools/package_committed_release.py --revision <同一提交> --output
 
 ## 当前可用与已验范围
 
+2026-09-20 同包原生离线准备发现共享 `/tmp` 下只读夹具可写；同一接收器在系统用户
+临时目录中的只读拒绝与声明写入对照通过。已增加 macOS 共享临时目录布局的运行前拒绝，
+涵盖控制库、验收代码、来源、包及目标，不以更换位置假装修复底层平台问题。
+参见 [目录适用性](GENERIC_BUILD_CLI.md#macos-原生运行的目录适用性)。
+修正前的 58772ea 待验附件保留为历史，不得冒充修正后的发行物。
+
 - 核心版本、声明编译、诊断和本地便携加载使用 Python 3.11+ 标准库。
 - 通用 Build 消费已确认搭建文档，另行展示并批准具体执行范围；
   见 [Plan](GENERIC_BUILD_PLAN.md)、[CLI](GENERIC_BUILD_CLI.md)、

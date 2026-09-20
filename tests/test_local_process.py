@@ -53,6 +53,18 @@ class LocalProcessContractTests(unittest.TestCase):
                     LocalCommand.prepare(**(baseline | mutation))
             popen.assert_not_called()
 
+    def test_macos_shared_tmp_scope_is_rejected_before_launch(self):
+        # Current native receiver can write here even under a read-only profile.
+        # This is a supported-layout check, not another permission bypass flag.
+        with tempfile.TemporaryDirectory(dir="/tmp") as shared, \
+                patch("sys.platform", "darwin"), \
+                patch("harness_foundry_factory.local_process.subprocess.Popen") as popen:
+            for writes in ([], [shared]):
+                with self.subTest(writes=writes), self.assertRaisesRegex(LocalProcessError, "SHARED_TEMP_ISOLATION_UNSUPPORTED"):
+                    LocalCommand.prepare(argv=["/usr/bin/true"], cwd=shared,
+                                         read_roots=[shared, "/usr/bin/true"], write_roots=writes)
+            popen.assert_not_called()
+
     def test_missing_or_old_cli_interface_never_dispatches_workload(self):
         # Real /usr/bin/true cannot act as a sandbox; a zero help exit is not readiness.
         result = self.runner.run(self.command)

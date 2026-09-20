@@ -15,6 +15,7 @@ from pathlib import Path
 import selectors
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 from typing import Any, Callable, Sequence
@@ -23,6 +24,19 @@ from uuid import uuid4
 
 class LocalProcessError(ValueError):
     """Invalid command or unavailable receiver, before workload dispatch."""
+
+
+def unsupported_isolation_paths(paths) -> list[str]:
+    """Current macOS receiver does not enforce readonly protection in shared /tmp.
+
+    Native offline checks observed writes even with explicit read/deny rules.
+    Reject that layout instead of treating a successful sandbox launch as proof.
+    This restriction does not grant reads/writes or change global Codex settings.
+    """
+    if sys.platform != "darwin":
+        return []
+    shared = Path("/tmp").resolve()
+    return sorted({str(path) for value in paths if (path := Path(value).resolve()).is_relative_to(shared)})
 
 
 def _path(value: str | Path, *, directory: bool = False) -> Path:
@@ -75,6 +89,8 @@ class LocalCommand:
         reads = tuple(_path(root) for root in read_roots)
         writes = tuple(_path(root) for root in write_roots)
         workdir = _path(cwd, directory=True)
+        if unsupported_isolation_paths([workdir, executable, *reads, *writes]):
+            raise LocalProcessError("SHARED_TEMP_ISOLATION_UNSUPPORTED: on macOS use a verified non-shared directory, not /tmp")
         if not _within(workdir, reads + writes) or not _within(executable, reads + writes):
             raise LocalProcessError("cwd and executable must be covered by explicit local reads")
         # Preserve argv[0]: resolving a venv's Python symlink here would change

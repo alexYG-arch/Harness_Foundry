@@ -25,6 +25,13 @@ Codex login. Native execution currently targets POSIX hosts and requires explici
 Codex executable, model/service, local tool and instruction-read bindings; a
 Python import smoke is not native sandbox acceptance. No silent model fallback.
 
+On macOS, do not put this runtime, inputs, verifier, controller or target in shared
+`/tmp` (including its `/private/tmp` alias). The current native receiver did not
+enforce read-only protection there in an offline probe. Foundry rejects that
+layout before dispatch with `SHARED_TEMP_ISOLATION_UNSUPPORTED`; this is a support
+restriction, not a fix to the underlying Codex sandbox. Use an independent ordinary
+project directory and check the actual native read/write boundaries before a run.
+
 The agent prepares public CLI requests following [Build CLI](docs/GENERIC_BUILD_CLI.md),
 [Plan](docs/GENERIC_BUILD_PLAN.md), [sources](docs/GENERIC_SOURCE_INTAKE.md),
 [acceptance contracts](docs/ACCEPTANCE_CONTRACT_ALIGNMENT.md) and

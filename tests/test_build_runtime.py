@@ -170,6 +170,24 @@ class BuildRuntimeTests(unittest.TestCase):
             self.approve()
         return self.prepared_id
 
+    def test_shared_tmp_verifier_cannot_be_prepared_as_readonly_on_macos(self):
+        with tempfile.TemporaryDirectory(dir="/tmp") as shared:
+            verifier = Path(shared).resolve()
+            (verifier / "check.py").write_text(VERIFIER)
+            self.scope["verification_root"] = str(verifier)
+            with patch("sys.platform", "darwin"), \
+                    self.assertRaisesRegex(RequestValidationError, "SHARED_TEMP_ISOLATION_UNSUPPORTED"):
+                self.prepare(approve=False)
+        self.assertFalse(self.events("BUILD_AUTHORIZATION_PREPARED"))
+
+    def test_shared_tmp_controller_cannot_be_prepared_on_macos(self):
+        with tempfile.TemporaryDirectory(dir="/tmp") as shared:
+            self.store = ControlEventStore(Path(shared) / "control.sqlite3", storage_format="REVISION_V1")
+            with patch("sys.platform", "darwin"), \
+                    self.assertRaisesRegex(RequestValidationError, "SHARED_TEMP_ISOLATION_UNSUPPORTED"):
+                self.prepare(approve=False)
+            self.assertFalse(self.events("BUILD_AUTHORIZATION_PREPARED"))
+
     def approve(self):
         return approve_build_authorization(self.store, self.program, self.prepared_id,
             human_message_ref="TEST-FIXTURE-HUMAN-APPROVAL-NOT-A-REAL-GRANT", **self.kwargs("approval"))

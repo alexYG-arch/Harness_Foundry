@@ -18,7 +18,7 @@ from .acceptance_contract import validate_acceptance_contracts
 from .build_plan import validate_build_plan
 from .build_replan import adapt_build_plan
 from .build_review import validate_build_review, validate_review_sources
-from .local_process import LocalCommand, CodexSandboxRunner
+from .local_process import LocalCommand, CodexSandboxRunner, unsupported_isolation_paths
 from .build_types import RequestValidationError, RevisionConflictError, canonical_json
 from .process_observation import CommandObservation
 from .source_intake import load_local_sources, validate_requirement_source_bindings
@@ -27,6 +27,15 @@ from .source_intake import load_local_sources, validate_requirement_source_bindi
 def _check(condition, message):
     if not condition:
         raise RequestValidationError(message)
+
+
+def _check_native_layout(store, scope, source=None):
+    paths = [store.database_path, Path(__file__), scope["workspace_root"], scope["verification_root"],
+             *scope["source_read_roots"], *scope["executables"].values(), scope["codex_executable"]]
+    if source is not None:
+        paths.extend(Path(source["source_root"]) / entry["path"] for entry in source["manifest"])
+    _check(not unsupported_isolation_paths(paths),
+           "SHARED_TEMP_ISOLATION_UNSUPPORTED: macOS /tmp cannot protect controller, verifier, source or target boundaries; use a verified non-shared directory")
 
 
 def _utc(value):
@@ -168,6 +177,7 @@ def _validate_scope(store, plan, scope):
         for path in (Path(executable), Path(executable).resolve()):
             _check(not any(path.is_relative_to(root) for root in all_write_roots),
                    "executable or receiver must not be task-writable")
+    _check_native_layout(store, scope)
     return verifier_files
 
 
@@ -185,6 +195,7 @@ def prepare_build_authorization(store, program_id, proposal_event_id, source_eve
     validate_requirement_source_bindings(ir, source["payload"]["snapshot"])
     contracts = validate_acceptance_contracts(ir, snapshot=source["payload"]["snapshot"], required=True)
     files = _validate_scope(store, plan, scope)
+    _check_native_layout(store, scope, source["payload"])
     _check(_utc(created_at) < _utc(scope["expires_at"]), "authorization already expired")
     # Persist actual directory bindings, not movable symbolic root aliases.
     scope = deepcopy(scope)
@@ -232,6 +243,7 @@ def approve_build_authorization(store, program_id, prepared_event_id, *, human_m
     validate_build_review(latest["payload"].get("document_review"))
     _check(latest["event_id"] == prepared["payload"]["proposal_event_id"], "proposal changed before approval")
     source = _event(events, prepared["payload"]["source_event_id"], "BUILD_SOURCES_CAPTURED")["payload"]
+    _check_native_layout(store, prepared["payload"]["scope"], source)
     contracts = validate_acceptance_contracts(latest["payload"]["requirement_ir"],
                                              snapshot=source["snapshot"], required=True)
     _check(prepared["payload"].get("acceptance_contracts") == contracts,
@@ -402,6 +414,7 @@ class BuildController:
                 _local_argv(task["local_argv"], prepared["scope"])
         prepared["proposal_event_id"] = proposal["event_id"]
         source = _event(events, prepared["source_event_id"], "BUILD_SOURCES_CAPTURED")["payload"]
+        _check_native_layout(self.store, prepared["scope"], source)
         # Old scopes remain readable, but cannot dispatch under an implicit
         # acceptance basis. A new preparation does not inherit old approval.
         contracts = validate_acceptance_contracts(proposal["payload"]["requirement_ir"],
