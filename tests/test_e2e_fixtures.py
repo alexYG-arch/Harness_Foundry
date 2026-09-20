@@ -11,6 +11,7 @@ from harness_foundry_factory.compiler import compile_candidate
 from harness_foundry_factory.service import FactoryService
 from harness_foundry_factory.store import SQLiteEventStore
 from harness_foundry_factory.validator import validate_candidate
+from tests.build_review_fixture import reviewed_document
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,6 +21,7 @@ FIXTURES = ROOT / "tests/fixtures"
 
 class RequiredFixtureTests(unittest.TestCase):
     def _service(self, root: Path) -> FactoryService:
+        self.root = root
         return FactoryService(
             SQLiteEventStore(root / "factory.sqlite3"),
             spec_root=SPEC,
@@ -27,13 +29,12 @@ class RequiredFixtureTests(unittest.TestCase):
             clock=lambda: "2026-07-10T00:00:00Z",
         )
 
-    @staticmethod
-    def _request(program_id: str, payload: dict) -> dict:
+    def _request(self, program_id: str, payload: dict) -> dict:
         return {
             "request_id": "REQ-1", "idempotency_key": "IDEM-1",
             "program_id": program_id, "expected_state_hash": None,
             "actor": {"type": "HUMAN_VIA_CODEX_CHAT", "chat_thread_id": "FIXTURE", "turn_id": "TURN-1"},
-            "intent": "CREATE", "payload": payload,
+            "intent": "CREATE", "payload": {**payload, "build_document_review": reviewed_document(self.root)},
         }
 
     def test_ambiguous_harness_returns_at_most_three_questions(self) -> None:

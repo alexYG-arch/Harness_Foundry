@@ -35,6 +35,10 @@ ALLOWED_TOP_LEVEL_FILES = (
     "README.md",
     "docs/ARCHITECTURE.md",
     "docs/CHAT_USAGE.md",
+    "docs/GENERIC_BUILD_PLAN.md",
+    "docs/GENERIC_BUILD_CLI.md",
+    "docs/GENERIC_BUILD_RUNTIME.md",
+    "docs/GENERIC_SOURCE_INTAKE.md",
     "pyproject.toml",
 )
 ALLOWED_TREES = (

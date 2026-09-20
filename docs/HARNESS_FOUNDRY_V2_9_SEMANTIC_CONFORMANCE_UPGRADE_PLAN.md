@@ -1,5 +1,7 @@
 # Harness Foundry v2.9 最小可信执行闭环升级方案
 
+2026-09-18 规划更新：下一轮工程请先读[通用 Codex Harness 修复与更新计划 v0.2](FOUNDRY_GENERIC_CODEX_HARNESS_UPDATE_PLAN_v0_2.md)。它整合用户最新确认的通用建设目标、PRD／项目说明场景、最小 Hash 与他人 Codex 接入标准，并提出对本 R8 中固定决策槽、实施冻结和 Authoring-only 完成边界的调整。本 R8 正文保留供追踪；新计划尚未实施，不修改旧 Program、锁、授权或导入来源身份。
+
 ## 0. 文档信息
 
 | 字段 | 内容 |

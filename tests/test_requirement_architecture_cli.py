@@ -22,6 +22,7 @@ from harness_foundry_factory.models import (
 )
 from harness_foundry_factory.service import FactoryService
 from harness_foundry_factory.store import SQLiteEventStore
+from tests.build_review_fixture import reviewed_document
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -101,6 +102,8 @@ class RequirementArchitectureCliTests(unittest.TestCase):
         payload: dict | None = None,
     ) -> dict:
         self.request_number += 1
+        if intent == "CREATE":
+            payload = {**(payload or {}), "build_document_review": reviewed_document(self.root)}
         return {
             "request_id": f"REQ-SLICE-02-{self.request_number:02d}",
             "idempotency_key": f"IDEM-SLICE-02-{self.request_number:02d}",

@@ -1,15 +1,20 @@
 # Execution startup repair and acceptance
 
-Status: IN_PROGRESS. A bound Execution Root is not a running Harness.
+Status: PARTIAL_IMPLEMENTATION_EVIDENCE; forward planning is consolidated in the
+[generic Codex Harness update plan v0.2](FOUNDRY_GENERIC_CODEX_HARNESS_UPDATE_PLAN_v0_2.md)
+(2026-09-18). A bound Execution Root is not a running Harness.
 
-Current engineering objective: Foundry execution startup and its regressions.
-The user removed complete target Harness/media delivery from the active goal;
-this does not edit the separate frozen target Requirement or grant execution.
+Current objective: a generic Foundry that builds and validates usable
+Codex-carried Harnesses. Startup and the regressions below remain reusable
+partial evidence. Earlier target-video steps later in this chronological log
+are historical and are not the current implementation sequence. This planning
+update does not edit the separate frozen target Requirement or grant execution.
 
-Latest slice: the native Lab protocol verifier calls the selected project's
-implementation through the approved offline receiver, checks the complete
-frozen Registry/Schema declarations as well as primitive examples, and commits
-its actual protocol observation. Coding prerequisites, immutable verification arguments,
+Latest slice: the native Lab protocol verifier binds every owned obligation to
+actual behavior checks and supervisor-observed repository bytes. The read-only
+audit can distinguish current protocol evidence from a historical PASS whose
+implementation changed or whose newer verification failed. Frozen Registry/Schema
+declarations and primitive examples remain checked. Coding prerequisites, immutable verification arguments,
 read-only worker scope and a stop before Workpack acceptance are enforced.
 Post-observation control results now have a separate producer and are excluded
 from coding-command writes, while remaining mandatory Workpack outputs.
@@ -959,6 +964,51 @@ and legitimate downstream writes must not be rejected merely because an older
 Workpack's whole repository snapshot differs. Keep dependency ownership and
 accepted transition lineage explicit instead of introducing recursive hashing
 or rerunning the complete historical chain at every stage.
+
+## Owned protocol evidence and implementation observation slice
+
+The `LAB_PROTOCOL_BEHAVIOR_V3` producer recipe declares supervisor repository
+observation and the exact owned obligation references. Its independent Validator
+requires those fields. The runtime reads only the native selected repository,
+reuses the existing per-file byte domain before/after the actual worker and
+stores that observation in SQLite with the captured result. No aggregate hash,
+signature layer, project self-written receipt or extra filesystem read domain
+is added. The complete frozen three-obligation semantic API contract is matched
+independently; changed/added/omitted obligations cannot silently reuse old tests.
+
+The completion audit now consumes those genuinely committed observations and
+rechecks the captured Case set, obligation mapping and current repository bytes.
+It selects the latest native command attempt, so a newer failed/pending check
+cannot revive an older PASS. Historical observations still survive recovery
+without redispatch, but changed implementation is not current evidence. These
+are diagnostic assessments, not permission or a committed Workpack capability.
+
+The first 24-test integration run had one failure and one error in new fixture
+setup: the second check reused an already completed transition, which the kernel
+correctly deduplicated; the concurrent-writer fixture also intercepted the
+receiver preflight rather than only the worker. The fixtures now declare a
+distinct approved test transition and mutate only after the actual worker.
+Both corrected tests passed in 44.112 seconds. The failed original log is kept
+as `owned-protocol-first.log`; the corrected run is `owned-protocol-two.log`.
+The complete suite and core/spec/Skill validation are recorded after completion.
+
+Next serial integration remains the controller-owned Workpack acceptance
+transaction, receipt projection/recovery and produced capability consumption.
+It must consume live verified controller events, not this audit's temporary
+SQLite copy, and must not infer acceptance from process exit or schema-valid
+result files. Preserve the full Lab/Linkage/Main DAG and all unsupported owned
+obligations rather than treating this first protocol provider as a generic PASS.
+
+The next implementation should keep acceptance outside the Workpack's own
+native command list (its result depends on those commands). Declare the
+controller transition from the frozen Workpack, assess live prerequisites and
+owned-scope evidence, commit the actual acceptance payload in the existing
+SQLite engine, and only then project its controller-owned result files. Crash
+recovery must rebuild files from the committed payload without executing the
+project again. Downstream capability reads must consume this committed
+acceptance lineage; a standalone result file or an old startup-only projection
+cannot unlock the next Workpack. These steps are pending implementation, not
+claims made by this diagnostic slice.
 
 ## Reproduced gap
 

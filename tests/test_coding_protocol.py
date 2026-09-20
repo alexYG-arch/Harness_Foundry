@@ -6,7 +6,7 @@ import subprocess
 import sys
 import unittest
 
-from harness_foundry_factory.coding_protocol import observe_coding_process
+from harness_foundry_factory.coding_protocol import CodingEventObserver, observe_coding_process
 
 
 EVENTS = [
@@ -22,6 +22,24 @@ def capture(events):
 
 
 class CodingProtocolTests(unittest.TestCase):
+    def test_arbitrary_chunk_boundaries_do_not_corrupt_utf8_or_lifecycle(self):
+        events = deepcopy(EVENTS)
+        events[2]["item"]["text"] = "中文跨块"
+        raw = capture(events)
+        observer = CodingEventObserver()
+        for byte in raw:
+            observer.feed(bytes([byte]))
+        result = observer.finish(exit_code=0)
+        self.assertEqual(result["status"], "MODEL_TURN_COMPLETED")
+        self.assertEqual(result["final_message"], "中文跨块")
+
+    def test_event_limit_is_a_protocol_failure_not_a_display_limit(self):
+        observer = CodingEventObserver(max_event_bytes=128)
+        observer.feed(b"x" * 129)
+        observer.feed(capture(EVENTS))
+        self.assertEqual(observer.finish(exit_code=0)["reason_code"], "CODEX_EVENT_PROTOCOL_INVALID")
+        self.assertEqual(len(observer.pending), 0)
+
     def test_complete_turn_is_not_a_workpack_or_schema_oracle_pass(self):
         result = observe_coding_process(capture(EVENTS), exit_code=0)
         self.assertEqual(result["status"], "MODEL_TURN_COMPLETED")

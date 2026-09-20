@@ -3170,6 +3170,8 @@ class Epoch2CandidateTests(unittest.TestCase):
         self.assertEqual(descendant["status"], "PASS", descendant)
 
     def test_epoch31_factory_generation_is_immediately_revalidatable(self) -> None:
+        from tests.build_review_fixture import reviewed_document
+
         self.activate_epoch31()
         runs_root = self.root / "factory-runs"
         store = SQLiteEventStore(
@@ -3185,6 +3187,9 @@ class Epoch2CandidateTests(unittest.TestCase):
         def apply(intent: str, state_hash: str | None, payload: dict | None = None) -> dict:
             nonlocal request_number
             request_number += 1
+            payload = dict(payload or {})
+            if intent == "CREATE":
+                payload["build_document_review"] = reviewed_document(self.root)
             return service.handle_chat_turn({
                 "request_id": f"REQ-E31-E2E-{request_number:02d}",
                 "idempotency_key": f"IDEM-E31-E2E-{request_number:02d}",
@@ -3196,7 +3201,7 @@ class Epoch2CandidateTests(unittest.TestCase):
                     "turn_id": f"TURN-E31-E2E-{request_number:02d}",
                 },
                 "intent": intent,
-                "payload": payload or {},
+                "payload": payload,
             })
 
         created = apply("CREATE", None, {"requirement_ir": self.ir})

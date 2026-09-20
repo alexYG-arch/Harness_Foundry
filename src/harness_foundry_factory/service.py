@@ -45,6 +45,7 @@ from .semantic_contracts import (
 )
 from .traceability import WORKPACK_PROJECTS, normalize_ir_coverage
 from . import prebuild_delegation as delegation
+from .build_review import validate_build_review, validate_review_reuse
 
 
 Clock = Callable[[], str]
@@ -173,9 +174,20 @@ class FactoryService:
             if request.intent == "CREATE":
                 if current is not None:
                     raise InvalidTransitionError("CREATE requires no existing program")
+                validate_build_review(request.payload.get("build_document_review"))
                 return self._create(program_id, request, transition_time)
             if current is None:
                 raise InvalidTransitionError("existing program state is required")
+            if request.intent != "REVOKE_PREBUILD_DELEGATION":
+                incoming_review = request.payload.get("build_document_review")
+                if incoming_review is not None:
+                    if request.intent != "REOPEN" or request.actor.type != "HUMAN_VIA_CODEX_CHAT":
+                        raise RequestValidationError("a replacement document confirmation requires a human REOPEN")
+                    validate_build_review(incoming_review)
+                    validate_review_reuse(incoming_review, current.get("build_document_review"))
+                    current = deepcopy(current)
+                    current["build_document_review"] = deepcopy(incoming_review)
+                validate_build_review(current.get("build_document_review"))
             self._verify_locked_spec(current)
             handler = {
                 "ADD_SOURCES": self._add_sources,
@@ -342,6 +354,7 @@ class FactoryService:
         """Advance internal Authoring checks in one CAS to the next real gate."""
 
         record = self.store.get_program(program_id)
+        validate_build_review(record.snapshot.get("build_document_review"))
         if record.factory_state in {
             "BLOCKED_REQUIREMENT_GAP",
             "BLOCKED_SOURCE_CONFLICT",
@@ -1087,6 +1100,7 @@ class FactoryService:
         requirement_ir = self._canonicalize_ir(requirement_ir, program_id)
         snapshot = {
             "program_id": program_id,
+            "build_document_review": deepcopy(request.payload["build_document_review"]),
             "factory_state": "INTAKE_OPEN",
             "authoring_boundary": {
                 "execution_mode": "AUTHORING_ONLY",

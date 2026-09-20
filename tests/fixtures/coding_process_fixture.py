@@ -30,6 +30,15 @@ elif args and args[0] == "exec":
         print("TEST ONLY invalid event")
     if mode == "truncated":
         print("X" * 10000)
+    if mode in {"large_unicode", "large_stream"}:
+        message = {"type": "item.completed", "item": {"type": "agent_message", "text": "中" * 350000}}
+        for _ in range(9 if mode == "large_stream" else 1):
+            print(json.dumps(message, ensure_ascii=False), flush=True)
+    if mode == "large_stderr":
+        sys.stderr.write("诊断" * 50000)
+        sys.stderr.flush()
+    if mode == "missing_terminal":
+        sys.exit(0)
     if mode == "failed":
         print(json.dumps({"type": "turn.failed", "error": {"message": "TEST ONLY"}}))
         sys.exit(1)

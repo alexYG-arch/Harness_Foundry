@@ -15,6 +15,7 @@ from harness_foundry_factory.constants import default_spec_root
 from harness_foundry_factory.models import ProgramNotFoundError
 from harness_foundry_factory.service import FactoryService
 from harness_foundry_factory.store import SQLiteEventStore
+from tests.build_review_fixture import reviewed_document
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -47,6 +48,8 @@ class ChatCliEndToEndTests(unittest.TestCase):
         payload: dict | None = None,
     ) -> dict:
         self.request_number += 1
+        if intent == "CREATE":
+            payload = {**(payload or {}), "build_document_review": reviewed_document(self.root)}
         return {
             "request_id": f"REQUEST-E2E-{self.request_number:02d}",
             "idempotency_key": f"IDEMPOTENCY-E2E-{self.request_number:02d}",

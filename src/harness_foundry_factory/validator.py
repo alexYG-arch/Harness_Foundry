@@ -14942,12 +14942,14 @@ def _project_verification_command_findings(command: Mapping[str, Any]) -> list[d
     repository = "harness-resource://execution/project_start_packages/external_lab/repository"
     schema = "harness-resource://candidate/validation/PUBLIC_SKILL_JOB_INTERFACE.json"
     executable = "harness-resource://execution/project_start_packages/external_lab/.venv/bin/python"
-    expected = {"protocol": "LAB_PROTOCOL_BEHAVIOR_V2", "node_id": "LAB_BOOTSTRAP", "workpack_id": "LAB-PROTOCOL",
+    expected = {"protocol": "LAB_PROTOCOL_BEHAVIOR_V3", "node_id": "LAB_BOOTSTRAP", "workpack_id": "LAB-PROTOCOL",
                 "worker_ref": worker, "project_repository_ref": repository, "project_api_module": "external_lab.protocol",
                 "schema_ref": schema,
                 "registry_ref": "harness-resource://candidate/validation/ORACLE_EVALUATOR_REGISTRY.json",
                 "schema_catalog_ref": "harness-resource://candidate/canonical_sources/FROZEN_REQUIREMENT_IR.json#/target/artifact_schema_catalog",
-                "evidence_scope": "LAB_PROTOCOL_PRIMITIVES_AND_FROZEN_DECLARATIONS", "workpack_accepted": False}
+                "evidence_scope": "LAB_PROTOCOL_PRIMITIVES_AND_FROZEN_DECLARATIONS", "workpack_accepted": False,
+                "implementation_observation": "SUPERVISOR_SELECTED_REPOSITORY_FILESET_BEFORE_AND_AFTER",
+                "owned_obligation_refs": [f"/lab_case_execution_contract/implementation_obligations/{index}" for index in range(3)]}
     if (command.get("verification_contract") != expected or command.get("executor_role") != "INDEPENDENT_PROJECT_VERIFIER"
             or command.get("argv") != [executable, "-I", "-B", worker, "--project-root", repository, "--schema-file", schema]
             or command.get("cwd_absolute") != repository or command.get("allowed_write_roots") != []

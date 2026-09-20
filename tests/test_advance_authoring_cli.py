@@ -14,6 +14,7 @@ import unittest
 from harness_foundry_factory.service import FactoryService
 from harness_foundry_factory.models import StateConflictError
 from harness_foundry_factory.store import SQLiteEventStore
+from tests.build_review_fixture import reviewed_document
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -41,6 +42,8 @@ class AdvanceAuthoringCliTests(unittest.TestCase):
 
     def _request(self, intent: str, expected: str | None, payload: dict) -> dict:
         self.request_number += 1
+        if intent == "CREATE":
+            payload = {**payload, "build_document_review": reviewed_document(self.root)}
         return {
             "request_id": f"REQ-SLICE-04-{self.request_number}",
             "idempotency_key": f"IDEM-SLICE-04-{self.request_number}",

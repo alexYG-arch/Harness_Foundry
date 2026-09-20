@@ -7,3 +7,7 @@ runs/
 dist/
 build/
 *.egg-info/
+
+# Private source documents, case inputs and host authorization requests.
+/authoring_inputs/
+/authoring_requests/

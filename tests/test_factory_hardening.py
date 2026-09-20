@@ -19,6 +19,7 @@ from harness_foundry_factory.models import (
 )
 from harness_foundry_factory.service import FactoryService
 from harness_foundry_factory.store import SQLiteEventStore
+from tests.build_review_fixture import reviewed_document
 
 
 class FactoryHardeningTests(unittest.TestCase):
@@ -74,6 +75,8 @@ class FactoryHardeningTests(unittest.TestCase):
         program_id: str = "PROGRAM-HARDENING",
     ) -> dict:
         self.request_number += 1
+        if intent == "CREATE":
+            payload = {**(payload or {}), "build_document_review": reviewed_document(self.root)}
         return {
             "request_id": f"REQUEST-HARDENING-{self.request_number:02d}",
             "idempotency_key": f"IDEMPOTENCY-HARDENING-{self.request_number:02d}",

@@ -80,6 +80,10 @@ class StateConflictError(FactoryError):
     exit_code = 4
 
 
+class RevisionConflictError(StateConflictError):
+    code = "STATE_REVISION_CONFLICT"
+
+
 class InvalidTransitionError(FactoryError):
     code = "INVALID_FACTORY_TRANSITION"
     exit_code = 5

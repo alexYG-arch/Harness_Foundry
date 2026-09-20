@@ -18,6 +18,7 @@ from harness_foundry_factory.models import (
 )
 from harness_foundry_factory.service import FactoryService
 from harness_foundry_factory.store import SQLiteEventStore
+from tests.build_review_fixture import reviewed_document
 
 
 class FactoryStateMachineTests(unittest.TestCase):
@@ -78,6 +79,8 @@ class FactoryStateMachineTests(unittest.TestCase):
         expected_state_hash: str | None = None,
         payload: dict | None = None,
     ) -> dict:
+        if intent == "CREATE":
+            payload = {**(payload or {}), "build_document_review": reviewed_document(self.root)}
         return {
             "request_id": f"REQUEST-{number}",
             "idempotency_key": f"IDEMPOTENCY-{number}",

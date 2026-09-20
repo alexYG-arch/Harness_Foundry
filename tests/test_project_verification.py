@@ -16,6 +16,7 @@ import unittest
 
 from harness_foundry_factory.project_verification import (
     COMMAND_ID, EVIDENCE_SCOPE, plan_project_verification, observe_project_verification,
+    owned_obligation_bindings,
 )
 from harness_foundry_factory.lab_protocol_checks import PROTOCOL_CASE_IDS
 from harness_foundry_factory.local_runtime import LOCAL_MODE, LOCAL_CLASS, bind_local_workpack_transition
@@ -89,6 +90,30 @@ class ProducedProjectVerificationTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
         self.assertFalse(json.loads(completed.stdout)["execution_authorized"])
         self.assertEqual(before, runtime._tree_snapshot(self.root))
+
+    def test_owned_scope_is_complete_and_cannot_drop_or_change_an_obligation(self):
+        planned = plan_project_verification(self.semantic_candidate, "LAB_BOOTSTRAP", "LAB-PROTOCOL", COMMAND_ID)
+        bindings = planned["owned_obligation_bindings"]
+        covered = [case for row in bindings for case in row["case_ids"]]
+        self.assertEqual(len(covered), len(set(covered)))
+        self.assertEqual(set(covered), set(PROTOCOL_CASE_IDS) | set(planned["expected_contract_case_ids"]))
+        for mutation in ("omit", "add", "change", "omit-ref"):
+            changed = deepcopy(planned["completion_plan"])
+            contract = changed["semantic_contract"]["lab_case_execution_contract"]
+            if mutation == "omit":
+                contract["implementation_obligations"].pop()
+            elif mutation == "add":
+                contract["implementation_obligations"].append("Additional unverified behavior")
+            elif mutation == "change":
+                contract["implementation_obligations"][1] += " and a new runtime requirement"
+            else:
+                contract["completion_scope"]["owned_obligation_refs"].pop()
+            with self.subTest(mutation=mutation), self.assertRaises(runtime.RuntimeContractError):
+                owned_obligation_bindings(changed, planned["expected_contract_case_ids"])
+        for field, value in (("implementation_observation", "DISABLED"), ("owned_obligation_refs", [])):
+            command = deepcopy(planned["native_command"])
+            command["verification_contract"][field] = value
+            self.assertEqual(_project_verification_command_findings(command)[0]["code"], "PROJECT_VERIFICATION_COMMAND_INVALID")
 
     def test_verifier_hydration_removes_inherited_successor_and_retry(self):
         planned = plan_project_verification(self.semantic_candidate, "LAB_BOOTSTRAP", "LAB-PROTOCOL", COMMAND_ID)
@@ -225,12 +250,19 @@ class ProjectVerificationRuntimeTests(unittest.TestCase):
         self.assertEqual(len(proof["report"]["cases"]), 28)
         self.assertEqual([row["case_id"] for row in proof["report"]["frozen_contract_checks"]["cases"]],
                          self.plan["expected_contract_case_ids"])
+        self.assertEqual(proof["implementation_observation"]["files"], runtime._tree_snapshot(f.repository))
+        self.assertEqual(proof["implementation_observation"]["status"], "UNCHANGED_DURING_VERIFICATION")
+        self.assertEqual(proof["owned_obligation_observations"],
+                         [{**row, "status": "PASS"} for row in self.plan["owned_obligation_bindings"]])
         count = len(f.local.observations())
         f.local.cli(self.request())
         self.assertEqual(len(f.local.observations()), count)
         audit = audit_workpack_completion(f.candidate, f.local.execution, "LAB_BOOTSTRAP", "LAB-PROTOCOL")
         self.assertTrue(all(row["status"] == "OBSERVED" for row in audit["command_observations"]))
         self.assertFalse(audit["workpack_accepted"])
+        self.assertEqual(audit["protocol_evidence"]["status"], "CURRENT_PROTOCOL_EVIDENCE")
+        self.assertIn("WORKPACK_ACCEPTANCE_COMMIT_NOT_IMPLEMENTED", audit["unresolved_requirements"])
+        self.assertTrue(all(row["schema"] == "MISSING" for row in audit["artifact_observations"]))
         self.assertEqual(before, runtime._tree_snapshot(f.candidate))
 
     def test_verification_cannot_skip_committed_coding_or_replace_the_frozen_worker(self):
@@ -291,6 +323,64 @@ class ProjectVerificationRuntimeTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, result)
         self.assertEqual(len(f.local.observations()), count)
         self.assertEqual(f.local.observations()[-1]["payload"]["result"]["process_result"]["project_verification"]["status"], "PASS")
+        audit = audit_workpack_completion(f.candidate, f.local.execution, "LAB_BOOTSTRAP", "LAB-PROTOCOL")
+        self.assertEqual(audit["protocol_evidence"]["reason_code"], "VERIFIED_IMPLEMENTATION_NOT_CURRENT")
+        self.assertFalse(audit["workpack_accepted"])
+
+    def test_supervisor_detects_implementation_change_across_a_successful_worker(self):
+        f = self.fixture
+        f.start()
+        completed, result = f.local.cli(f.request())
+        self.assertEqual(completed.returncode, 0, result)
+        write_project(f.repository)
+        receiver = Path(self.parent["local_execution"]["receiver"]["executable_abs"])
+        # TEST-only transport simulates an external writer after the checked
+        # process completes; this is not a claimed OS sandbox escape.
+        receiver.write_text(receiver.read_text().replace("raise SystemExit(subprocess.run(args).returncode)",
+            "code = subprocess.run(args).returncode\nfrom pathlib import Path\n"
+            "if '--project-root' in args:\n"
+            "    project = Path(args[args.index('--project-root') + 1])\n"
+            "    path = project / 'external_lab/protocol.py'\n    path.write_text(path.read_text() + '# concurrent change\\n')\n"
+            "raise SystemExit(code)"))
+        self.parent["local_execution"]["receiver"]["executable_sha256"] = local.digest(receiver)
+        f.approve(self.parent)
+        f.local.cli(self.request())
+        observation = f.local.observations()[-1]["payload"]["result"]
+        proof = observation["process_result"]["project_verification"]
+        self.assertEqual(proof["report"]["status"], "PASS")
+        self.assertEqual(proof["implementation_observation"]["status"], "CHANGED_DURING_VERIFICATION")
+        self.assertEqual(observation["status"], "VALIDATION_FAILED")
+        self.assertTrue(all(row["status"] == "NOT_PROVEN" for row in proof["owned_obligation_observations"]))
+
+    def test_later_failed_verification_does_not_fall_back_to_an_older_pass(self):
+        f = self.fixture
+        f.start()
+        completed, result = f.local.cli(f.request())
+        self.assertEqual(completed.returncode, 0, result)
+        write_project(f.repository)
+        f.approve(self.parent)
+        completed, result = f.local.cli(self.request())
+        self.assertEqual(completed.returncode, 0, result)
+        first = audit_workpack_completion(f.candidate, f.local.execution, "LAB_BOOTSTRAP", "LAB-PROTOCOL")
+        self.assertEqual(first["protocol_evidence"]["status"], "CURRENT_PROTOCOL_EVIDENCE")
+        write_project(f.repository, broken=True)
+        self.parent["authorization_id"] = "TEST-LATER-VERIFICATION"
+        # A completed transition is deliberately deduplicated. Declare a new
+        # approved attempt instead of expecting the old transition to rerun.
+        second = deepcopy(self.transition)
+        second.update(transition_id="T-VERIFY-SECOND", node_kind="NODE-T-VERIFY-SECOND")
+        self.parent["local_execution"]["transitions"] = {"T-VERIFY-SECOND": second}
+        f.approve(self.parent)
+        request = self.request()
+        request.update(contracts={"T-VERIFY-SECOND": second}, start_transition_id="T-VERIFY-SECOND",
+                       inputs_by_transition={"T-VERIFY-SECOND": {"approved": True}})
+        f.local.cli(request)
+        self.assertEqual(f.local.observations()[-1]["payload"]["result"]["status"], "VALIDATION_FAILED")
+        write_project(f.repository)  # Original bytes alone do not revive the old check.
+        after = audit_workpack_completion(f.candidate, f.local.execution, "LAB_BOOTSTRAP", "LAB-PROTOCOL")
+        self.assertEqual(after["protocol_evidence"]["status"], "NOT_PROVEN")
+        self.assertEqual(after["protocol_evidence"]["reason_code"], "NATIVE_VERIFICATION_NOT_COMMITTED")
+        self.assertFalse(after["workpack_accepted"])
 
 
 if __name__ == "__main__":

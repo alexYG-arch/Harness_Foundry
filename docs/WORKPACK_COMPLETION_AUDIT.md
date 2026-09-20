@@ -101,9 +101,9 @@ it does not claim that no host temporary files were created.
 
 ## Remaining acceptance work
 
-Every current audit is `WORKPACK_EVIDENCE_INCOMPLETE`. Even if all inspected
-schemas pass and command observations exist, semantic validation and independent
-Oracles remain `NOT_EVALUATED`. `workpack_accepted` is false, no produced
+Every current audit is `WORKPACK_EVIDENCE_INCOMPLETE`. Artifact validation and
+acceptance Oracles are still separate from the available protocol evidence.
+`workpack_accepted` is false, no produced
 capability is granted and no successor starts. The full retained semantic
 contract defines the missing scope rather than hiding it behind a green check.
 
@@ -111,9 +111,20 @@ The native `LAB-PROTOCOL-CHECK` now invokes the project's actual protocol API an
 stores independent behavior observations through the approved offline receiver;
 see [protocol support](LAB_PROTOCOL_SUPPORT.md). Its scope is protocol primitives
 and the complete frozen Registry/Schema declarations, not full Workpack
-acceptance. This audit conservatively still classifies command
-rows as process observations; it does not promote the nested protocol report to
-an artifact Oracle or a fresh implementation attestation.
+acceptance. Command rows retain their process-only meaning. A separate
+`protocol_evidence` assessment now verifies the complete owned obligation map,
+actual captured Case outcomes, latest observed-and-committed native check, and
+the supervisor's selected repository fileset against current bytes. It reports
+`CURRENT_PROTOCOL_EVIDENCE` only when those requirements hold. Changed code,
+omitted scope evidence, and a later pending/failed check cannot reuse the old
+PASS. This is bounded current repository evidence, not an attestation of the
+whole interpreter environment or later Workpack obligations.
+
+When this protocol evidence is current, the unresolved requirement is reported
+as `WORKPACK_ACCEPTANCE_COMMIT_NOT_IMPLEMENTED`; it is no longer described as
+having no protocol verifier. Controller-owned result files can remain missing:
+the audit neither manufactures them nor lets project self-reports satisfy their
+independent acceptance Oracle. Other Workpack providers remain unimplemented.
 
 Next, complete the independent Workpack verifier for the remaining obligations,
 including the Lab implementation/self-tests, artifact validation/Oracles,

@@ -9,7 +9,7 @@ import json
 import os
 from pathlib import Path
 import sys
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, Sequence, TYPE_CHECKING
 
 from .constants import (
     BASELINE_FACTORY_ID,
@@ -28,7 +28,8 @@ from .models import (
     SAFE_ID_RE,
     canonical_json,
 )
-from .service import FactoryService
+if TYPE_CHECKING:
+    from .service import FactoryService
 from .store import ControlEventStore, SQLiteEventStore
 from .control_kernel import ControlKernelError, GenericTransitionEngine
 from .core_validation import (
@@ -101,6 +102,24 @@ def build_parser() -> argparse.ArgumentParser:
     compile_contract.add_argument("--program-id", required=True)
     _add_common_paths(compile_contract, database=True)
     _add_json_flag(compile_contract)
+
+    build_plan = subparsers.add_parser(
+        "compile-build-plan",
+        help="Statically compile a domain-neutral proposed plan; no Program, authority or execution",
+    )
+    build_plan.add_argument("--request", required=True)
+    _add_json_flag(build_plan)
+
+    for name in ("record-build-plan", "capture-build-sources", "prepare-build-authorization",
+                 "approve-build-authorization", "revoke-build-authorization", "resolve-build-attempt", "advance-build"):
+        command = subparsers.add_parser(name, help="Explicit generic Build route; never inherits legacy authority")
+        command.add_argument("--request", required=True)
+        command.add_argument("--control-db", required=True)
+        _add_json_flag(command)
+    read_build = subparsers.add_parser("read-build", help="Read generic plan, scope and progress without writing")
+    read_build.add_argument("--program-id", required=True)
+    read_build.add_argument("--control-db", required=True)
+    _add_json_flag(read_build)
 
     advance_authoring = subparsers.add_parser(
         "advance-authoring-until-gate",
@@ -205,6 +224,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "chat-turn requires a JSON request file or '-' for stdin"
                 )
             request = ChatRequest.from_dict(_load_request(request_location))
+            if request.intent == "CREATE":
+                from .build_review import validate_build_review
+                validate_build_review(request.payload.get("build_document_review"))
             result = _service(args, program_id=request.program_id).handle_chat_turn(request)
         elif args.command == "status":
             result = _service(args, program_id=args.program_id, read_only_store=True).status(args.program_id)
@@ -232,6 +254,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                 program_id=args.program_id,
                 read_only_store=True,
             ).compile_contract(args.program_id)
+        elif args.command == "compile-build-plan":
+            from .build_plan import compile_build_plan, validate_compiled_build_plan
+            request = _load_request(args.request)
+            if set(request) != {"requirement_ir", "plan"}:
+                raise RequestValidationError("compile-build-plan requires exactly requirement_ir and plan")
+            result = compile_build_plan(request["requirement_ir"], request["plan"])
+            validate_compiled_build_plan(request["requirement_ir"], request["plan"], result)
+        elif args.command == "read-build":
+            from .build_entrypoint import read_build
+            result = read_build(args.control_db, args.program_id)
+        elif args.command in {"record-build-plan", "capture-build-sources", "prepare-build-authorization",
+                               "approve-build-authorization", "revoke-build-authorization", "resolve-build-attempt", "advance-build"}:
+            from .build_entrypoint import apply_build_request
+            result = apply_build_request(args.command, _load_request(args.request), args.control_db)
         elif args.command == "advance-authoring-until-gate":
             result = _service(
                 args,
@@ -359,6 +395,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     _emit(result, json_output=getattr(args, "json", False))
+    if args.command == "advance-build" and result.get("status") != "PLAN_CHECKS_ACCEPTED":
+        return 6
     if isinstance(result, dict) and result.get("status") == "FAIL":
         return 7 if args.command == "validate-candidate" else 6
     return 0
@@ -639,6 +677,9 @@ def _service(
     program_id: str | None = None,
     read_only_store: bool = False,
 ) -> FactoryService:
+    # The generic proposal route has no dependency on the legacy specialized
+    # authoring service. Load compatibility machinery only for its own commands.
+    from .service import FactoryService
     runs_root = Path(args.runs_root).expanduser().resolve()
     if program_id is not None and (
         not SAFE_ID_RE.fullmatch(program_id) or ".." in program_id

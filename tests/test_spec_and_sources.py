@@ -18,6 +18,7 @@ from harness_foundry_factory.spec_lock import (
     verify_spec_lock,
 )
 from harness_foundry_factory.store import SQLiteEventStore
+from tests.build_review_fixture import reviewed_document
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -48,7 +49,8 @@ class SpecAndSourceTests(unittest.TestCase):
             "request_id": "REQ-1", "idempotency_key": "IDEM-1",
             "program_id": program_id, "expected_state_hash": None,
             "actor": {"type": "HUMAN_VIA_CODEX_CHAT", "chat_thread_id": "THREAD", "turn_id": "TURN"},
-            "intent": "CREATE", "payload": {"sources": [source]},
+            "intent": "CREATE", "payload": {"sources": [source],
+                "build_document_review": reviewed_document(Path(source["path"]).parent)},
         }
 
     def test_spec_lock_rejects_hash_and_aggregate_tampering_without_touching_spec(self) -> None:

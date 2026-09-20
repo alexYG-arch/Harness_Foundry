@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 import unittest
 
-from harness_foundry_factory.coding_process import client_state_root
+from harness_foundry_factory.coding_process import client_state_root, instruction_read_preflight
 from harness_foundry_factory.coding_protocol import plan_coding_command
 from harness_foundry_factory.coding_runtime import CODING_CLASS, CODING_MODE, bind_coding_transition, prepare_coding_runtime
 from harness_foundry_factory.control_kernel import GenericTransitionEngine, InjectedKernelCrash
@@ -53,6 +53,12 @@ class CodingRuntimeTests(unittest.TestCase):
         self.startup["startup_execution"] = {**self.common_plan, "mode": STARTUP_MODE,
             "approval_receipt": self.handoff["approval_receipt"], "transitions": startup_transitions(self.candidate, self.bindings)}
         self.executable = fixture_executable(self.local.root)
+        # The receiver now checks instruction reads even for this fake service.
+        # Bind only existing instruction files, never the client/auth directory.
+        self.instruction_resources = {
+            f"harness-resource://runtime-tools/instruction-{index}": path
+            for index, path in enumerate(instruction_read_preflight(self.local.root, [])["instruction_files"])
+        }
         self.task = plan_coding_command(self.candidate, "LAB_BOOTSTRAP", "LAB-PROTOCOL", "LAB-CODEX-CODING")
         self.transition = self.coding_transition(self.task)
         self.parent = support.parent(self.local.program)
@@ -62,14 +68,16 @@ class CodingRuntimeTests(unittest.TestCase):
             permissions=self.transition["risk"]["permissions"])
         self.parent["coding_execution"] = {**self.common_plan, "mode": CODING_MODE,
             "receiver": {"executable_abs": str(self.executable), "executable_sha256": local_support.digest(self.executable)},
-            "runtime_resources": {"harness-resource://runtime-tools/codex": str(self.executable)},
+            "runtime_resources": {"harness-resource://runtime-tools/codex": str(self.executable),
+                                  **self.instruction_resources},
             "client_state_root": str(client_state_root()), "model": None, "output_limit_bytes": 65536,
             "transitions": {"T-CODING": self.transition}}
         self.repository = self.local.execution / "project_start_packages/external_lab/repository"
 
     def coding_transition(self, task):
         result = bind_coding_transition(support.transition("T-CODING", CODING_CLASS), task,
-                                       runtime_read_refs=["harness-resource://runtime-tools/codex"], timeout_seconds=10)
+                                       runtime_read_refs=["harness-resource://runtime-tools/codex", *self.instruction_resources],
+                                       timeout_seconds=10)
         result["bindings"] = self.bindings
         return result
 
@@ -114,7 +122,8 @@ class CodingRuntimeTests(unittest.TestCase):
         for field in ("read", "write"):
             self.assertEqual(sorted(context[f"allowed_{field}_bindings"]), self.transition[f"allowed_{field}_roots"])
         self.assertNotIn(str(self.factory.store.database_path), received["prompt"])
-        self.assertNotIn(str(client_state_root()), received["prompt"])
+        self.assertNotIn(str(client_state_root()), context["allowed_read_bindings"].values())
+        self.assertNotIn(str(client_state_root() / "auth.json"), received["prompt"])
         observation = self.local.observations()[-1]["payload"]["result"]
         self.assertEqual(observation["model_result"]["status"], "MODEL_TURN_COMPLETED")
         self.assertFalse(observation["workpack_accepted"])

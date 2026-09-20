@@ -80,6 +80,8 @@ class PortableLocalCliTests(unittest.TestCase):
         self.assertFalse(any(path.startswith("tests/") for path in manifest["files"]))
         self.assertIn("docs/ARCHITECTURE.md", manifest["files"])
         self.assertIn("docs/CHAT_USAGE.md", manifest["files"])
+        for name in ("GENERIC_BUILD_PLAN", "GENERIC_BUILD_CLI", "GENERIC_BUILD_RUNTIME", "GENERIC_SOURCE_INTAKE"):
+            self.assertIn(f"docs/{name}.md", manifest["files"])
         self.assertEqual({path.name for path in self.root.iterdir()}, before)
 
     def test_core_compiler_module_import_does_not_require_optional_crypto(self) -> None:

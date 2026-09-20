@@ -340,6 +340,8 @@ class LocalRuntimeAdapter:
                 _publish_lease(_resolve(plan, lease["lease_receipt_ref"]), lease)
             command = LocalCommand.prepare(argv=argv, cwd=cwd, read_roots=reads, write_roots=writes,
                                            timeout_seconds=invocation["timeout_seconds"])
+            verification_inputs = (verification_provider.capture_verification_inputs(plan["execution_root"])
+                                   if verification_provider is not None else None)
         except (OSError, LocalProcessError, ControlKernelError) as exc:
             result["process_result"] = {"workload_started": False, "diagnostic": str(exc)}
             return result
@@ -347,8 +349,8 @@ class LocalRuntimeAdapter:
             observed = CodexSandboxRunner(receiver["executable_abs"]).run(command)
             result.update(status=observed["status"], reason_code=observed["reason_code"], process_result=observed)
             if verification_provider is not None:
-                proof = verification_provider.observe_project_verification(
-                    observed, expected_contract_case_ids=verification_plan["expected_contract_case_ids"])
+                proof = verification_provider.complete_project_observation(
+                    observed, verification_plan, verification_inputs, plan["execution_root"])
                 observed["project_verification"] = proof
                 if observed["status"] == "PASS":
                     result.update(status="PASS" if proof["status"] == "PASS" else "VALIDATION_FAILED",

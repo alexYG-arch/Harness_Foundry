@@ -8,13 +8,16 @@ profile file, global configuration mutation or unsandboxed fallback is used.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import codecs
 import json
 import os
 from pathlib import Path
+import selectors
 import signal
 import subprocess
 import tempfile
-from typing import Any, Sequence
+import time
+from typing import Any, Callable, Sequence
 from uuid import uuid4
 
 
@@ -109,13 +112,17 @@ class CodexSandboxRunner:
     the workload. Temporary output files belong to this receiver, not the Job.
     """
 
-    def __init__(self, executable: str | Path, *, output_limit_bytes: int = 65536):
+    def __init__(self, executable: str | Path, *, output_limit_bytes: int = 65536,
+                 stream_limit_bytes: int = 128 * 1024 * 1024):
         self.executable = _path(executable)
         if not self.executable.is_file() or not os.access(self.executable, os.X_OK):
             raise LocalProcessError("Codex sandbox receiver is not executable")
         if not isinstance(output_limit_bytes, int) or isinstance(output_limit_bytes, bool) or output_limit_bytes < 1:
             raise LocalProcessError("output limit must be a positive integer")
         self.output_limit_bytes = output_limit_bytes
+        if type(stream_limit_bytes) is not int or stream_limit_bytes < 1:
+            raise LocalProcessError("stream limit must be a positive integer")
+        self.stream_limit_bytes = stream_limit_bytes
 
     @staticmethod
     def _environment() -> dict[str, str]:
@@ -124,49 +131,106 @@ class CodexSandboxRunner:
         return {"PATH": os.defpath, "PYTHONDONTWRITEBYTECODE": "1"}
 
     def _capture(self, argv: list[str], cwd: Path, timeout: float, *, output_limit: int | None = None,
-                 stdin_bytes: bytes | None = None) -> dict[str, Any]:
+                 stdin_bytes: bytes | None = None, on_stdout=None, on_started=None,
+                 stream_sink=None, on_capture=None) -> dict[str, Any]:
         limit = self.output_limit_bytes if output_limit is None else output_limit
-        with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr, tempfile.TemporaryFile() as source:
+        previews = {name: bytearray() for name in ("stdout", "stderr")}
+        counts = dict.fromkeys(previews, 0)
+        capture_error = None
+        with tempfile.TemporaryFile() as source, selectors.DefaultSelector() as selector:
             if stdin_bytes is not None:
                 source.write(stdin_bytes)
                 source.seek(0)
             try:
                 process = subprocess.Popen(argv, cwd=cwd, stdin=source if stdin_bytes is not None else subprocess.DEVNULL,
-                                           stdout=stdout, stderr=stderr, shell=False,
+                                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False,
                                            start_new_session=True, env=self._environment())
             except OSError as exc:
                 return {"exit_code": None, "timed_out": False, "stdout": "",
-                        "stderr": str(exc), "output_truncated": False}
+                        "stderr": str(exc), "output_truncated": False, "process_started": False}
             timed_out = False
+            deadline = time.monotonic() + timeout
+            killed_at = None
+
+            def kill_group():
+                nonlocal killed_at
+                if killed_at is None:
+                    killed_at = time.monotonic()
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+
             try:
-                process.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                timed_out = True
+                for name, stream in (("stdout", process.stdout), ("stderr", process.stderr)):
+                    os.set_blocking(stream.fileno(), False)
+                    selector.register(stream, selectors.EVENT_READ, name)
+                if on_started is not None:
+                    on_started(process.pid)
+                while selector.get_map():
+                    now = time.monotonic()
+                    if process.poll() is not None:
+                        kill_group()  # Finite commands cannot leave background writers.
+                    elif now >= deadline:
+                        timed_out = True
+                        kill_group()
+                    if killed_at is not None and now - killed_at > 1:
+                        capture_error = capture_error or "OUTPUT_PIPE_DID_NOT_CLOSE"
+                        break
+                    for key, _ in selector.select(timeout=0.05):
+                        chunk = os.read(key.fd, 65536)
+                        if not chunk:
+                            selector.unregister(key.fileobj)
+                            continue
+                        name = key.data
+                        counts[name] += len(chunk)
+                        previews[name].extend(chunk[:max(0, limit - len(previews[name]))])
+                        if sum(counts.values()) > self.stream_limit_bytes:
+                            capture_error = "PROCESS_STREAM_LIMIT_EXCEEDED"
+                            kill_group()
+                        if capture_error is None:
+                            if stream_sink is not None:
+                                stream_sink(name, chunk)
+                            if name == "stdout" and on_stdout is not None:
+                                on_stdout(chunk)
+                if process.poll() is None and killed_at is None:
+                    try:
+                        process.wait(timeout=max(0.001, deadline - time.monotonic()))
+                    except subprocess.TimeoutExpired:
+                        timed_out = True
+            except Exception as exc:
+                capture_error = "PROCESS_CAPTURE_FAILED: " + str(exc)[:1000]
             finally:
                 # Clean up this command's process group, including on normal
                 # exit. Detached daemons/new sessions are not supported by this
                 # finite-command receiver. Do not kill by executable name.
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+                kill_group()
                 process.wait()
+                process.stdout.close()
+                process.stderr.close()
             captured = {}
-            truncated = False
             encoding_error = False
-            for name, stream in (("stdout", stdout), ("stderr", stderr)):
-                stream.seek(0)
-                data = stream.read(limit + 1)
-                truncated |= len(data) > limit
+            for name, data in previews.items():
+                clipped = counts[name] > limit
+                captured[name + "_truncated"] = clipped
                 try:
-                    captured[name] = data[:limit].decode("utf-8")
+                    captured[name] = codecs.getincrementaldecoder("utf-8")().decode(bytes(data), final=not clipped)
                 except UnicodeDecodeError:
                     encoding_error = True
-                    captured[name] = data[:limit].decode("utf-8", errors="replace")
-            return {"exit_code": process.returncode, "timed_out": timed_out,
-                    "output_truncated": truncated, **({"encoding_error": True} if encoding_error else {}), **captured}
+                    captured[name] = bytes(data).decode("utf-8", errors="replace")
+            result = {"exit_code": process.returncode, "timed_out": timed_out,
+                    "output_truncated": any(counts[name] > limit for name in counts),
+                    "stream_bytes": counts, "capture_error": capture_error,
+                    **({"encoding_error": True} if encoding_error else {}), **captured}
+            if on_capture is not None:
+                try:
+                    on_capture(result)
+                except Exception as exc:
+                    result["capture_error"] = "CAPTURE_PERSISTENCE_FAILED: " + str(exc)[:1000]
+            return result
 
-    def run(self, command: LocalCommand) -> dict[str, Any]:
+    def run(self, command: LocalCommand, *, before_dispatch: Callable[[], None] | None = None,
+            observation=None) -> dict[str, Any]:
         if os.name != "posix":
             raise LocalProcessError("this receiver currently supports POSIX process groups only")
         # Revalidate paths at dispatch, even when preparation occurred earlier.
@@ -195,16 +259,27 @@ class CodexSandboxRunner:
         probe = self._capture(prefix + ["/usr/bin/true"], command.cwd, 15)
         if probe["exit_code"] != 0 or probe["timed_out"]:
             return self._result(probe, "SANDBOX_UNAVAILABLE", workload_started=False)
-        completed = self._capture(prefix + list(command.argv), command.cwd, command.timeout_seconds)
-        reason = ("LOCAL_PROCESS_TIMEOUT" if completed["timed_out"] else
-                  "LOCAL_PROCESS_EXIT_ZERO" if completed["exit_code"] == 0 else "LOCAL_PROCESS_NONZERO_EXIT")
-        return self._result(completed, reason, workload_started=None)
+        if before_dispatch is not None:
+            before_dispatch()
+        hooks = ({"on_started": observation.started, "stream_sink": observation.write,
+                  "on_capture": observation.captured} if observation is not None else {})
+        completed = self._capture(prefix + list(command.argv), command.cwd, command.timeout_seconds, **hooks)
+        return classify_local_capture(completed)
 
     @staticmethod
     def _result(result: dict[str, Any], reason: str, *, workload_started: bool | None) -> dict[str, Any]:
         # A nonzero sandbox wrapper exit does not prove the workload launched.
         # Timeout/partial effects require reconciliation, never automatic retry.
-        return {**result, "status": "UNKNOWN_SIDE_EFFECT" if result["timed_out"] and workload_started is not False
+        return {**result, "status": "UNKNOWN_SIDE_EFFECT" if (result["timed_out"] or result.get("capture_error")) and workload_started is not False
                 else "PASS" if reason == "LOCAL_PROCESS_EXIT_ZERO" else "VALIDATION_FAILED",
                 "reason_code": reason, "workload_started": workload_started,
                 "receiver": "CODEX_SANDBOX_PERMISSION_PROFILE", "network": "DENY"}
+
+
+def classify_local_capture(capture):
+    if capture.get("process_started") is False:
+        return CodexSandboxRunner._result(capture, "LOCAL_PROCESS_START_FAILED", workload_started=False)
+    reason = ("LOCAL_CAPTURE_FAILED" if capture.get("capture_error") else
+              "LOCAL_PROCESS_TIMEOUT" if capture["timed_out"] else
+              "LOCAL_PROCESS_EXIT_ZERO" if capture["exit_code"] == 0 else "LOCAL_PROCESS_NONZERO_EXIT")
+    return CodexSandboxRunner._result(capture, reason, workload_started=None)

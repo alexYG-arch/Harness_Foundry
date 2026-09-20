@@ -1,5 +1,48 @@
 # Harness Foundry v2.9 Chat Factory v0.2
 
+## 通用建设升级状态（2026-09-20）
+
+本次源码同步的功能、修复、验证证据和未闭合项见
+[更新说明](docs/FOUNDRY_UPDATE_2026_09_20.md)。产品版本仍为 `0.2.0`，协议目标仍为
+`2.9`；本次 Git 推送不是新版发行、M1 通过或目标 Harness 完成声明。
+
+源码已接通[通用建设控制器](docs/GENERIC_BUILD_RUNTIME.md)的库级切片：完整本地
+来源、范围授权、Codex/local 适配器、独立检查、事务验收、依赖推进和有限恢复。
+真实本地测试进程可完成拒绝→修复→后继接续。实际 Codex M1 已尝试，但在独立检查
+基础设施失败处停止，尚未验收；本地回归不能代替实际 Codex 或发行端到端验收。
+[公开 Build/批准路由](docs/GENERIC_BUILD_CLI.md)已接通，旧专项包退役和真实 M1–M4
+仍未完成，不能据此宣称已可发布。
+
+已启动[通用更新方案](docs/FOUNDRY_GENERIC_CODEX_HARNESS_UPDATE_PLAN_v0_2.md)，
+进度记在[现有 Tracker](docs/V2_9_IMPLEMENTATION_TRACKER.md)。下文的 41 项核心完成
+结论只指原有核心范围，**不表示自主建设、目标 Harness 验收或新发行标准已完成**。
+
+新增只读入口 `compile-build-plan --request FILE --json` 校验并编译声明的通用
+Workpack/Job/产物/验收依赖，不注入固定业务、三工程或媒体阶段，不要求 Hash。
+详见[通用计划接口](docs/GENERIC_BUILD_PLAN.md)。该入口不创建 Program 或目录，
+不授予运行权限，也不执行任务。旧 Start Package 专项实现尚在迁移，当前包仍不是
+“专项已完全剔除”的发行物；不要用旧兼容生成结果声称完成新计划。
+
+通用计划现在支持同一源文件跨依赖任务的显式版本替换。源码 API 可将未批准提案
+记录在现有 SQLite 控制库的新 revision 格式中，再读取固定提案版本的任务上下文；
+采用事务、整数版本和原始请求幂等比较，不增加事件 Hash 链。该路径已有库级控制
+消费者与公开建设授权/执行入口；尚未完成真实 Codex 验收，不自动迁移历史数据库。
+
+所有 Harness 搭建需求（自然语言、问答、PRD、项目说明或既有工程）先走统一上游流程：
+**需求澄清 → 输出版本化搭建文档 → 用户人工 Review 并确认 → 进入 Foundry。**
+即使后台检查全部通过，也必须展示文件并等待确认；问答回复、代理委托和旧批准不能替代。
+见[搭建文档合同](docs/GENERIC_BUILD_PLAN.md)。程序门禁已接入通用和兼容入口，检查
+宿主记录的人工 Review 与未变化的文档全文；真实消息身份及语义范围仍由可信宿主核对，
+不能靠 JSON 标签自证。默认核心诊断和 Foundry 源码工程不新增此门禁。
+
+完成文档确认后，显式通用建设使用 `record-build-plan` → `capture-build-sources` →
+`prepare-build-authorization`。展示完整范围后记录真实用户批准，再以
+`advance-build` 自动完成批准目录创建、有限实施/修复、独立检查和后继推进。
+`read-build` 可只读恢复上下文。无需每个任务重复人工批准，也不要求人手复制 Hash；
+源文档只作需求数据，选择某 PRD 为 M1 案例不意味着整个产品已验收。
+
+## 已有核心范围
+
 这是按 v2.9 协议实现的本地工程化 Foundry。默认画像是 `SELF_USE_LOCAL_TRUSTED_OPERATOR`：单一可信用户在可信本机完成 Requirement/Architecture 输入、双锁编译、通用状态推进、Checkpoint/Resume、解释停止、本地可移植打包和实现证据投影。
 
 核心产品完成条件是：
@@ -27,7 +70,8 @@ python3 tools/hffactory.py package-local --json
 
 ## 可选 Start Package 兼容路线
 
-只有用户明确选择兼容路线时，才进入以下 Authoring 流程：
+只有用户明确选择兼容路线，并已完成同一上游搭建文档人工确认后，才进入以下 Authoring
+流程。旧委托不能替代这次文档确认；只读查看历史状态不受影响：
 
 1. 将本目录作为 Codex 工程打开。
 2. 用自然语言描述目标、资料路径和期望的候选输出路径。

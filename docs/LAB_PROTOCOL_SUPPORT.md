@@ -54,7 +54,7 @@ PASS is not evidence. These are protocol-only
 observations. Hydration removes inherited successors/retries and Parent
 validation rejects their reintroduction. No Workpack capability is granted.
 
-The `LAB_PROTOCOL_BEHAVIOR_V2` recipe additionally binds the Candidate's frozen
+The `LAB_PROTOCOL_BEHAVIOR_V3` recipe additionally binds the Candidate's frozen
 evaluator registry and Requirement schema catalog. The controller derives the
 expected Case IDs from those Candidate inputs before dispatch; it never trusts
 the project's proposed case list. The independent worker loads every evaluator,
@@ -62,6 +62,24 @@ resolves each full declaration and specializes every declared schema with two
 distinct synthetic Job identities. It checks schema validity, unchanged inputs,
 preserved non-binding constraints and separate renderer/content identities.
 Both omitted members and misleading success reports fail verification.
+
+The recipe now also requires a supervisor-owned repository fileset before and
+after the worker, using the existing per-file byte identity without an extra
+aggregate hash. A changed or unavailable fileset cannot produce a successful
+owned-scope observation. The worker's own output never supplies these file
+identities. Candidate and executable identities retain their existing Parent
+bindings; this fileset is not a claim about every interpreter dependency.
+The two observations bracket the process; they are not a transactionally
+immutable filesystem snapshot or proof against an unrelated change-and-restore
+between reads. Fresh acceptance separately rechecks the observed fileset.
+
+The controller independently matches all three frozen `LAB-PROTOCOL` owned
+obligations and binds each to its exact primitive/frozen Case IDs. Omitted,
+extended or changed obligations are unsupported until implemented, rather than
+silently mapped onto old tests. The read-only completion audit can now identify
+current protocol evidence by rechecking the captured report and selected
+repository bytes. A later started but unsuccessful verification prevents falling
+back to an earlier PASS, even if the old source bytes are restored.
 
 The optional catalog can legitimately be absent when contracts are supplied
 directly per Atom. In that case the empty catalog is explicit context for the
@@ -77,6 +95,9 @@ Its explicit host Python dependency reads are test/runtime bindings, not a new
 portable default or an installation permission. Recovery consumes a previously
 observed result without rerunning changed project code; that historical result
 does not attest to the current implementation bytes or satisfy fresh acceptance.
+The audit explicitly reports such byte drift. It still writes no acceptance
+result or capability and does not start a successor. Its copied controller
+snapshot is diagnostic only, not authority for a future acceptance transaction.
 
 JSON Schema support uses the existing optional `runtime-audit` dependencies.
 Importing the protocol and running its standard-library operations needs no

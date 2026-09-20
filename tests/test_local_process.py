@@ -80,6 +80,19 @@ class LocalProcessContractTests(unittest.TestCase):
             self.runner.run(self.command)
         capture.assert_not_called()
 
+    def test_authority_is_rechecked_after_probe_before_workload(self):
+        output = dict(exit_code=0, timed_out=False,
+                      stdout="[COMMAND] --permission-profile --include-managed-config --cd",
+                      stderr="", output_truncated=False)
+
+        def revoked():
+            raise LocalProcessError("authorization revoked during probe")
+
+        with patch.object(self.runner, "_capture", return_value=output) as capture, \
+                self.assertRaisesRegex(LocalProcessError, "revoked"):
+            self.runner.run(self.command, before_dispatch=revoked)
+        self.assertEqual(capture.call_count, 2)
+
     def test_python_venv_argv_is_not_rewritten_to_base_interpreter(self):
         command = LocalCommand.prepare(argv=[sys.executable, "-c", "pass"], cwd=self.work,
                                        read_roots=[sys.prefix, sys.base_prefix], write_roots=[self.work])
@@ -89,6 +102,20 @@ class LocalProcessContractTests(unittest.TestCase):
         with patch.dict(os.environ, {"OPENAI_API_KEY": "TEST-NOT-A-KEY", "PYTHONPATH": "/test-hook",
                                      "HTTPS_PROXY": "http://test.invalid"}):
             self.assertEqual(self.runner._environment(), {"PATH": os.defpath, "PYTHONDONTWRITEBYTECODE": "1"})
+
+    def test_stream_limit_stops_output_instead_of_unbounded_spooling(self):
+        runner = CodexSandboxRunner("/usr/bin/true", stream_limit_bytes=1024)
+        result = runner._capture([sys.executable, "-c", "print('x'*100000)"], self.work, 5)
+        self.assertEqual(result["capture_error"], "PROCESS_STREAM_LIMIT_EXCEEDED")
+        self.assertEqual(runner._result(result, "LOCAL_CAPTURE_FAILED", workload_started=None)["status"],
+                         "UNKNOWN_SIDE_EFFECT")
+
+    def test_sink_failure_cannot_be_reported_as_success(self):
+        def broken_sink(*args):
+            raise OSError("TEST storage full")
+        result = self.runner._capture([sys.executable, "-c", "print('complete')"], self.work, 5,
+                                      stream_sink=broken_sink)
+        self.assertIn("TEST storage full", result["capture_error"])
 
 
 @unittest.skipUnless(os.environ.get("HFFACTORY_TEST_CODEX_SANDBOX"),
@@ -129,6 +156,30 @@ class RealCodexSandboxTests(unittest.TestCase):
         self.assertEqual((self.work / "output.txt").read_text(), "INPUT")
         self.assertEqual(Path(result["stdout"].strip()).resolve(), Path(sys.prefix).resolve())
 
+    def test_explicit_nested_interpreter_binding_preserves_venv_and_write_domain(self):
+        # An interpreter's self-reported alias is not an execution binding.
+        # Keep the exact host path (including venv selection) for both levels.
+        child = ("import sys; from pathlib import Path; "
+                 "print(sys.prefix); Path('child.txt').write_text('CHILD')")
+        code = ("import subprocess,sys; "
+                "sys.executable='/not-a-bound-interpreter'; "
+                f"r=subprocess.run([sys.argv[1],'-B','-c',{child!r}],capture_output=True,text=True); "
+                "print(r.stdout,end=''); print(r.stderr,file=sys.stderr,end=''); sys.exit(r.returncode)")
+        command = self.command(code)
+        command = LocalCommand.prepare(argv=[*command.argv, sys.executable], cwd=command.cwd,
+            read_roots=command.read_roots, write_roots=command.write_roots)
+        result = self.runner.run(command)
+        self.assertEqual(result["status"], "PASS", result)
+        self.assertEqual(Path(result["stdout"].strip()).resolve(), Path(sys.prefix).resolve())
+        self.assertEqual((self.work / "child.txt").read_text(), "CHILD")
+        (self.work / "child.txt").unlink()
+        readonly = LocalCommand.prepare(argv=command.argv, cwd=command.cwd,
+            read_roots=[*command.read_roots, self.work], write_roots=[])
+        denied = self.runner.run(readonly)
+        self.assertEqual(denied["status"], "VALIDATION_FAILED", denied)
+        self.assertIn("PermissionError", denied["stderr"])
+        self.assertFalse((self.work / "child.txt").exists())
+
     def test_os_denies_sibling_reads_input_writes_and_sibling_writes(self):
         outside = self.outside / "value.txt"
         outside.write_text("PRIVATE")
@@ -150,6 +201,26 @@ class RealCodexSandboxTests(unittest.TestCase):
         result = self.runner.run(self.command("import socket; s=socket.socket(); s.bind(('127.0.0.1', 0))"))
         self.assertEqual(result["status"], "VALIDATION_FAILED", result)
         self.assertIn("PermissionError", result["stderr"])
+
+    def test_exact_instruction_file_is_readable_without_adjacent_client_state(self):
+        instruction = self.outside / "AGENTS.md"
+        instruction.write_text("TEST INSTRUCTIONS")
+        private = self.outside / "auth.json"
+        private.write_text("TEST ONLY NOT A CREDENTIAL")
+        code = f"from pathlib import Path; print(Path({str(instruction)!r}).read_text())"
+        denied = self.runner.run(self.command(code))
+        self.assertEqual(denied["status"], "VALIDATION_FAILED", denied)
+        scoped = LocalCommand.prepare(argv=[sys.executable, "-B", "-c", code], cwd=self.work,
+            read_roots=[*self.runtime_reads, self.work, instruction], write_roots=[])
+        allowed = self.runner.run(scoped)
+        self.assertEqual(allowed["status"], "PASS", allowed)
+        self.assertEqual(allowed["stdout"].strip(), "TEST INSTRUCTIONS")
+        private_read = LocalCommand.prepare(
+            argv=[sys.executable, "-B", "-c", f"open({str(private)!r}).read()"], cwd=self.work,
+            read_roots=scoped.read_roots, write_roots=[])
+        denied = self.runner.run(private_read)
+        self.assertEqual(denied["status"], "VALIDATION_FAILED", denied)
+        self.assertIn("PermissionError", denied["stderr"])
 
     def test_readonly_job_and_repository_metadata_remain_readonly(self):
         metadata = self.work / ".git"

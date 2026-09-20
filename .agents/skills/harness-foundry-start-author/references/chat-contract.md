@@ -4,6 +4,16 @@ Run all commands from the Factory repository root. Request files must be absolut
 
 This contract belongs to `OPTIONAL_ROUTE_START_PACKAGE_COMPATIBILITY`. `DEFAULT_ROUTE_FOUNDRY_CORE` creates no Factory Program and uses `version`, `validate-core`, `project-core-evidence`, and `package-local` directly.
 
+The upstream build-document policy in [the common contract](../../../../docs/GENERIC_BUILD_PLAN.md)
+applies before entering this authoring route. Retain clarification Q&A, then save
+and show the build document and obtain actual human confirmation of its version
+and scope before CREATE or further build authoring. Internal completeness/PASS,
+old approvals and delegated decisions cannot replace that review. Read-only
+historical inspection remains allowed. CREATE requires payload.build_document_review
+using the shared object in docs/GENERIC_BUILD_PLAN.md. Authoring mutations recheck
+the bound full document. Only a human REOPEN may attach a replacement Review;
+the delegate cannot approve this input on the user's behalf.
+
 ## Request envelope
 
 ```json
@@ -18,7 +28,7 @@ This contract belongs to `OPTIONAL_ROUTE_START_PACKAGE_COMPATIBILITY`. `DEFAULT_
     "turn_id": "actual-user-turn-id"
   },
   "intent": "CREATE",
-  "payload": {}
+  "payload": {"build_document_review": "Supply the actual object from GENERIC_BUILD_PLAN.md; this example is not a valid request"}
 }
 ```
 
@@ -62,7 +72,9 @@ Authoritative run data is under `runs/PROGRAM_ID/`; derived JSON/JSONL views may
 ## Opt-in delegated pre-build requests
 
 The user must explicitly approve this protocol before a human grants it. Use
-the existing envelope and actual user turn for `GRANT_PREBUILD_DELEGATION` with:
+it only after the separate upstream build-document Human Review; the delegate
+cannot perform that user decision. Historical grant records remain unchanged.
+Use the existing envelope and actual user turn for `GRANT_PREBUILD_DELEGATION` with:
 `delegation_id`, `decision=APPROVE`,
 `scope=PREBUILD_AUTHORING_AND_CANDIDATE_DECISION`, current
 `requirement_ir_sha256`, and the user's actual `approval_text`. The grant is

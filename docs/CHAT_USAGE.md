@@ -2,6 +2,24 @@
 
 Codex must select one route before acting. Natural language is the user interface; the repository CLI is the engineering interface.
 
+## Before any Harness build: show the document and wait
+
+Every input type follows [the upstream build-document policy](GENERIC_BUILD_PLAN.md):
+clarify through Q&A, save and show a versioned build document, then wait for
+the user's explicit review and confirmation before entering Foundry. No open
+questions or internal PASS does not skip document delivery. An answer to a
+clarifying question, an agent review, a delegated grant or an old approval does
+not confirm the final document. Create no Program, Candidate or target directory
+before that decision. Core checks, Foundry source engineering and read-only
+history inspection are unaffected.
+
+The public build and compatibility authoring entrypoints check a host-recorded
+review and the unchanged full document. Historical state alone is not sufficient.
+The trusted host authenticates actual human messages and checks semantic scope. Material changes to
+the document's contract require renewed review; implementation details do not.
+After document confirmation and separate runtime authority, work continues within
+scope without per-Workpack approval.
+
 ## DEFAULT_ROUTE_FOUNDRY_CORE
 
 This is the default route. It operates and validates the local 41-capability Harness Foundry product without creating a Factory Program or building a target Harness.
@@ -17,9 +35,16 @@ Consecutive implementation, focused regression, core validation, evidence projec
 
 This route must not create a Program, Candidate, Execution Root, Runtime Bind, Driver, Workpack, or A3. It must not run dynamic adversarial reproduction, optional security hardening, external certification, installation, or publication.
 
+## EXPLICIT_ROUTE_GENERIC_BUILD
+
+After the upstream document confirmation, an explicit generic build or scoped
+acceptance case uses [the Build CLI](GENERIC_BUILD_CLI.md). Prepare and display
+the concrete execution scope, record the real user's decision, then advance
+within that scope. Document confirmation alone is not execution permission.
+
 ## OPTIONAL_ROUTE_START_PACKAGE_COMPATIBILITY
 
-Enter this route only when the user explicitly requests a Start Package Candidate or names an existing Factory `program_id`. The Factory CLI and SQLite-backed Program remain authoritative; Chat history does not.
+Enter authoring only when the user explicitly requests a Start Package Candidate or continuation of an existing Factory `program_id`, and the upstream build document has been confirmed. Naming a Program permits inspection, not automatic advancement. The Factory CLI and SQLite-backed Program remain authoritative; Chat history does not.
 
 1. Verify the pinned specification and create or resume the Program.
 2. Register sources and apply the requested Requirement mutation.
@@ -37,6 +62,7 @@ Enter this route only when the user explicitly requests a Start Package Candidat
 Return to the user only for a true gate:
 
 - missing user-owned requirement information or a blocking high conflict;
+- mandatory upstream build-document Human Review, including after internal PASS;
 - changed external state or stale bindings that cannot be refreshed read-only;
 - exact Requirement Freeze or Architecture Lock confirmation;
 - authority expansion, irreversible effects, or unknown side effects;
@@ -59,4 +85,4 @@ The authoring workflow must not approve or register the Candidate, create or bin
 
 ## Resume safely
 
-For an existing `program_id`, read `status` and `readback`, then continue from the persisted SQLite state and current State Hash. Replaying an identical bounded-advance request is read-only/idempotent; a state conflict requires a fresh status read, not a guessed retry.
+For an existing `program_id`, read `status` and `readback`. Advance from the persisted SQLite state and current State Hash only when the upstream document-review policy and applicable authority are satisfied; old state is not a substitute for that review. Replaying an identical bounded-advance request is read-only/idempotent; a state conflict requires a fresh status read, not a guessed retry.

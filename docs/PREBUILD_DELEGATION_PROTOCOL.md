@@ -6,6 +6,15 @@ change their human approval records merely by upgrading the Factory.
 
 ## Scope and authority
 
+The 2026-09-19 [upstream build-document policy](GENERIC_BUILD_PLAN.md) applies
+before all Harness build authoring. Clarification must produce a displayed build
+document and actual human confirmation before entering Foundry. This review is
+not delegated by this protocol, even under an active historical grant. Existing
+grant/approval records remain unchanged; they do not prove the new review took
+place. Compatibility authoring now rechecks the stored full document before
+advancing, including delegated requests. Only a real human REOPEN can supply a
+new document-review record. Revocation remains available when a document is stale.
+
 A human grants `PREBUILD_AUTHORING_AND_CANDIDATE_DECISION` to one Program and
 Chat. The grant binds the current Requirement, authored intent, source registry,
 specification identity, and output naming rule. It permits internal authoring,
@@ -13,8 +22,9 @@ REOPEN, deterministic empty output binding, Requirement/Architecture locks,
 Candidate generation, review and a delegated Candidate decision. It ends on
 Candidate approval or human revocation. IDs cannot be reused or reactivated.
 
-This explicitly changes the pre-build human-decision requirement **only for the
-opted-in path**. It does not reinterpret a delegate as HUMAN_VIA_CODEX_CHAT.
+This changes the legacy Requirement/Architecture lock and Candidate decision
+requirements **only for the opted-in path**, not the upstream build-document
+Human Review. It does not reinterpret a delegate as HUMAN_VIA_CODEX_CHAT.
 Candidate decisions use `approval_mode=DELEGATED`; the old human approval field
 is not changed to APPROVED. Source conflict resolution, changed authored goals,
 new sources, execution/installation, and arbitrary output overrides are not

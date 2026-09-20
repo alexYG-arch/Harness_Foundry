@@ -239,7 +239,18 @@ intentionally cannot be used to advance the runtime.
     commands = _command_observations(events, plan)
     capabilities = predecessor_capability_observations(events, plan)
     artifacts = [_schema_observation(candidate, execution, item) for item in plan["artifacts"]]
+    protocol_evidence = {"status": "NOT_APPLICABLE", "workpack_accepted": False}
+    if workpack_id == "LAB-PROTOCOL" and plan["semantic_contract"] is not None:
+        from .project_verification import COMMAND_ID, plan_project_verification, assess_protocol_evidence
+        try:
+            verification = plan_project_verification(candidate, node_id, workpack_id, COMMAND_ID)
+            protocol_evidence = assess_protocol_evidence(events, verification, execution)
+        except RuntimeContractError as exc:
+            protocol_evidence = {"status": "NOT_PROVEN", "reason_code": "OWNED_PROTOCOL_CONTRACT_UNSUPPORTED",
+                                 "diagnostic": str(exc), "workpack_accepted": False}
     unresolved = ["INDEPENDENT_WORKPACK_VERIFIER_NOT_IMPLEMENTED"]
+    if protocol_evidence["status"] == "CURRENT_PROTOCOL_EVIDENCE":
+        unresolved = ["WORKPACK_ACCEPTANCE_COMMIT_NOT_IMPLEMENTED"]
     if plan["semantic_contract"] is None:
         unresolved.append("NATIVE_SEMANTIC_TASK_BUNDLE_MISSING")
     if any(item["status"] != "OBSERVED" for item in commands):
@@ -252,6 +263,7 @@ intentionally cannot be used to advance the runtime.
     return {"status": "WORKPACK_EVIDENCE_INCOMPLETE", "plan": plan,
         "controller_status": controller_status, "command_observations": commands,
         "capability_observations": capabilities,
+        "protocol_evidence": protocol_evidence,
         "artifact_observations": artifacts, "unresolved_requirements": unresolved,
         "remaining_semantic_scope": {"predecessor_nodes": plan["required_predecessor_nodes"],
             "prior_workpacks": plan["required_prior_workpacks"], "capabilities": plan["required_capabilities"],

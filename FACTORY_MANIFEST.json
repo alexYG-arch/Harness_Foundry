@@ -8,6 +8,29 @@
   "assurance_profile": "SELF_USE_LOCAL_TRUSTED_OPERATOR",
   "external_certification_claimed": false,
   "optional_security_hardening": "NOT_RUN",
+  "generic_build_update": {
+    "status": "IMPLEMENTATION_IN_PROGRESS",
+    "available_cli": [
+      "compile-build-plan",
+      "record-build-plan",
+      "capture-build-sources",
+      "prepare-build-authorization",
+      "approve-build-authorization",
+      "revoke-build-authorization",
+      "resolve-build-attempt",
+      "advance-build",
+      "read-build"
+    ],
+    "available_scope": "DOMAIN_NEUTRAL_REVIEWED_BUILD_AND_EXPLICITLY_APPROVED_BOUNDED_RUNTIME",
+    "available_python_api": ["record_build_plan_proposal", "read_build_plan_proposal", "read_build_task_context"],
+    "proposal_storage_format": "REVISION_V1",
+    "proposal_persistence_grants_authority": false,
+    "requirements_semantically_accepted": false,
+    "legacy_specialization_removed": false,
+    "runtime_authorization_or_acceptance_granted": false,
+    "real_coding_harness_e2e": "ATTEMPTED_NOT_ACCEPTED",
+    "release_ready": false
+  },
   "implemented_core_capabilities": [
     "version",
     "requirement-readback",

@@ -630,6 +630,9 @@ class GenericTransitionEngine:
         *,
         binding_verifier: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
     ) -> None:
+        if event_store.storage_format != "LEGACY_HASH_V1":
+            raise ControlKernelError("CONTROL_STORE_FORMAT_UNSUPPORTED",
+                                     "revision-format proposals are not legacy runtime authorization")
         self.event_store = event_store
         self.command_adapters = dict(command_adapters)
         self.binding_verifier = binding_verifier

@@ -16,6 +16,7 @@ from .models import (
     ProgramNotFoundError,
     ProgramRecord,
     RequestValidationError,
+    RevisionConflictError,
     StateConflictError,
     TransitionOutcome,
     canonical_json,
@@ -45,6 +46,16 @@ CONTROL_EVENT_STORE_TABLE_COLUMNS: dict[str, tuple[tuple[str, str, int, int], ..
         ("events_json", "TEXT", 1, 0),
         ("created_at", "TEXT", 1, 0),
     ),
+}
+
+# New generic streams use revisions for concurrency and literal JSON for
+# idempotency. This is an alternate format of the same authoritative store,
+# never a second database or an in-place rewrite of a historical hash chain.
+REVISION_CONTROL_EVENT_STORE_TABLE_COLUMNS = {
+    "control_events": tuple(column for column in CONTROL_EVENT_STORE_TABLE_COLUMNS["control_events"]
+                            if column[0] not in {"previous_event_hash", "event_hash"}),
+    "control_idempotency": tuple(("request_json", *column[1:]) if column[0] == "request_sha256" else column
+                                 for column in CONTROL_EVENT_STORE_TABLE_COLUMNS["control_idempotency"]),
 }
 
 CONTROL_EVENT_STORE_TRIGGER_SQL: dict[str, str] = {
@@ -572,17 +583,23 @@ EventStore = SQLiteEventStore
 
 
 class ControlEventStore:
-    """Append-only v2.9 control authority with rebuildable projections.
+    """Append-only control authority with rebuildable projections.
 
     The runtime control plane owns one database containing only immutable
     events plus an idempotency index.  Grant, transition, requirement and
     human-cost state are rebuilt by consumers; this store never persists a
-    second authoritative snapshot.
+    second authoritative snapshot. LEGACY_HASH_V1 retains the old runtime
+    contract. REVISION_V1 is explicitly selected for new generic streams;
+    opening an existing database in the other format fails without migration.
     """
 
     def __init__(
-        self, database_path: str | Path, *, read_only: bool = False
+        self, database_path: str | Path, *, read_only: bool = False,
+        storage_format: str = "LEGACY_HASH_V1",
     ) -> None:
+        if storage_format not in {"LEGACY_HASH_V1", "REVISION_V1"}:
+            raise RequestValidationError("unsupported control event storage format")
+        self.storage_format = storage_format
         self.database_path = Path(database_path).expanduser().resolve()
         self.read_only = read_only
         database_existed = self.database_path.exists()
@@ -593,7 +610,7 @@ class ControlEventStore:
             )
         if read_only:
             with self._connection() as connection:
-                self._require_exact_existing_schema(connection)
+                self._require_exact_existing_schema(connection, self._table_columns)
             return
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize(database_existed=database_existed)
@@ -618,8 +635,11 @@ class ControlEventStore:
     def _initialize(self, *, database_existed: bool) -> None:
         with self._connection() as connection:
             if database_existed:
-                self._require_exact_existing_schema(connection)
+                self._require_exact_existing_schema(connection, self._table_columns)
             connection.execute("PRAGMA journal_mode = WAL")
+            if self.storage_format == "REVISION_V1":
+                self._initialize_revision_schema(connection)
+                return
             connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS control_events (
@@ -663,7 +683,7 @@ class ControlEventStore:
             connection.commit()
 
     @staticmethod
-    def _require_exact_existing_schema(connection: sqlite3.Connection) -> None:
+    def _require_exact_existing_schema(connection: sqlite3.Connection, columns=None) -> None:
         """Fail before WAL, DDL, or event mutation for a non-native database."""
 
         table_names = {
@@ -672,7 +692,8 @@ class ControlEventStore:
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             )
         }
-        expected_tables = set(CONTROL_EVENT_STORE_TABLE_COLUMNS)
+        columns = CONTROL_EVENT_STORE_TABLE_COLUMNS if columns is None else columns
+        expected_tables = set(columns)
         if not expected_tables.issubset(table_names):
             raise RequestValidationError(
                 "existing control event store does not match the native schema",
@@ -682,7 +703,7 @@ class ControlEventStore:
                     "policy": "REJECT_BEFORE_SCHEMA_OR_JOURNAL_MUTATION",
                 },
             )
-        for table, expected_columns in CONTROL_EVENT_STORE_TABLE_COLUMNS.items():
+        for table, expected_columns in columns.items():
             actual_columns = tuple(
                 (
                     str(row[1]),
@@ -728,13 +749,25 @@ class ControlEventStore:
         expected_previous_event_hash: str | None = None,
         require_new: bool = False,
         exclusive_program: bool = False,
+        expected_revision: int | None = None,
     ) -> list[dict[str, Any]]:
-        """Atomically append a Hash-chained batch exactly once.
+        """Atomically append an idempotent batch using the selected format.
 
         ``require_new`` is for reserving a side effect: an idempotent replay is
         not another caller's permission to perform the reserved command.
+        REVISION_V1 requires expected_revision; the legacy format retains its
+        expected_previous_event_hash contract. Neither provides external
+        exactly-once execution or validates the payload's claimed authority.
         """
 
+        if self.storage_format == "REVISION_V1":
+            if expected_previous_event_hash is not None:
+                raise RequestValidationError("revision streams do not accept event hashes")
+            return self._append_revision_batch(program_id, entries, idempotency_key=idempotency_key,
+                                               created_at=created_at, expected_revision=expected_revision,
+                                               require_new=require_new, exclusive_program=exclusive_program)
+        if expected_revision is not None:
+            raise RequestValidationError("legacy streams require their existing hash concurrency contract")
         if self.read_only:
             raise RequestValidationError(
                 "read-only Control Event Store cannot append events"
@@ -899,6 +932,11 @@ class ControlEventStore:
                 """,
                 (program_id,),
             ).fetchall()
+        if self.storage_format == "REVISION_V1":
+            return [{"schema_version": "REVISION_V1", "event_id": str(row["event_id"]),
+                     "program_id": str(row["program_id"]), "stream_revision": int(row["stream_revision"]),
+                     "event_type": str(row["event_type"]), "payload": json.loads(str(row["payload_json"])),
+                     "created_at": str(row["created_at"])} for row in rows]
         return [
             {
                 "schema_version": "2.9",
@@ -922,6 +960,13 @@ class ControlEventStore:
 
     def verify_stream(self, program_id: str) -> dict[str, Any]:
         events = self.list_events(program_id)
+        if self.storage_format == "REVISION_V1":
+            errors = [{"code": "CONTROL_EVENT_REVISION_GAP"} for revision, event in enumerate(events, 1)
+                      if event["stream_revision"] != revision]
+            return {"schema_version": "REVISION_V1", "status": "FAIL" if errors else "PASS",
+                    "program_id": program_id, "event_count": len(events), "errors": errors,
+                    "last_revision": events[-1]["stream_revision"] if events else 0,
+                    "content_integrity_verified": False}
         errors: list[dict[str, Any]] = []
         previous_hash: str | None = None
         for expected_revision, event in enumerate(events, 1):
@@ -942,3 +987,94 @@ class ControlEventStore:
             "last_event_hash": previous_hash,
             "errors": errors,
         }
+
+    @property
+    def _table_columns(self):
+        return (REVISION_CONTROL_EVENT_STORE_TABLE_COLUMNS if self.storage_format == "REVISION_V1"
+                else CONTROL_EVENT_STORE_TABLE_COLUMNS)
+
+    @staticmethod
+    def _initialize_revision_schema(connection: sqlite3.Connection) -> None:
+        connection.executescript("""
+            CREATE TABLE IF NOT EXISTS control_events (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id TEXT NOT NULL UNIQUE,
+                program_id TEXT NOT NULL,
+                stream_revision INTEGER NOT NULL,
+                event_type TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(program_id, stream_revision)
+            );
+            CREATE TABLE IF NOT EXISTS control_idempotency (
+                program_id TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL,
+                request_json TEXT NOT NULL,
+                events_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY(program_id, idempotency_key)
+            );
+            CREATE INDEX IF NOT EXISTS control_events_program_revision
+                ON control_events(program_id, stream_revision);
+        """)
+        for sql in CONTROL_EVENT_STORE_TRIGGER_SQL.values():
+            connection.execute(sql.replace("CREATE TRIGGER ", "CREATE TRIGGER IF NOT EXISTS ", 1))
+        connection.commit()
+
+    def _append_revision_batch(self, program_id, entries, *, idempotency_key, created_at,
+                               expected_revision, require_new, exclusive_program):
+        if self.read_only:
+            raise RequestValidationError("read-only Control Event Store cannot append events")
+        if type(expected_revision) is not int or expected_revision < 0:
+            raise RequestValidationError("revision streams require a nonnegative expected_revision")
+        if (not isinstance(program_id, str) or not program_id or not isinstance(idempotency_key, str)
+                or not idempotency_key or not isinstance(created_at, str) or not created_at
+                or not isinstance(entries, (list, tuple)) or not entries):
+            raise RequestValidationError("control event batch requires program_id, idempotency_key, time and entries")
+        normalized = []
+        for entry in entries:
+            if (not isinstance(entry, Mapping) or set(entry) != {"event_type", "payload"}
+                    or not isinstance(entry["event_type"], str) or not entry["event_type"]
+                    or not isinstance(entry["payload"], Mapping)):
+                raise RequestValidationError("control entries require event_type and an object payload")
+            normalized.append({"event_type": entry["event_type"], "payload": dict(entry["payload"])})
+        try:
+            # Store the request, not a hash of it. JSON types remain significant.
+            request_json = json.dumps({"expected_revision": expected_revision, "entries": normalized},
+                                      ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        except (TypeError, ValueError) as exc:
+            raise RequestValidationError("control payload must contain finite JSON values") from exc
+        normalized = json.loads(request_json)["entries"]
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if exclusive_program and connection.execute(
+                    "SELECT 1 FROM control_events WHERE program_id != ? LIMIT 1", (program_id,)).fetchone():
+                raise RevisionConflictError("local controller already belongs to a different Program")
+            replay = connection.execute(
+                "SELECT request_json, events_json FROM control_idempotency WHERE program_id = ? AND idempotency_key = ?",
+                (program_id, idempotency_key)).fetchone()
+            if replay is not None:
+                if require_new:
+                    raise RevisionConflictError("control batch was already reserved; re-read before taking action")
+                if replay["request_json"] != request_json:
+                    raise IdempotencyConflictError("control idempotency key was reused with different content")
+                return json.loads(replay["events_json"])
+            revision = connection.execute(
+                "SELECT COALESCE(MAX(stream_revision), 0) FROM control_events WHERE program_id = ?", (program_id,)).fetchone()[0]
+            if expected_revision != revision:
+                raise RevisionConflictError("control event stream changed before append",
+                                         details={"expected_revision": expected_revision, "actual_revision": revision})
+            appended = []
+            for entry in normalized:
+                revision += 1
+                event = {"schema_version": "REVISION_V1", "event_id": f"CEVT-{uuid.uuid4().hex.upper()}",
+                         "program_id": program_id, "stream_revision": revision, **entry, "created_at": created_at}
+                connection.execute("""INSERT INTO control_events(event_id, program_id, stream_revision,
+                    event_type, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)""",
+                    (event["event_id"], program_id, revision, entry["event_type"], canonical_json(entry["payload"]), created_at))
+                appended.append(event)
+            connection.execute("""INSERT INTO control_idempotency(program_id, idempotency_key, request_json,
+                events_json, created_at) VALUES (?, ?, ?, ?, ?)""",
+                (program_id, idempotency_key, request_json, canonical_json(appended), created_at))
+            connection.commit()
+            return appended

@@ -76,3 +76,28 @@ a completed coding/verification command or an agent-written result.
                      "status": "OBSERVED" if matches else "MISSING" if supported else "PROVIDER_NOT_IMPLEMENTED",
                      "observations": matches})
     return rows
+
+
+def latest_native_command_grant(events, plan, native_command):
+    """A started but failed/pending newer check cannot revive an older PASS."""
+    projection = rebuild_control_projections(events)["grant_ledger"]
+    grants = {value["grant_id"]: value for value in projection["derived_grants"].values()}
+    latest = None
+    for event in events:
+        if event["event_type"] != "TRANSITION_ATTEMPT_STARTED":
+            continue
+        row = event["payload"]
+        grant = grants.get(row.get("grant_id"), {})
+        parent = projection["parents"].get(grant.get("parent_authorization_id"), {})
+        binding = parent.get("bindings", {})
+        transition = parent.get("local_execution", {}).get("transitions", {}).get(row["transition_id"], {})
+        invocation = transition.get("command_contract", {}).get("local_invocation", {})
+        if (parent.get("program_id") == plan["program_id"] and parent.get("approval_receipt_sha256")
+                and binding.get("binding_kind") == START_PACKAGE_BINDING_KIND
+                and binding.get("candidate_tree_sha256") == plan["candidate_tree_sha256"]
+                and grant.get("attempt_id") == row.get("attempt_id")
+                and grant.get("transition_contract_sha256") == content_sha256(transition)
+                and invocation.get("native_command") == native_command
+                and invocation.get("project_id") == plan["project_id"] and invocation.get("workpack_id") == plan["workpack_id"]):
+            latest = grant["grant_id"]
+    return latest
