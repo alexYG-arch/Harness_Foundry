@@ -132,7 +132,7 @@ class CodexSandboxRunner:
 
     def _capture(self, argv: list[str], cwd: Path, timeout: float, *, output_limit: int | None = None,
                  stdin_bytes: bytes | None = None, on_stdout=None, on_started=None,
-                 stream_sink=None, on_capture=None) -> dict[str, Any]:
+                 stream_sink=None, on_capture=None, cancellation_reason=None) -> dict[str, Any]:
         limit = self.output_limit_bytes if output_limit is None else output_limit
         previews = {name: bytearray() for name in ("stdout", "stderr")}
         counts = dict.fromkeys(previews, 0)
@@ -149,6 +149,8 @@ class CodexSandboxRunner:
                 return {"exit_code": None, "timed_out": False, "stdout": "",
                         "stderr": str(exc), "output_truncated": False, "process_started": False}
             timed_out = False
+            cancelled = None
+            next_authority_check = 0
             deadline = time.monotonic() + timeout
             killed_at = None
 
@@ -167,13 +169,26 @@ class CodexSandboxRunner:
                     selector.register(stream, selectors.EVENT_READ, name)
                 if on_started is not None:
                     on_started(process.pid)
-                while selector.get_map():
+                # A command may close both output streams and keep working.
+                # Continue polling authority and timeout until the process ends.
+                while selector.get_map() or process.poll() is None:
                     now = time.monotonic()
                     if process.poll() is not None:
                         kill_group()  # Finite commands cannot leave background writers.
                     elif now >= deadline:
                         timed_out = True
                         kill_group()
+                    elif killed_at is None and cancellation_reason is not None and now >= next_authority_check:
+                        next_authority_check = now + 0.25
+                        try:
+                            cancelled = cancellation_reason()
+                        except Exception as exc:
+                            cancelled = "AUTHORIZATION_MONITOR_FAILED"
+                            capture_error = cancelled + ": " + str(exc)[:1000]
+                        if cancelled:
+                            # Only this live Popen's owned group, never a PID
+                            # reconstructed from a previous host's records.
+                            kill_group()
                     if killed_at is not None and now - killed_at > 1:
                         capture_error = capture_error or "OUTPUT_PIPE_DID_NOT_CLOSE"
                         break
@@ -193,11 +208,6 @@ class CodexSandboxRunner:
                                 stream_sink(name, chunk)
                             if name == "stdout" and on_stdout is not None:
                                 on_stdout(chunk)
-                if process.poll() is None and killed_at is None:
-                    try:
-                        process.wait(timeout=max(0.001, deadline - time.monotonic()))
-                    except subprocess.TimeoutExpired:
-                        timed_out = True
             except Exception as exc:
                 capture_error = "PROCESS_CAPTURE_FAILED: " + str(exc)[:1000]
             finally:
@@ -221,6 +231,7 @@ class CodexSandboxRunner:
             result = {"exit_code": process.returncode, "timed_out": timed_out,
                     "output_truncated": any(counts[name] > limit for name in counts),
                     "stream_bytes": counts, "capture_error": capture_error,
+                    **({"cancellation_reason": cancelled} if cancelled else {}),
                     **({"encoding_error": True} if encoding_error else {}), **captured}
             if on_capture is not None:
                 try:
@@ -230,7 +241,7 @@ class CodexSandboxRunner:
             return result
 
     def run(self, command: LocalCommand, *, before_dispatch: Callable[[], None] | None = None,
-            observation=None) -> dict[str, Any]:
+            observation=None, cancellation_reason=None) -> dict[str, Any]:
         if os.name != "posix":
             raise LocalProcessError("this receiver currently supports POSIX process groups only")
         # Revalidate paths at dispatch, even when preparation occurred earlier.
@@ -263,6 +274,8 @@ class CodexSandboxRunner:
             before_dispatch()
         hooks = ({"on_started": observation.started, "stream_sink": observation.write,
                   "on_capture": observation.captured} if observation is not None else {})
+        if cancellation_reason is not None:
+            hooks["cancellation_reason"] = cancellation_reason
         completed = self._capture(prefix + list(command.argv), command.cwd, command.timeout_seconds, **hooks)
         return classify_local_capture(completed)
 
@@ -270,7 +283,8 @@ class CodexSandboxRunner:
     def _result(result: dict[str, Any], reason: str, *, workload_started: bool | None) -> dict[str, Any]:
         # A nonzero sandbox wrapper exit does not prove the workload launched.
         # Timeout/partial effects require reconciliation, never automatic retry.
-        return {**result, "status": "UNKNOWN_SIDE_EFFECT" if (result["timed_out"] or result.get("capture_error")) and workload_started is not False
+        return {**result, "status": "UNKNOWN_SIDE_EFFECT" if (result["timed_out"] or result.get("capture_error")
+                or result.get("cancellation_reason")) and workload_started is not False
                 else "PASS" if reason == "LOCAL_PROCESS_EXIT_ZERO" else "VALIDATION_FAILED",
                 "reason_code": reason, "workload_started": workload_started,
                 "receiver": "CODEX_SANDBOX_PERMISSION_PROFILE", "network": "DENY"}
@@ -279,7 +293,8 @@ class CodexSandboxRunner:
 def classify_local_capture(capture):
     if capture.get("process_started") is False:
         return CodexSandboxRunner._result(capture, "LOCAL_PROCESS_START_FAILED", workload_started=False)
-    reason = ("LOCAL_CAPTURE_FAILED" if capture.get("capture_error") else
+    reason = ("LOCAL_PROCESS_CANCELLED" if capture.get("cancellation_reason") else
+              "LOCAL_CAPTURE_FAILED" if capture.get("capture_error") else
               "LOCAL_PROCESS_TIMEOUT" if capture["timed_out"] else
               "LOCAL_PROCESS_EXIT_ZERO" if capture["exit_code"] == 0 else "LOCAL_PROCESS_NONZERO_EXIT")
     return CodexSandboxRunner._result(capture, reason, workload_started=None)

@@ -1,18 +1,24 @@
 # 通用建设计划接口（首个实现切片）
 
+2026-09-20 路由更新：用户已停止维护旧新建流程。通用 Build 是开发入口和发行包
+唯一的新建路线；下文涉及兼容入口的实现记录仅描述历史，不再授予使用旧流程的资格。
+旧文档 Review、Freeze、Generate 或委托不能替代新 Build 批准。旧数据只读保留。
+
 状态：`PROPOSAL_CONTRACT_ONLY`。这是通用生产合同的迁移入口，不是完整 Harness
 生成器。新增提案持久化与固定版本任务上下文的 Python API；后续的授权、执行与
 验收库级切片见[通用控制器](GENERIC_BUILD_RUNTIME.md)，公开路由见[Build CLI](GENERIC_BUILD_CLI.md)。
-完整 Harness 与发行验收未完成；搭建文档人工 Review 门禁已接入公开建设入口，真实 M1 仍待验收。
-旧兼容生成器不再被此 CLI 导入或调用，但仍存在于
-当前源码/包中，不能声称专项已经剔除。
+完整 Harness 与发行验收未完成；搭建文档人工 Review 门禁已接入公开建设入口，
+限定 M1 子流程及独立新会话重入已通过，不代表整份 PRD 或发行包验收。
+旧兼容生成器不再被此 CLI 导入或调用，但仍存在于开发仓库及历史兼容包中。
+独立通用发行组装器只收集通用运行模块，物理上不包含旧专项实现；
+公开旧生产入口现已退役；历史源码仍留作回归，不随通用包分发。正式发行验收仍未闭合。
 
 ## 搭建文档与人工 Review 统一入口（2026-09-19）
 
-状态：`PROGRAMMATIC_GATE_IMPLEMENTED / REAL_M1_NOT_RUN`。
+状态：`PROGRAMMATIC_GATE_IMPLEMENTED / SCOPED_M1_ACCEPTED_NOT_RELEASE_ACCEPTANCE`。
 用户将入口要求扩展至所有 Harness 搭建需求，不限于 PRD 或 Coding Harness：先落成可供
-人工审阅的搭建文档，用户确认后才进入 Foundry。通用提案、来源采集、范围准备/批准/推进，
-以及兼容 CREATE 和 authoring 推进均检查同一 Review 合同；不追认旧 M1。
+人工审阅的搭建文档，用户确认后才进入 Foundry。通用提案、来源采集、范围准备/批准/推进
+均检查同一 Review 合同；旧 CREATE/authoring 已退役，不追认旧 M1。
 
 ```text
 自然语言需求 / 问答 / PRD / 项目说明 / 现有工程及变更需求
@@ -53,10 +59,10 @@ Coding Harness 的搭建文档还应基于完整 PRD 和开发需求，包含功
 Review 确认外部合同，不要求用户逐项批准类名、算法和普通工具顺序。实现仍允许 Astra 自主选择。
 确认须来自展示文档之后、用户对实际版本和范围的明确决定。Agent 自评、Schema PASS、
 问答结束、文档中的 approved=true、旧 PRD/运行批准、代理委托或本政策本身均不是 Review
-证明。该上游门禁同时约束通用 Build 和兼容 Start Package 搭建入口；代理不能代替用户
+证明。该上游门禁约束全部通用 Build；旧 Start Package 路线不再可用。代理不能代替用户
 确认搭建文档，也不能通过选择旧路由绕过。历史批准与产物不重写、不自动追认为新流程批准。
 宿主应记录真实消息引用与被确认内容绑定，复用现有控制存储；不新增数据库、聊天 Hash、
-逐需求 SHA-256 或人工复制令牌。完整文档和真实消息引用保存在既有提案事件/兼容 snapshot 中。
+逐需求 SHA-256 或人工复制令牌。完整文档和真实消息引用保存在通用提案事件中；历史 snapshot 不变。
 字段验证不认证人类身份，也不证明 IR 与文档在语义上完全一致；可信宿主仍负责核对真实消息、
 展示先后及文档到 Requirement 的忠实映射。目标模型不能写控制库。
 
@@ -74,7 +80,7 @@ Agent 自批、后台全部 PASS 后直启、通过兼容/委托路线绕过、�
 
 ### 持久化 Review 形状
 
-通用 `record-build-plan.document_review` 和兼容 `CREATE.payload.build_document_review` 使用同一对象：
+通用 `record-build-plan.document_review` 使用以下对象；历史 CREATE 的同形数据只用于追溯：
 
 ```json
 {
@@ -92,8 +98,8 @@ Agent 自批、后台全部 PASS 后直启、通过兼容/委托路线绕过、�
 
 示例不是批准。首次创建前验证对象与完整当前正文；同一用户消息不能换绑另一版本/正文。
 通用来源采集还核对 source_id、实际路径和正文；Review 文件须包含在声明来源中。
-兼容历史 Program 无 Review 时可读，恢复 authoring 需真实人类 REOPEN 附上该对象；
-委托不得提供替代 Review。撤销/未知效果处置仍可进行，不能因缺 Review 阻止停止旧工作。
+兼容历史 Program 只通过 `read-history` 查看，不再通过 REOPEN 恢复 authoring。
+旧委托不能提供替代 Review；当前通用运行的撤销/未知效果处置不被文档缺失阻止。
 文档历史不重写：原文中的草案状态只描述展示时状态，当前决定从控制事件读取。
 
 ## 既有只读编译接口
@@ -116,6 +122,9 @@ python3 tools/hffactory.py compile-build-plan --request proposed-plan.json --jso
 - 每个 Source：`source_id`、`path_or_uri`、`loaded_completely=true`。
 - 每个 Atom：`atom_id`、`text_or_lossless_paraphrase`、有效 `source_id` 和 `source_locator`。
 - 每个 Case：`case_id`、非空 `atom_ids`、`description`。正/负 Case ID 不重名。
+- Case 的 `acceptance_contract={source_id, source_locator}` 指向公开验收依据；新范围准备
+  必须提供且能解析。旧提案缺少该字段仍可只读/编译，不能因此取得新的执行资格。
+  详见[合同与检查器对齐](ACCEPTANCE_CONTRACT_ALIGNMENT.md)，定位通过不证明语义完整。
 - 未解决且未显式标记非阻塞的问题或来源冲突会停止编译。
 
 Source 的读取声明和 Case 的描述仍须由需求接入/语义审查核实；结构检查不会
@@ -166,7 +175,7 @@ revision 而保留 Requirement revision；是否属于合法实施变化仍需�
 根据已批准范围判定，不能靠修改数字取得权限。Requirement 实际变化必须绑定新
 版本，不能以此接口绕过旧生命周期或重用旧授权。
 
-W2/W3/W5A 的库级消费者与公开宿主入口已接通，真实模型建设尚未验收。只读编译和
+W2/W3/W5A 的库级消费者与公开宿主入口已接通，真实模型限定子流程已验收，完整发行未验收。只读编译和
 提案上下文的 `authority_validated`、`behavior_verified`、`writes_performed`、
 `execution_started` 仍全部为 false，不能借下游接口把提案标成已执行。本切片不改变旧链
 的 authority/event Hash，不授予后继能力，不宣称完整 PRD 适配或发行验收。
@@ -174,8 +183,9 @@ W2/W3/W5A 的库级消费者与公开宿主入口已接通，真实模型建设�
 ## 提案事务与任务上下文（Python API）
 
 `build_authoring.py` 提供 `record_build_plan_proposal`、`read_build_plan_proposal`、
-`read_build_task_context`。它们只支持显式选择 `storage_format="REVISION_V1"` 的
-既有 `ControlEventStore` 实现。记录接口只可用于已经允许的本地提案写入；
+`read_build_task_context`。它们只支持 `revision_store.RevisionControlEventStore` 的既有 `REVISION_V1` 格式。
+源码兼容 API `ControlEventStore(storage_format="REVISION_V1")` 转到同一实现，
+不改数据库格式、不复制状态；通用包不包含旧 Hash Store。记录接口只可用于已经允许的本地提案写入；
 [公开建设入口](GENERIC_BUILD_CLI.md)另行准备并记录真实范围批准，提案本身不授权执行。
 
 - 一个控制库拥有一个 Program；新提案的 Requirement 与 Plan revision 从 1 开始。

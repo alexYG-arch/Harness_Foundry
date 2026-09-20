@@ -16,19 +16,10 @@ from typing import Any, Mapping
 from .constants import SCHEMA_VERSION
 
 
-SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
-
-
-def canonical_json(value: Any) -> str:
-    """Return the stable JSON representation used by hashes and ledgers."""
-
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    )
+from .build_types import (
+    SAFE_ID_RE, FactoryError, RequestValidationError, StateConflictError,
+    RevisionConflictError, IdempotencyConflictError, canonical_json,
+)
 
 
 def content_sha256(value: Any) -> str:
@@ -37,37 +28,6 @@ def content_sha256(value: Any) -> str:
     return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
 
 
-class FactoryError(Exception):
-    """Base exception with a closed machine-readable error contract."""
-
-    code = "FACTORY_ERROR"
-    exit_code = 1
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        details: Mapping[str, Any] | None = None,
-    ) -> None:
-        super().__init__(message)
-        self.message = message
-        self.details = dict(details or {})
-
-    def as_response(self) -> dict[str, Any]:
-        return {
-            "schema_version": SCHEMA_VERSION,
-            "status": "ERROR",
-            "error": {
-                "code": self.code,
-                "message": self.message,
-                "details": self.details,
-            },
-        }
-
-
-class RequestValidationError(FactoryError):
-    code = "REQUEST_VALIDATION_ERROR"
-    exit_code = 2
 
 
 class ProgramNotFoundError(FactoryError):
@@ -75,13 +35,6 @@ class ProgramNotFoundError(FactoryError):
     exit_code = 3
 
 
-class StateConflictError(FactoryError):
-    code = "STATE_HASH_CONFLICT"
-    exit_code = 4
-
-
-class RevisionConflictError(StateConflictError):
-    code = "STATE_REVISION_CONFLICT"
 
 
 class InvalidTransitionError(FactoryError):
@@ -110,10 +63,6 @@ class ContractGateError(FactoryError):
     code = "CONTRACT_GATE_BLOCKED"
     exit_code = 6
 
-
-class IdempotencyConflictError(FactoryError):
-    code = "IDEMPOTENCY_KEY_CONFLICT"
-    exit_code = 4
 
 
 @dataclass(frozen=True)

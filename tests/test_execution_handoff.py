@@ -77,16 +77,16 @@ class ExecutionHandoffTests(unittest.TestCase):
         self.assertEqual(validate_live_handoff(self.service, "PROGRAM-1", handoff), handoff)
         self.assertEqual(before, _tree_hash(self.root))
 
-    def test_public_cli_returns_the_same_handoff_without_an_execution_root(self):
-        expected = self._approve()
+    def test_retired_public_handoff_cannot_release_an_old_approval(self):
+        self._approve()
         before = _tree_hash(self.root)
         completed = subprocess.run([
             sys.executable, str(ROOT / "tools/hffactory.py"), "prepare-execution-handoff",
             "--program-id", "PROGRAM-1", "--db", str(self.store.database_path),
             "--runs-root", str(self.root / "runs"), "--json",
         ], capture_output=True, text=True, timeout=60, check=False)
-        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
-        self.assertEqual(json.loads(completed.stdout), expected)
+        self.assertEqual(completed.returncode, 2, completed.stdout + completed.stderr)
+        self.assertEqual(json.loads(completed.stdout)["error"]["code"], "LEGACY_WORKFLOW_RETIRED")
         self.assertEqual(before, _tree_hash(self.root))
 
     def test_unapproved_or_rejected_candidate_does_not_project_an_approval(self):

@@ -190,7 +190,7 @@ class RequirementArchitectureCliTests(unittest.TestCase):
                 sys.executable,
                 "-B",
                 "-m",
-                "harness_foundry_factory.cli",
+                "tests.legacy_cli",
                 command,
                 "--program-id",
                 self.program_id,
@@ -416,7 +416,7 @@ class RequirementArchitectureCliTests(unittest.TestCase):
         self.assertFalse(manifest["optional_compatibility_core_release_blocking"])
         self.assertEqual(manifest["output"], "LOCAL_HARNESS_FOUNDRY_ENGINEERING_PRODUCT")
         self.assertEqual(
-            manifest["public_python_api"],
+            manifest["legacy_baseline_python_api"],
             [
                 "harness_foundry_factory.instantiate_program_graph",
                 "harness_foundry_factory.GenericTransitionEngine",
@@ -429,7 +429,7 @@ class RequirementArchitectureCliTests(unittest.TestCase):
             "DUAL_LOCK_REQUIRED_STDOUT_OR_MEMORY_ONLY_NO_CANDIDATE_WRITE",
         )
         self.assertEqual(
-            manifest["public_cli"],
+            manifest["legacy_baseline_cli"],
             [
                 "version",
                 "requirement-readback",
@@ -481,7 +481,7 @@ class RequirementArchitectureCliTests(unittest.TestCase):
                 sys.executable,
                 "-B",
                 "-m",
-                "harness_foundry_factory.cli",
+                "tests.legacy_cli",
                 "requirement-readback",
                 "--program-id",
                 missing_program,

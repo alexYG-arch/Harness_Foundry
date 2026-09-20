@@ -13,7 +13,7 @@ from copy import deepcopy
 from pathlib import PurePosixPath
 from typing import Any, Mapping
 
-from .models import RequestValidationError, SAFE_ID_RE, canonical_json
+from .build_types import RequestValidationError, SAFE_ID_RE, canonical_json
 
 
 def _require(condition: bool, code: str, message: str) -> None:
@@ -112,6 +112,8 @@ def _requirement_catalog(requirement_ir: Mapping[str, Any]) -> tuple[dict, dict,
         _id(atom.get("source_id"), "atom.source_id")
         _require(atom.get("source_id") in sources, "BUILD_PLAN_REFERENCE_UNKNOWN", "requirement has no declared source")
         _text(atom.get("source_locator"), "atom.source_locator")
+    from .acceptance_contract import validate_acceptance_contracts
+    validate_acceptance_contracts(requirement_ir)
     return atoms, cases, sources
 
 

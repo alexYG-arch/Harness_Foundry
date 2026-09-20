@@ -184,19 +184,13 @@ class ControlKernelTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    def test_slice_03_public_api_is_exported(self) -> None:
-        self.assertIs(
-            harness_foundry_factory.instantiate_program_graph,
-            instantiate_program_graph,
-        )
-        self.assertIs(
-            harness_foundry_factory.GenericTransitionEngine,
-            GenericTransitionEngine,
-        )
-        self.assertIs(
-            harness_foundry_factory.evaluate_decision_policy,
-            evaluate_decision_policy,
-        )
+    def test_historical_kernel_is_not_a_public_new_build_api(self) -> None:
+        for name in ("instantiate_program_graph", "GenericTransitionEngine",
+                     "evaluate_decision_policy", "prepare_parent_authorization_challenge"):
+            with self.subTest(name=name):
+                self.assertNotIn(name, harness_foundry_factory.__all__)
+                with self.assertRaises(AttributeError):
+                    getattr(harness_foundry_factory, name)
 
     def test_rule_conflict_and_unknown_fail_closed(self) -> None:
         contract = transition("T1", "READ_ONLY_VALIDATION", "READ")

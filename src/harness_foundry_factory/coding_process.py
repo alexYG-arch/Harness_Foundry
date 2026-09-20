@@ -11,7 +11,7 @@ from pathlib import Path
 import tomllib
 from uuid import uuid4
 
-from .coding_protocol import CodingEventObserver
+from .coding_events import CodingEventObserver
 from .local_process import CodexSandboxRunner, LocalCommand, LocalProcessError, _toml_inline, _within
 
 
@@ -135,7 +135,7 @@ class CodingCommand:
 class CodexCodingRunner(CodexSandboxRunner):
     """No automatic retry, resume, user config rewrite or sandbox fallback."""
 
-    def run(self, command: CodingCommand, *, before_dispatch, observation=None):
+    def run(self, command: CodingCommand, *, before_dispatch, observation=None, cancellation_reason=None):
         command.validate()
         instruction_check = command.instruction_preflight()
         if instruction_check["missing_read_paths"]:
@@ -173,6 +173,8 @@ class CodexCodingRunner(CodexSandboxRunner):
         observer = CodingEventObserver()
         hooks = ({"on_started": observation.started, "stream_sink": observation.write,
                   "on_capture": observation.captured} if observation is not None else {})
+        if cancellation_reason is not None:
+            hooks["cancellation_reason"] = cancellation_reason
         capture = self._capture(command.argv(), scope.cwd, scope.timeout_seconds,
                                 stdin_bytes=command.prompt.encode("utf-8"), on_stdout=observer.feed, **hooks)
         return {**classify_coding_capture(capture, observer), "instruction_preflight": instruction_check}
@@ -189,6 +191,9 @@ def classify_coding_capture(capture, observer):
                                output_truncated=bool(capture.get("capture_error")))
     if capture.get("capture_error"):
         observed.update(status="UNKNOWN_SIDE_EFFECT", reason_code="CODING_CAPTURE_FAILED")
+    if capture.get("cancellation_reason"):
+        observed.update(status="UNKNOWN_SIDE_EFFECT", reason_code="CODING_PROCESS_CANCELLED",
+                        cancellation_reason=capture["cancellation_reason"])
     if capture.get("process_started") is False:
         return {**observed, "capture": capture, "status": "VALIDATION_FAILED",
                 "reason_code": "CODING_PROCESS_START_FAILED", "model_process_started": False}

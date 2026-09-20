@@ -93,7 +93,7 @@ class CommandObservation:
         capture = json.loads((root / "capture.json").read_text())
         if executor == "CODEX":
             from .coding_process import classify_coding_capture
-            from .coding_protocol import CodingEventObserver
+            from .coding_events import CodingEventObserver
             observer = CodingEventObserver()
             count = 0
             if (root / "stdout.bin").exists():

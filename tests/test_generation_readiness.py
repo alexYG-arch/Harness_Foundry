@@ -691,6 +691,9 @@ class GenerationReadinessTests(unittest.TestCase):
                     "lab_protocol.py",
                     "lab_protocol_checks.py",
                     "lab_protocol_contract_checks.py",
+                    "build_types.py",
+                    "revision_store.py",
+                    "identity.py",
                 },
             )
             for filename in (
@@ -704,6 +707,9 @@ class GenerationReadinessTests(unittest.TestCase):
                 "lab_protocol.py",
                 "lab_protocol_checks.py",
                 "lab_protocol_contract_checks.py",
+                "build_types.py",
+                "revision_store.py",
+                "identity.py",
             ):
                 self.assertEqual(
                     (runtime_root / filename).read_bytes(),

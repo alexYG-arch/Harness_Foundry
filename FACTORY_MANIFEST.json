@@ -8,6 +8,12 @@
   "assurance_profile": "SELF_USE_LOCAL_TRUSTED_OPERATOR",
   "external_certification_claimed": false,
   "optional_security_hardening": "NOT_RUN",
+  "new_build_route": "GENERIC_REVIEWED_BUILD_ONLY",
+  "legacy_new_build_status": "RETIRED_NO_FALLBACK",
+  "historical_capability_scope": "BASELINE_REGRESSION_NOT_CURRENT_PRODUCT_ACCEPTANCE",
+  "public_cli": ["version", "compile-build-plan", "record-build-plan", "capture-build-sources", "prepare-build-authorization", "approve-build-authorization", "revoke-build-authorization", "resolve-build-attempt", "advance-build", "read-build", "read-history"],
+  "source_diagnostic_cli": ["verify-spec", "validate-core", "project-core-evidence", "self-check-diagnostic"],
+  "public_python_api": ["harness_foundry_factory.build_plan.compile_build_plan", "harness_foundry_factory.build_plan.validate_compiled_build_plan", "harness_foundry_factory.build_entrypoint.apply_build_request", "harness_foundry_factory.build_entrypoint.read_build", "harness_foundry_factory.legacy_history.read_history"],
   "generic_build_update": {
     "status": "IMPLEMENTATION_IN_PROGRESS",
     "available_cli": [
@@ -19,16 +25,18 @@
       "revoke-build-authorization",
       "resolve-build-attempt",
       "advance-build",
-      "read-build"
+      "read-build",
+      "read-history"
     ],
     "available_scope": "DOMAIN_NEUTRAL_REVIEWED_BUILD_AND_EXPLICITLY_APPROVED_BOUNDED_RUNTIME",
-    "available_python_api": ["record_build_plan_proposal", "read_build_plan_proposal", "read_build_task_context"],
+    "available_python_api": ["record_build_plan_proposal", "read_build_plan_proposal", "read_build_task_context", "validate_acceptance_contracts", "check_contract_examples"],
     "proposal_storage_format": "REVISION_V1",
     "proposal_persistence_grants_authority": false,
     "requirements_semantically_accepted": false,
     "legacy_specialization_removed": false,
+    "generic_engineering_distribution": "ISOLATED_REVISION_RUNTIME_NOT_RELEASE_ACCEPTED",
     "runtime_authorization_or_acceptance_granted": false,
-    "real_coding_harness_e2e": "ATTEMPTED_NOT_ACCEPTED",
+    "real_coding_harness_e2e": "SCOPED_M1_AND_REENTRY_ACCEPTED_NOT_FULL_E2E",
     "release_ready": false
   },
   "implemented_core_capabilities": [
@@ -86,13 +94,13 @@
   ],
   "optional_compatibility_default_route": false,
   "optional_compatibility_core_release_blocking": false,
-  "public_python_api": [
+  "legacy_baseline_python_api": [
     "harness_foundry_factory.instantiate_program_graph",
     "harness_foundry_factory.GenericTransitionEngine",
     "harness_foundry_factory.evaluate_decision_policy",
     "harness_foundry_factory.prepare_parent_authorization_challenge"
   ],
-  "public_cli": [
+  "legacy_baseline_cli": [
     "version",
     "requirement-readback",
     "architecture-readback",
@@ -127,10 +135,11 @@
   "interaction_surface": "CODEX_CHAT_WITH_REPO_LOCAL_SKILL",
   "output": "LOCAL_HARNESS_FOUNDRY_ENGINEERING_PRODUCT",
   "core_completion": "OFFICIAL_CORE_VALIDATION_PASS_AND_PORTABLE_LOCAL_STARTUP_SMOKE_PASS",
+  "optional_compatibility_status": "HISTORICAL_REGRESSION_ONLY_NOT_AVAILABLE_FOR_NEW_BUILDS",
   "optional_compatibility_output": "TARGET_START_PACKAGE_AUTHORING_CANDIDATE",
   "optional_compatibility_terminal_state": "START_PACKAGE_CANDIDATE_READY_FOR_HUMAN_REVIEW",
   "optional_compatibility_authoring_stop_required": true,
-  "not_provided": [
+  "legacy_baseline_not_provided": [
     "PROGRAM_DRIVER_START_OR_LOOP_EXECUTION",
     "WORKPACK_EXECUTION",
     "THREE_PROJECT_IMPLEMENTATION",

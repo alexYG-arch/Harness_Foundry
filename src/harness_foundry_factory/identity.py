@@ -1,0 +1,7 @@
+"""Product identity without historical project layouts or authoring defaults."""
+
+FACTORY_ID = "HARNESS_FOUNDRY_V2_9_CHAT_FACTORY_V0_1"
+BASELINE_FACTORY_ID = "HARNESS_FOUNDRY_V2_8_CHAT_FACTORY_V0_1"
+TARGET_PROTOCOL_VERSION = "2.9"
+FACTORY_VERSION = "0.2.0"
+SCHEMA_VERSION = "1.0"

@@ -8,7 +8,7 @@ No hashes, tokens, model calls or target writes are needed for this boundary.
 
 from pathlib import Path
 
-from .models import RequestValidationError
+from .build_types import RequestValidationError
 
 
 def _require(condition, message):

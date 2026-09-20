@@ -12,7 +12,7 @@ from pathlib import Path, PurePosixPath
 import re
 from typing import Any, Mapping
 
-from .models import RequestValidationError, SAFE_ID_RE
+from .build_types import RequestValidationError, SAFE_ID_RE
 
 
 _FORMATS = {".md": "MARKDOWN", ".markdown": "MARKDOWN", ".txt": "TEXT", ".json": "JSON"}

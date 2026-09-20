@@ -10,8 +10,8 @@ from typing import Any, Mapping
 
 from .build_plan import compile_build_plan, validate_compiled_build_plan
 from .build_review import validate_build_review, validate_review_reuse, validate_review_sources, review_summary
-from .models import RequestValidationError, RevisionConflictError, canonical_json
-from .store import ControlEventStore
+from .build_types import RequestValidationError, RevisionConflictError, canonical_json
+from .revision_store import RevisionControlEventStore as ControlEventStore
 
 
 PROPOSAL_EVENT = "BUILD_PLAN_PROPOSED"
@@ -112,6 +112,9 @@ def read_build_task_context(store: ControlEventStore, program_id: str, workpack_
     source_ids = {atom["source_id"] for atom in atoms} | {item["id"] for item in task["inputs"] if item["kind"] == "SOURCE"}
     source_ids.update(row["source_id"] for row in event["payload"].get("document_review", {}).get("documents", []))
     cases = {case["case_id"]: (kind, case) for kind in ("acceptance_cases", "negative_cases") for case in ir.get(kind, [])}
+    source_ids.update(cases[check["case_id"]][1]["acceptance_contract"]["source_id"]
+                      for check in task["verification"]
+                      if "acceptance_contract" in cases[check["case_id"]][1])
     context = {
         "status": "TASK_CONTEXT_NOT_AUTHORIZED", "proposal_binding": _binding(event),
         "workpack": task, "requirements": atoms,

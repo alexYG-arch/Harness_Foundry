@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import time
 import tomllib
 import unittest
 from unittest.mock import patch
@@ -88,6 +89,19 @@ class CodingProcessTests(unittest.TestCase):
         result = self.runner.run(self.command(), before_dispatch=lambda: None)
         self.assertEqual(result["status"], "UNKNOWN_SIDE_EFFECT")
         self.assertFalse(result["workpack_accepted"])
+
+    def test_running_model_fixture_cancel_is_unknown_not_business_failure(self):
+        (self.cwd / "fixture-mode").write_text("timeout")
+        started = time.monotonic()
+        result = self.runner.run(self.command(), before_dispatch=lambda: None,
+            cancellation_reason=lambda: "BUILD_AUTHORIZATION_REVOKED"
+                if (self.cwd / "fixture-calls.txt").exists() else None)
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertEqual(result["status"], "UNKNOWN_SIDE_EFFECT")
+        self.assertEqual(result["reason_code"], "CODING_PROCESS_CANCELLED")
+        self.assertFalse(result["workpack_accepted"])
+        self.assertFalse(result["automatic_retry_allowed"])
+        self.assertFalse(result["capture"]["timed_out"])
 
     def test_profile_conflicting_project_config_is_not_ignored_or_rewritten(self):
         path = self.cwd / ".codex/config.toml"

@@ -12,7 +12,241 @@ acceptance gates are in the [generic update plan v0.2](FOUNDRY_GENERIC_CODEX_HAR
 No existing completion evidence, authorization or runtime state is changed by
 this planning note.
 
+## 发布闭环当前摘要 — 2026-09-20（晚于下方历史快照）
+
+### 本轮最小差量测试：3 项已执行
+
+用户要求“压到最小test并执行”。本轮没有产品源码修改，沿用既有全量、公开源码、
+M1 与重入结果；不新建业务案例、不重新运行旧全量、不增加故障注入或 Hash。
+仅执行旧公开入口停用、隔离包加载/Review 门禁、包内两个依赖本地任务的独立检查与
+不重放续跑，**3/3 通过，0 skip，0.895 秒**。日志：`build/minimal-delta-20260920.log`。
+末项使用真实 Python 子进程与临时产物，不调用模型，不证明原生模型隔离或当前包的
+真实 Harness 端到端验收。没有创建实际目标、复用旧运行批准、推送或发布。
+这是本轮差量回归的完成，不是删除已确认的发布业务合同或宣布双案例已验收。
+
+### W1A 生产入口退役：用户决定已执行，源码回归通过
+
+用户明确决定“停止维护旧的新建流程，使用新的方式”。开发公开 CLI 与模块入口统一
+使用通用 Build；旧新建/生成/运行/打包命令直接报 `LEGACY_WORKFLOW_RETIRED`，
+不读请求、不打开 Program，不提供兼容开关。包顶层旧 Python API 取消公开导出。
+旧 authoring 库新增独立 `read-history` 原始快照只读入口，不迁移、重放或恢复历史权限。
+通用包新增此中性读取模块，仍不包含旧 Producer/Validator/CLI/测试夹具。
+
+AGENTS、Skill、README、CLI 文档和 Manifest 已改为单一路线。历史回归使用测试专用
+入口保留原行为断言；旧 41 能力检查明确是历史基线，不是新版公开接口或发行验收。
+当前公开命令集合、退役无副作用、模块入口防回退、历史原样读取、WAL 拒绝及 API
+绑定有专门回归。不新增 Hash 或审批链。未触碰真实历史数据库、Candidate 或目标。
+
+这是生产入口和分发边界退役，不声称开发源码内所有历史模块已物理删除。
+下述“待用户明确”已被本决定解决；同包双案例及正式发布仍须实际验收。
+
+本轮验证（非真实目标/模型验收）：
+
+- 定向 65 项通过：`build/retirement-focused-20260920.log`；历史核心诊断 6 项通过：
+  `build/retirement-core-focused-20260920.log`。
+- 公开源码检查 **213/213 通过、0 skip**：`build/retirement-source-20260920.json`。
+  无私有状态/sibling 的临时源码副本复验同样 213/213：
+  `build/retirement-isolated-source-20260920-r2.json`。首轮副本遗漏 README 导致失败，
+  仅补齐副本后重跑，未改源码或放宽检查；原失败报告和日志保留。
+- 全量 **936 项：917 通过、19 历史 opt-in 跳过、0 失败**，877.071 秒：
+  `build/retirement-full-20260920.log`。已有 SQLite ResourceWarning 仍保留，跳过不作验收证据。
+- 规范 101 文件、仓库 Skill 4 引用校验通过；两个 Skill 的 quick_validate 通过，
+  使用本机已有 PyYAML，不安装新依赖。通用包预检 34 文件通过；`git diff --check` 通过。
+
+这些结果不批准双案例运行、目标安装、Git 推送或发布；版本和 `release_ready=false` 不变。
+
+#### 决定前的只读检查记录（保留追溯，不再是待决项）
+
+本次只读依赖核对确认，这不是再删除一组打包文件即可关闭的事项：
+
+- `AGENTS.md` 与活动 Skill 仍要求默认 41 能力核心和可新建/生成的 Start Package
+  兼容路线；`entrypoint.py` 对非通用命令继续进入旧 `cli.py`。
+- 旧 `service.py` / `compiler.py` / `semantic_contracts.py` 消费固定三工程、公共 Skill
+  入口和媒体合同。现有 41 能力的部分行为绑定旧锁、编译、authoring 与便携入口，不能
+  把整个旧模块目录删掉，同时声称这些当前接口和验收选择器仍原样保留。
+- 通用更新计划 §1.2 / §9 要求专项从生产路径退役，而非默认关闭或可选保留；新通用包
+  的隔离已经通过测试，但它不能代表上述旧生产入口已经迁移。
+
+建议下一步先明确兼容承诺：保留并迁移需求/依赖/授权/验收/恢复等通用行为，旧固定
+Start Package/Candidate/三工程生产接口退役，历史数据只读保留；以通用 Build 承接新建。
+相应更新入口指令、CLI、Manifest 和行为测试映射，不能简单删掉仍适用的测试或保留假 PASS。
+这是公开接口兼容性决定，不是内部 Workpack 增加审批；尚未按此建议修改生产入口或测试。
+此检查当时等待用户决定；现由上方实际决定和实现替代，不借旧全量 PASS 证明本轮结果。
+
+### 后续源码推进：恢复空窗与固定提交组装
+
+- **REL-09 / W4B/R3：** 修复三类可复现断点：仅预留 attempt 导致永久 HELD；完整实施
+  观测后的缺输出未按正常路径进入修复；恢复提交前授权到期仍可能记录接受。修复前最小
+  回归为 2 failure / 1 error，见 `build/release-recovery-before-20260920.log`。
+  现在无命令意图的预留以 revision CAS 结算 `NOT_DISPATCHED`；命令意图和恢复只能一方
+  先提交，迟到原调度器不会覆盖恢复/新验收。已存在意图却效果不明仍停止，不盲目重放。
+  完整观测下缺输出进入原范围内修复；恢复提交再次核对当前授权、绑定与 revision。
+  原预算累计不重置，未新增批准、状态库、进程身份保证或 Hash。
+- **REL-10 / W6：** 新开发入口 `devtools/package_committed_release.py` 显式选择 Git 提交，
+  从临时跟踪文件快照运行该提交自己的组装器；不消费脏工作区/未跟踪文件或回退当前
+  组装器。产品/协议/许可元数据须一致；来源提交与归档 H1 一同返回，不加逐文件摘要。
+  预检如实区分临时写入与无持久归档；不修改原索引/提交，不推送、不创建 tag 或发布。
+  六项测试的提交均位于临时仓库，不冒充真实发行来源。当前真实来源提交仍未创建。
+- 六项恢复新回归和六项固定提交新回归已加入；合并定向 **90/90**，公开源码门禁
+  **205/205，零跳过**；core、spec 和 Skill 再次 PASS。完整回归 **928 项：909 通过、
+  19 opt-in 跳过、零失败，804.381 秒**。SQLite ResourceWarning 仍保留，不宣称零警告。
+  [完整日志](../build/release-recovery-committed-full-20260920.log)、
+  [定向日志](../build/release-recovery-committed-focused-20260920.log)、
+  [公开源码报告](../build/release-recovery-committed-source-20260920.json)。
+  `git diff --check` 通过；跳过项不算原生执行或双案例验收证据。
+  当前无双案例目标/模型执行；已确认的搭建文档不变，运行授权仍未准备/授予。
+- 同一公开源码检查在无 sibling/私有状态的临时副本 **205/205** 通过。
+  首跑因本次复制准备遗漏仓库内 `schemas/`、`spec_lock/` 失败；补齐原资源后复跑，
+  未修改生产代码或放宽检查。两次日志分别为
+  `build/release-recovery-committed-isolated-source-20260920.log` 与 `-20260920-r2.log`。
+  R3 的闭合按既定故障窗口及其下一动作判断，不新加“任意故障自动恢复”或“重启后强杀
+  未知 PID”要求；这些明确非目标不能无限变成下一轮发布门槛，具体停止仍需可解释证据。
+- **保留的退役缺口：** 通用包已不载入旧模块，但开发入口 `entrypoint → cli → service /
+  compiler → semantic_contracts` 仍可进入旧专用合同；`media_evidence_contracts` 及旧
+  compiler 固定工具/阶段不能因此被称为已退役。后续 W1A 需处理这条实际调用链，同时
+  保留既定核心 41 能力的通用行为和只读历史；不能仅删包清单、关键词或适用测试闭合。
+
+R3 的有限恢复覆盖按下面可复跑行为核对，不按“具备任意进程修复能力”判断。
+测试名位于 `tests/test_build_runtime.py`；另标注者除外。它们是源码/临时进程证据，
+不替代待验发行包的同包场景。
+
+| 故障窗口 | 已实现动作 | 直接回归 |
+|---|---|---|
+| attempt 预留，尚无命令意图 | CAS 结算未派发，保留预算；迟到调度器不能覆盖 | `test_reserved_attempt_without_command_intent_recovers_without_new_approval`、`test_delayed_original_dispatcher_cannot_overwrite_reconciled_attempt` |
+| 已派发但无完成观测 | HELD，不重复派发；提示核对缺失事实 | `test_crash_after_dispatch_without_observation_is_held_not_replayed` |
+| 宿主附件完整，控制观测丢失 | 核对绑定并补回观测，不重跑实施 | `test_native_receiver_attachment_recovers_before_controller_observation` |
+| 仅部分检查已完成 | 核对同一产物，仅运行剩余 Case | `test_crash_after_one_case_resumes_only_remaining_checks` |
+| 检查完成未提交 | 重核范围/到期与当前字节，提交或停止 | `test_crash_after_complete_checks_recovers_acceptance_without_reexecution`、`test_recovery_rechecks_expiry_before_acceptance_commit` |
+| 提交完成后重新读入/推进 | 从 SQLite 投影视图，不重复效果 | `test_public_commands_run_real_local_fixture_verify_and_resume_without_replay`（`test_build_entrypoint.py`） |
+| 活宿主撤销/到期；重启后只剩 PID | 前者终止自己持有的进程组；后者仅诊断，不据此杀进程或接受 | `test_revoke_stops_running_native_command_and_preserves_history`、`test_expiry_stops_running_native_command_and_preserves_history`；`test_live_pid_is_diagnostic_not_identity_or_replay_authority`（`test_process_observation.py`） |
+| 缺产物、业务失败、环境/合同失败 | 业务在原预算修复；基础设施/合同问题停止对齐 | `test_recovered_missing_output_is_rejected_then_repaired_like_normal_execution`、`test_verifier_environment_failure_does_not_trigger_implementation_repair` |
+| 已验输出变化 | 仅失效受影响任务与后继；保留无关分支 | `test_changed_accepted_output_rebuilds_only_affected_dependency_branch` |
+
+### 后续源码推进：活宿主取消链路
+
+- **REL-08 / W4B/R3：** 通用 `BuildController → NativeBuildRunner → LOCAL/CODEX`
+  采集器传递当前授权检查。约每 0.25 秒检查撤销/到期，只终止本宿主持有的有限命令进程组；
+  不按进程名或重启后的旧 PID 杀进程，不增加授权、事件 Hash 或第二控制状态。
+- 修复关闭 stdout/stderr 后进入阻塞等待的分支，确保无输出时仍检查取消/超时。
+  授权监测故障也保留原因并停止。取消不回滚副作用，耐久观测及恢复均保持未知状态；
+  不进入业务修复重试、不接受旧产物、不释放后继，也不返还 attempt 预算。
+- 新增真实本地进程取消、子进程组清理、关闭输出流、监测故障、正常完成对照、
+  完整终态不能覆盖取消，以及控制器撤销/到期集成回归。Codex 使用明确的假服务进程，
+  不宣称原生模型或 OS 隔离已验。定向 **81/81** 通过；公开源码 **193/193，零跳过**，
+  核心 41 能力/26 selectors、规范 101 文件、Skill 5 引用再次 PASS。
+- 另有本轮真实 macOS Codex 沙箱离线采集检查：临时 Python 命令写出部分文件后，
+  宿主取消得到退出 -9、`LOCAL_PROCESS_CANCELLED`、未超时、部分文件保留；无模型调用。
+  最初嵌套沙箱未能启动，其后开发 venv 的读取绑定不全也未启动负载；没有降级直跑。
+  获平台许可后改用明确的原始解释器及其完整安装依赖，原生沙箱检查通过。
+  这只验证取消接收器，不关闭真实模型、整套原生 opt-in 或同包案例验收。
+- **后续实际用户决定：** 用户已明确回复“确认双案例搭建文档 v0.1”，确认 Task CLI
+  完整 PRD 和 CSV 增量说明的业务、搭建及验收范围。被展示文档保持原字节（其中 DRAFT
+  是展示时状态），不靠改写文档制造批准。此条是工程进度摘要，正式提案仍须通过公开接口
+  绑定全文及真实展示/用户消息引用；本轮尚未创建双案例 Program、目标目录或运行批准。
+  本地 `authoring_inputs/release-acceptance-v0.1/document-review.json` 已保存六份完整材料和
+  实际展示/确认 turn 引用，`validate_build_review` 当前字节核对通过；它只是待提案消费的
+  宿主输入，不是第二控制库或运行批准，也不随 Git/发行包公开。
+- 文档 Review 已通过，不再重复询问相同内容。具体运行范围必须在精确待验发行物、
+  独立检查器和依赖准备完成后展示；本轮无模型调用、Git 推送或发布。
+  重启后进程身份/启动空窗、剩余恢复、生产入口退役及同包真实验收义务保持开放。
+- **本切片完整回归：916 项，897 通过、19 opt-in 跳过、零失败，836.052 秒。**
+  [完整日志](../build/release-cancellation-full-20260920.log)、
+  [定向 81 项](../build/release-cancellation-focused-20260920.log)、
+  [公开源码 193 项](../build/release-cancellation-source-20260920.json)。新增 8 项回归；
+  源码门禁包含其中 7 项，另一个假模型接收器测试随完整套件执行。
+  `git diff --check` 通过。19 项跳过不作为原生通过，SQLite ResourceWarning 仍保留。
+  新取消能力没有改变 `release_ready=false`、既有 M1 接受结论或历史控制状态。
+
+### 本轮继续推进：通用运行隔离与发布案例准备
+
+- **REL-04 / W1A/W5B/W6：** 拆出 `identity`、`build_types`、`coding_events` 与
+  `revision_store`；通用公开 CLI 不再导入旧 kernel、Hash Store 或专项 Producer。
+  旧 Python 入口委托同一份共享实现，保留原 `REVISION_V1` 数据格式和历史语义，不迁移旧库。
+  `devtools/package_generic_release.py` 显式收集 16 个通用模块及接入/许可/示例资源，
+  实际归档 33 个文件；只对归档计算 H1，包内无逐文件摘要表。
+  **通用包物理隔离已实现，但历史源码生产入口的完整退役和正式发布仍未关闭。**
+- **REL-05 / W4A：** 未开始任务支持同 Job、同执行器、相同原写域内拆分/合并，
+  独立任务可重排。原输出/版本链、Case 命令及产物绑定、依赖顺序、输入范围和预算保持。
+  拆分共享原任务预算，合并向原任务分别计费；已开始任务不能靠改名绕过失败或未知历史。
+  定向回归实际执行拆分/合并后本地进程，检验逐 Case、单次批准、不重放和预算停止。
+- **REL-06 / 兼容回归：** 第一轮全量发现旧 Candidate 固定打包清单漏带抽离后的三个
+  共同依赖，独立 Validator 返回 `PORTABLE_RUNTIME_DEPENDENCY_MISSING`。修复 Producer
+  的全部相关运行包组装入口，不放宽 Validator；新增实际迁移导入及删除依赖仍失败的回归。
+  随后发现旧精确文件集合断言尚未列入这三个必需文件，已更新集合并增加逐文件字节核对。
+  两次中断的完整运行日志保留，不列为完整 PASS；最终整套复验另记结果。
+- **REL-07 / W7A/W7B 准备：** 已输出[双案例搭建文档 v0.1](RELEASE_ACCEPTANCE_BUILD_DOCUMENT_v0_1.md)
+  和完整公开 Task CLI PRD / CSV starter 增量材料，等待真实 Human Review。
+  未创建这两个 Program/目标目录，未运行模型、未借旧 M1 批准。文档确认不等于运行授权。
+- 当前公开源码检查在本仓库和无 sibling/私有状态的独立源码副本均为 **186/186，零跳过**。
+  新包在实际解压目录通过隔离 Python 导入、CLI/Review 门禁、真实临时本地进程检查和续跑；
+  迁移后的 Skill 经 skill-creator 检查通过，CSV starter 原有 2 项测试通过。
+  这些仍不证明实际模型、新用户接入或同包双案例已经通过。
+- **最终稳定切片验证：908 项，889 通过、19 opt-in 跳过、零失败，762.434 秒。**
+  [本地完整日志](../build/release-generic-full-20260920-r3.log)；核心再次 PASS（41 能力 /
+  26 selectors），规范 101 文件、仓库 Skill 5 引用 PASS。`git diff --check` 通过。
+  19 个跳过项不等于原生运行通过；已有 SQLite ResourceWarning 仍保留，不宣称零警告。
+  定向新增 21 个通用分发/重规划/旧依赖闭包回归；实际 Skill 校验使用现有本地校验依赖，
+  未新增发行运行依赖。临时工程归档和源码副本仅是工程验证，不是正式交付附件。
+- 正式仓库只读 API 本轮已成功查询：Release 和 Tag 列表均为空；没有创建/修改远端内容。
+  私密漏洞报告的开启仍待此前提出的用户决定，不代选联系方式、不虚构已开启。
+
+**下一真实门禁：** 双案例搭建文档现已由用户明确确认；从最终候选准备完整
+运行范围后取得真实批准。还需闭合历史生产入口处置、约定恢复/取消边界、干净来源版本、
+同包真实验收、远端 CI 与最终发行决定；`release_ready=false`，不因本轮测试增加而上调。
+
+### 本轮之前已完成的发布准备（保留证据）
+
+- 用户选择 MIT；正式仓库固定为 `alexYG-arch/Harness_Foundry`。已添加许可正文、
+  Python 许可/仓库元数据和[发布准备说明](RELEASE_READINESS.md)，没有修改远端或发布。
+- 只读复核现有 M1 控制库与执行报告：限定 A/B/C 和独立新会话 D 均 ACCEPTED。
+  实际建设、使用、持久场景及重入的证据保留；B 的会话内修复不等同于控制器重新派发。
+  旧失败不删，私有输入/原始会话不公开；`harness_e2e_verified=false` 保持不变。
+- **REL-01 / W6：** Producer 的便携清单补入缺失的合同对齐文档、MIT 与发布说明。
+  在实际迁移目录核对链接/许可及隔离 Python 的通用编译入口；缺文件在创建包前拒绝。
+  这修复缺资源，不关闭旧专项尚被全量收集的 GEN-01。
+- **REL-02 / W6/W7C：** 新增公开源码检查入口和 GitHub 工作流；必要项缺失、零测试、
+  SKIP、xfail、断言或基础设施失败均返回失败。只输出诊断，不成为另一套批准/状态权威。
+  在本地和没有规范 sibling/私人状态的临时源码副本中，166/166 通过，0 skip。
+  首次新增迁移断言因系统临时路径别名失败，改为比较解析后的物理根后通过；失败记录保留。
+- **REL-03 / W6：** README、Manifest 和当前接口说明不再错误声称 M1 尚未运行/验收；
+  明确限定子流程与通用发行验收之别，历史报告只追加新进度，不重写旧授权或接受记录。
+- W6 为 IN_PROGRESS；W7A/W7B 的最终同包案例、W7C 最终发布仍未关闭。
+  GitHub 托管 CI 尚未运行，独立源码副本不是目标 Harness 的干净接入证明。
+
+剩余工程按原依赖推进：GEN-01 专项与 GEN-02 旧 Hash 消费者退役 → W4 完整约定恢复/
+计划适应 → W6 最终候选 → W7A/W7B 同包真实案例 → W7C 闭合。现有 M1 不无故重跑。
+许可证/发布仓库的两项选择已解决；新案例文档 Review、具体运行范围和最终发布授权仍须真实决定，
+不增加逐 Workpack 门。
+
+本轮稳定源码验证：完整回归 887 项，868 通过、19 opt-in 跳过、0 失败，836.410 秒；
+[本地完整日志](../build/release-closure-full-20260920.log)。核心 41 能力 / 26 selectors、
+规范 101 文件及 Skill 5 引用均 PASS；既有 SQLite ResourceWarning 仍存在。
+临时源码副本实际完成 Python wheel 元数据构建，MIT、LICENSE 文件和正式仓库 URL
+进入构建结果；该测试不新增 wheel 发行路线、不全局安装或发布。
+只读 GitHub 检查确认正式仓库为 public、Issues 可用、私密漏洞报告关闭；开启仍待用户决定。
+查询历史 Releases/Actions 遇到 TLS 超时，未推断其不存在，未修改远端设置。
+
 ## Generic upgrade execution — 2026-09-18
+
+### 后续修复：公开验收合同对齐 — 2026-09-20
+
+- 根因：Case 的描述和验证命令之间缺少公开接口依据，检查器可能精确比较合同未规定的
+  表示；空集合样例和数量-only 检查又掩盖了元素/身份差异。它不是增加模型次数能解决的问题。
+- Producer/输入链：Case 绑定 `acceptance_contract`，来源采集解析其定位；新运行范围准备
+  必须覆盖全部 Case，Readback 和实际任务上下文消费同一公开正文。旧提案仍可读取，
+  旧范围不能凭本轮修复自动升级权限，历史不改写。
+- 验证/控制链：领域无关的公开样例工具检测格式误判、只检查数量或全部拒绝；检查器崩溃
+  不算正确反例。CONTRACT_GAP 分流为 HELD_ACCEPTANCE_CONTRACT，停止实施重试和后继，
+  重入/观测恢复不改变该结论，也不退还已发生尝试。
+- 工程回归：`tests/test_acceptance_contract.py` 及相关 Build 测试；合同/接口说明见
+  [验收合同对齐](ACCEPTANCE_CONTRACT_ALIGNMENT.md)。本轮没有增加 Hash、数据库或逐包批准。
+- 验证：完整 880 项（861 通过、19 opt-in 跳过、0 失败）；最后定向复跑 104 项全部通过，
+  覆盖追加的恢复断言。核心 41 能力 / 26 selectors、规范 101 文件、Skill 5 引用均 PASS。
+  SQLite ResourceWarning 仍保留；结果是源码回归，不是目标端到端通过。
+- 边界：定位和样例通过仍不证明语义全覆盖；用户私有 Case 的新版接口/样例/独立检查器
+  留在忽略目录，等待实际文档 Review 与新范围批准。源码回归不关闭 M1 或发行验收。
+
+以下 2026-09-18 条目保留为当时的工程快照。
 
 用户已授权“执行方案”。当前为源码工程执行，不是目标 Harness 的运行批准。
 既有六个代码/测试文件与相关说明中的协议 V3 修改保留；本切片没有重写旧 SQLite、

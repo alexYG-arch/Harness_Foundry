@@ -115,7 +115,7 @@ class AdvanceAuthoringCliTests(unittest.TestCase):
                 sys.executable,
                 "-B",
                 "-m",
-                "harness_foundry_factory.cli",
+                "tests.legacy_cli",
                 "advance-authoring-until-gate",
                 "--program-id",
                 self.program_id,

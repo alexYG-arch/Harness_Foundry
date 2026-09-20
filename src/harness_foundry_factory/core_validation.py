@@ -301,7 +301,7 @@ class CoreValidationError(RuntimeError):
 def validate_core(
     source_root: str | Path | None = None, *, execute_tests: bool = True
 ) -> dict[str, Any]:
-    """Validate real core entrypoints and behavior without mutating product state."""
+    """Validate retained historical baseline behavior, not current public routes."""
 
     root = Path(source_root or project_root()).expanduser().resolve(strict=True)
     findings: list[dict[str, Any]] = []
@@ -474,6 +474,9 @@ def validate_core(
         "schema_version": "2.9",
         "status": "PASS" if not findings and test_status == "PASS" else "FAIL",
         "validation_kind": "OFFICIAL_CORE_VALIDATION",
+        "validation_scope": "HISTORICAL_BASELINE_REGRESSION",
+        "current_public_route_verified": False,
+        "generic_release_accepted": False,
         "factory_id": FACTORY_ID,
         "target_protocol_version": TARGET_PROTOCOL_VERSION,
         "product_manifest": {
@@ -582,6 +585,9 @@ def _project_validated_core_evidence(
         "schema_version": "2.9",
         "status": "PASS",
         "projection_kind": "IMPLEMENTATION_EVIDENCE_PROJECTION_NOT_RECEIPT",
+        "validation_scope": "HISTORICAL_BASELINE_REGRESSION",
+        "current_public_route_verified": False,
+        "generic_release_accepted": False,
         "factory_id": FACTORY_ID,
         "source_validation_sha256": claimed_sha256,
         "product_manifest_sha256": validation["product_manifest"]["sha256"],

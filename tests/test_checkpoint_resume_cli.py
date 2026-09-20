@@ -71,7 +71,7 @@ class CheckpointResumeCliTests(unittest.TestCase):
             sys.executable,
             "-B",
             "-m",
-            "harness_foundry_factory.cli",
+            "tests.legacy_cli",
             command,
         ]
         if request is not None:

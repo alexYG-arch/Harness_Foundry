@@ -1,0 +1,33 @@
+name: Foundry public source checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-checks:
+    name: Public source and portable smoke (not release acceptance)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - name: Install declared test dependencies
+        run: python -m pip install '.[test,security]'
+      - name: Run required public checks (skips fail)
+        run: python -B tools/check_release_source.py --report build/source-checks.json
+      - name: Preserve diagnostic summary
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: public-source-checks
+          path: build/source-checks.json
+          if-no-files-found: error

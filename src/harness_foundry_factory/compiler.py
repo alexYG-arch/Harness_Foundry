@@ -127,6 +127,10 @@ FACTORY_IMPLEMENTATION_PATHS = (
     "src/harness_foundry_factory/service.py",
     "src/harness_foundry_factory/models.py",
     "src/harness_foundry_factory/store.py",
+    "src/harness_foundry_factory/build_types.py",
+    "src/harness_foundry_factory/revision_store.py",
+    "src/harness_foundry_factory/identity.py",
+    "src/harness_foundry_factory/coding_events.py",
     "src/harness_foundry_factory/identity_derivation.py",
     "src/harness_foundry_factory/recovery_decision.py",
     "src/harness_foundry_factory/complexity_governor.py",
@@ -10821,6 +10825,7 @@ def _write_release_closure_control_plane_bundle(
         if not source.is_file():
             raise ValueError(f"Epoch 2 runtime source is missing: {filename}")
         _write_text(runtime_root / filename, source.read_text(encoding="utf-8"))
+    _write_common_runtime_dependencies(runtime_root)
     # This control-plane manifest owns its declared module set, not every
     # component colocated in the portable runtime namespace.
     module_hashes = {
@@ -11321,6 +11326,7 @@ def _write_control_kernel_bundle(
         if not source.is_file():
             raise ValueError(f"v2.9 control runtime source is missing: {filename}")
         _write_text(runtime_root / filename, source.read_text(encoding="utf-8"))
+    _write_common_runtime_dependencies(runtime_root)
 
     # Keep unrelated project support in the whole-package inventory, not in
     # this control kernel's authority-bearing implementation manifest.
@@ -12477,6 +12483,20 @@ def _write_lab_protocol_support(staging: Path) -> None:
                 (Path(__file__).parent / "resources/lab_protocol_worker.py").read_text(encoding="utf-8"))
 
 
+def _write_common_runtime_dependencies(runtime_root: Path, *, coding: bool = False) -> None:
+    """Ship extracted shared dependencies; preserve legacy authority contracts.
+
+    These dependencies belong to the whole portable inventory, like Lab support,
+    not a retroactive edit of an epoch's frozen control-module declaration.
+    Independent relative-import closure and relocated imports verify the result.
+    """
+    names = ["build_types.py", "revision_store.py", "identity.py"]
+    if coding:
+        names.append("coding_events.py")
+    for filename in names:
+        _write_text(runtime_root / filename, (Path(__file__).parent / filename).read_text(encoding="utf-8"))
+
+
 def _write_epoch4_runtime_store_dependency_closure(
     staging: Path,
     *,
@@ -12509,6 +12529,7 @@ def _write_epoch4_runtime_store_dependency_closure(
         if not source.is_file():
             raise ValueError(f"Epoch 4 runtime store dependency is missing: {filename}")
         _write_text(runtime_root / filename, source.read_text(encoding="utf-8"))
+    _write_common_runtime_dependencies(runtime_root, coding=include_workpack_runtime)
     if include_workpack_runtime:
         _write_lab_protocol_support(staging)
 

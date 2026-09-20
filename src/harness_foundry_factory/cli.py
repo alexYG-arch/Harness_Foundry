@@ -208,7 +208,8 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def _baseline_main(argv: Sequence[str] | None = None) -> int:
+    """Unmaintained historical regression machinery, not a production entrypoint."""
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
@@ -736,6 +737,12 @@ def _add_common_paths(parser: argparse.ArgumentParser, *, database: bool) -> Non
 
 def _add_json_flag(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--json", action="store_true", help="Emit one JSON object on stdout")
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    # python -m and old Python callers cannot bypass the new public boundary.
+    from .entrypoint import main as run
+    return run(argv)
 
 
 if __name__ == "__main__":  # pragma: no cover

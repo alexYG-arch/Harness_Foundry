@@ -33,12 +33,15 @@ ALLOWED_TOP_LEVEL_FILES = (
     "AGENTS.md",
     "FACTORY_MANIFEST.json",
     "README.md",
+    "LICENSE",
+    "docs/RELEASE_READINESS.md",
     "docs/ARCHITECTURE.md",
     "docs/CHAT_USAGE.md",
     "docs/GENERIC_BUILD_PLAN.md",
     "docs/GENERIC_BUILD_CLI.md",
     "docs/GENERIC_BUILD_RUNTIME.md",
     "docs/GENERIC_SOURCE_INTAKE.md",
+    "docs/ACCEPTANCE_CONTRACT_ALIGNMENT.md",
     "pyproject.toml",
 )
 ALLOWED_TREES = (
@@ -76,7 +79,7 @@ OPTIONAL_PYTHON_DEPENDENCIES = (
 EXCLUDED_SURFACES = (
     ".git",
     "AUTHORITY_TRUST_ROOT.json",
-    "historical and review docs except docs/ARCHITECTURE.md and docs/CHAT_USAGE.md",
+    "historical and review docs outside the explicit product documentation allowlist",
     "runs",
     "tests",
     "__pycache__",

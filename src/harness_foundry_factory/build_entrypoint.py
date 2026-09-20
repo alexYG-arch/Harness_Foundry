@@ -16,8 +16,8 @@ from .build_runtime import (
     record_source_snapshot, revoke_build_authorization,
     resolve_build_attempt,
 )
-from .models import RequestValidationError, RevisionConflictError, SAFE_ID_RE, canonical_json
-from .store import ControlEventStore
+from .build_types import RequestValidationError, RevisionConflictError, SAFE_ID_RE, canonical_json
+from .revision_store import RevisionControlEventStore as ControlEventStore
 from .process_observation import CommandObservation
 
 
@@ -86,6 +86,7 @@ def _scope_readback(event, events):
             "scope": payload["scope"], "source_binding": _source_summary(source),
             "verification_files": sorted(payload["verifier_files"]), "state": state,
             "coding_instruction_preflight": payload.get("coding_instruction_preflight"),
+            "acceptance_contracts": payload.get("acceptance_contracts"),
             "directory_creation": "ONLY_DURING_APPROVED_ADVANCE",
             "freshness_rechecked_at_dispatch": True, "execution_started_by_readback": False}
 
@@ -116,11 +117,16 @@ def read_build(control_db, program_id):
         action = {"UNKNOWN_SIDE_EFFECT": "RECONCILE_EFFECTS", "IN_FLIGHT": "RECONCILE_COMMAND_OBSERVATIONS",
                   "BLOCKED": "REPAIR_RUNTIME_ENVIRONMENT", "REJECTED": "REPAIR_WITHIN_BUDGET",
                   "ACCEPTED": "NO_REPLAY", "RETRY_ALLOWED": "ADVANCE_WITH_CURRENT_SCOPE_AND_BUDGET",
+                  "NOT_DISPATCHED": "ADVANCE_WITH_CURRENT_SCOPE_AND_BUDGET",
                   "INVALIDATED": "REBUILD_AFFECTED_BRANCH_WITHIN_BUDGET"}.get(row["status"], "INSPECT")
         row["recovery"] = {"next_action": action, "automatic_acceptance": False}
         command = row.get("last_command", {})
         if row["status"] == "REJECTED" and BuildController._failure_status(command.get("result", {})) == "BLOCKED":
             row["recovery"].update(next_action="REPAIR_RUNTIME_ENVIRONMENT", historical_classification="REJECTED")
+        if row["status"] in {"BLOCKED", "REJECTED"} and any(
+                check.get("result", {}).get("failure_domain") == "ACCEPTANCE_CONTRACT_GAP"
+                for check in row.get("verification", [])):
+            row["recovery"]["next_action"] = "ALIGN_PUBLIC_CONTRACT_AND_VERIFIER"
         if row["status"] in {"UNKNOWN_SIDE_EFFECT", "IN_FLIGHT"} and command.get("observation_root"):
             row["recovery"]["host_observation"] = CommandObservation.inspect(command["observation_root"])
     return {"status": "BUILD_READBACK", "program_id": program_id, "stream_revision": len(events),

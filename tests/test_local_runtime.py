@@ -120,7 +120,7 @@ class LocalRuntimeFixture(unittest.TestCase):
         env = os.environ.copy()
         env.pop("HFFACTORY_ALLOW_TEST_ADAPTERS", None)
         env.update(PYTHONPATH=str(support.ROOT / "src"), PYTHONDONTWRITEBYTECODE="1")
-        completed = subprocess.run([sys.executable, "-B", "-m", "harness_foundry_factory.cli", command,
+        completed = subprocess.run([sys.executable, "-B", "-m", "tests.legacy_cli", command,
             "--request", str(path), "--control-db", str(database or self.database), "--json"],
             capture_output=True, text=True, env=env, timeout=45)
         self.assertTrue(completed.stdout, completed.stderr)

@@ -25,7 +25,7 @@ class SkillContractTests(unittest.TestCase):
         self.assertEqual(report["status"], "PASS")
         self.assertFalse(report["writes_performed"])
 
-    def test_chat_surface_defaults_to_core_and_auto_advances_internal_checks(self) -> None:
+    def test_chat_surface_uses_generic_build_and_retires_legacy_creation(self) -> None:
         skill = (ROOT / ".agents/skills/harness-foundry-start-author/SKILL.md").read_text(
             encoding="utf-8"
         )
@@ -36,13 +36,14 @@ class SkillContractTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
 
         for content in (skill, chat_usage, agents, agent_config):
-            self.assertIn("DEFAULT_ROUTE_FOUNDRY_CORE", content)
+            self.assertIn("GENERIC_REVIEWED_BUILD_ONLY", content)
+            self.assertNotIn("OPTIONAL_ROUTE_START_PACKAGE_COMPATIBILITY", content)
+            self.assertIn("read-history", content)
         for content in (skill, chat_usage):
-            self.assertIn("OPTIONAL_ROUTE_START_PACKAGE_COMPATIBILITY", content)
-            self.assertIn("advance-authoring-until-gate", content)
+            self.assertIn("LEGACY_WORKFLOW_RETIRED", content)
+            self.assertIn("advance-build", content)
             self.assertIn("TRUE_GATE_ONLY", content)
-        self.assertIn("validate-core", agent_config)
-        self.assertIn("package-local", agent_config)
+        self.assertIn("without per-Workpack gates", agent_config)
 
 
 if __name__ == "__main__":

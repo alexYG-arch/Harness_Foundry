@@ -6,6 +6,7 @@ from copy import deepcopy
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -42,7 +43,7 @@ class PortableLocalCliTests(unittest.TestCase):
                 sys.executable,
                 "-B",
                 "-m",
-                "harness_foundry_factory.cli",
+                "tests.legacy_cli",
                 *arguments,
                 "--json",
             ],
@@ -80,7 +81,8 @@ class PortableLocalCliTests(unittest.TestCase):
         self.assertFalse(any(path.startswith("tests/") for path in manifest["files"]))
         self.assertIn("docs/ARCHITECTURE.md", manifest["files"])
         self.assertIn("docs/CHAT_USAGE.md", manifest["files"])
-        for name in ("GENERIC_BUILD_PLAN", "GENERIC_BUILD_CLI", "GENERIC_BUILD_RUNTIME", "GENERIC_SOURCE_INTAKE"):
+        self.assertIn("LICENSE", manifest["files"])
+        for name in ("GENERIC_BUILD_PLAN", "GENERIC_BUILD_CLI", "GENERIC_BUILD_RUNTIME", "GENERIC_SOURCE_INTAKE", "ACCEPTANCE_CONTRACT_ALIGNMENT", "RELEASE_READINESS"):
             self.assertIn(f"docs/{name}.md", manifest["files"])
         self.assertEqual({path.name for path in self.root.iterdir()}, before)
 
@@ -160,6 +162,40 @@ class PortableLocalCliTests(unittest.TestCase):
         for dependency in diagnostic["dependencies"]:
             if dependency["dependency_id"] in {"cryptography", "jsonschema", "referencing"}:
                 self.assertFalse(dependency["available"])
+
+        # Check the actual relocated consumer, not just the source allowlist.
+        self.assertEqual((relocated / "LICENSE").read_bytes(), (ROOT / "LICENSE").read_bytes())
+        for name in ("GENERIC_BUILD_PLAN", "GENERIC_BUILD_CLI", "GENERIC_BUILD_RUNTIME",
+                     "GENERIC_SOURCE_INTAKE", "ACCEPTANCE_CONTRACT_ALIGNMENT", "RELEASE_READINESS"):
+            document = relocated / "docs" / f"{name}.md"
+            for link in re.findall(r"\[[^\]]+\]\(([^)]+)\)", document.read_text()):
+                if "://" not in link:
+                    target = (document.parent / link.split("#", 1)[0]).resolve()
+                    self.assertTrue(target.is_relative_to(relocated.resolve()))
+                    self.assertTrue(target.is_file(), f"Packaged documentation link is missing: {link}")
+
+        from tests.test_build_plan import request_fixture
+        before = set(relocated.rglob("*"))
+        compiled = subprocess.run(
+            [sys.executable, "-I", "-S", "-B", "tools/hffactory.py", "compile-build-plan",
+             "--request", "-", "--json"],
+            input=json.dumps(request_fixture()), cwd=relocated, env=environment,
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
+        self.assertEqual(json.loads(compiled.stdout)["status"], "PLAN_COMPILED_NOT_AUTHORIZED")
+        self.assertEqual(set(relocated.rglob("*")), before)
+
+    def test_missing_license_or_contract_document_fails_before_output_creation(self) -> None:
+        for relative in ("LICENSE", "docs/ACCEPTANCE_CONTRACT_ALIGNMENT.md"):
+            with self.subTest(relative=relative):
+                source = self.root / ("missing-" + Path(relative).stem)
+                self._copy_source(source)
+                (source / relative).unlink()
+                output = self.root / ("output-" + Path(relative).stem)
+                with self.assertRaises(PortablePackageError):
+                    package_local(output, source_root=source)
+                self.assertFalse(output.exists())
 
     def test_portable_optional_imports_require_the_matching_install_extra(self) -> None:
         source = self.root / "source-missing-extra"
@@ -290,6 +326,7 @@ class PortableLocalCliTests(unittest.TestCase):
             "AGENTS.md",
             "FACTORY_MANIFEST.json",
             "README.md",
+            "LICENSE",
             "pyproject.toml",
             "docs",
             ".agents",

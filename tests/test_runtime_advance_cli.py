@@ -260,7 +260,7 @@ class RuntimeAdvanceCliTests(unittest.TestCase):
                 sys.executable,
                 "-B",
                 "-m",
-                "harness_foundry_factory.cli",
+                "tests.legacy_cli",
                 "advance-until-gate",
                 "--request",
                 str(request_path),

@@ -73,7 +73,7 @@ class ChatCliEndToEndTests(unittest.TestCase):
                 sys.executable,
                 "-B",
                 "-m",
-                "harness_foundry_factory.cli",
+                "tests.legacy_cli",
                 *arguments,
                 "--spec-root",
                 str(self.spec_root),

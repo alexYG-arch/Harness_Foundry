@@ -117,6 +117,8 @@ class BuildRuntimeTests(unittest.TestCase):
         self.request = request_fixture()
         self.ir, self.plan = self.request["requirement_ir"], self.request["plan"]
         self.ir["sources"][0]["path_or_uri"] = "brief.md"
+        for case in self.ir["acceptance_cases"] + self.ir["negative_cases"]:
+            case["acceptance_contract"] = {"source_id": "PROJECT-BRIEF", "source_locator": "L1-L2"}
         self.review = reviewed_document(self.source, path=self.source / "brief.md")
         self.request["document_review"] = self.review
         for index, atom in enumerate(self.ir["atoms"]):
@@ -488,6 +490,119 @@ class BuildRuntimeTests(unittest.TestCase):
         self.assertEqual(len(self.runner.invocations), 5)
         self.assertTrue(self.events("BUILD_ATTEMPT_FINISHED")[0]["payload"]["recovered_from_observation"])
 
+    def test_reserved_attempt_without_command_intent_recovers_without_new_approval(self):
+        self.prepare()
+        controller = self.controller()
+        with patch.object(controller, "_execute_command", side_effect=InjectedControllerCrash()), \
+                self.assertRaises(InjectedControllerCrash):
+            controller.advance(self.prepared_id)
+        self.assertFalse(self.events("BUILD_COMMAND_PLANNED"))
+        self.assertFalse(self.runner.invocations)
+        self.assertEqual(self.advance()["status"], "PLAN_CHECKS_ACCEPTED")
+        self.assertEqual(len(self.events("BUILD_ATTEMPT_STARTED")), 3, "reserved attempt still counts")
+        self.assertEqual(len(self.runner.invocations), 5)
+        recovered = self.events("BUILD_ATTEMPT_FINISHED")[0]["payload"]
+        self.assertEqual(recovered["status"], "NOT_DISPATCHED")
+        self.assertEqual(recovered["reason"], "NO_COMMAND_INTENT_COMMITTED")
+        self.assertEqual(len(self.events("BUILD_AUTHORIZATION_APPROVED")), 1)
+
+    def test_unstarted_recovery_neither_refunds_budget_nor_bypasses_revocation(self):
+        self.scope["max_attempts"] = 1
+        self.prepare()
+        controller = self.controller()
+        with patch.object(controller, "_execute_command", side_effect=InjectedControllerCrash()), \
+                self.assertRaises(InjectedControllerCrash):
+            controller.advance(self.prepared_id)
+        revoke_build_authorization(self.store, self.program, self.prepared_id, **self.kwargs("revoke"))
+        self.assertEqual(self.advance()["status"], "BUILD_STOPPED")
+        self.assertFalse(self.events("BUILD_ATTEMPT_FINISHED"))
+        self.assertFalse(self.runner.invocations)
+
+    def test_unstarted_recovery_respects_original_total_budget(self):
+        self.scope["max_attempts"] = 1
+        self.prepare()
+        controller = self.controller()
+        with patch.object(controller, "_execute_command", side_effect=InjectedControllerCrash()), \
+                self.assertRaises(InjectedControllerCrash):
+            controller.advance(self.prepared_id)
+        self.assertEqual(self.advance()["status"], "ATTEMPT_BUDGET_EXHAUSTED")
+        self.assertFalse(self.runner.invocations)
+        self.assertEqual(len(self.events("BUILD_ATTEMPT_STARTED")), 1)
+
+    def test_delayed_original_dispatcher_cannot_overwrite_reconciled_attempt(self):
+        self.prepare()
+        original = self.controller()
+        append = original._append
+        resumed = []
+
+        def interleave(kind, *args):
+            event = append(kind, *args)
+            if kind == "BUILD_ATTEMPT_STARTED":
+                resumed.append(self.advance())
+            return event
+
+        with patch.object(original, "_append", side_effect=interleave):
+            result = original.advance(self.prepared_id)
+        self.assertEqual(resumed[0]["status"], "PLAN_CHECKS_ACCEPTED")
+        self.assertEqual(result["status"], "PLAN_CHECKS_ACCEPTED")
+        self.assertEqual(len(self.runner.invocations), 5, "late dispatcher must never dispatch")
+        states = [row["payload"]["status"] for row in self.events("BUILD_ATTEMPT_FINISHED")]
+        self.assertEqual(states, ["NOT_DISPATCHED", "ACCEPTED", "ACCEPTED"])
+
+    def test_recovered_missing_output_is_rejected_then_repaired_like_normal_execution(self):
+        self.plan["workpacks"][0]["local_argv"] = ["python", "-c", "pass"]
+        self.prepare()
+        controller = self.controller()
+        append = controller._append
+
+        def crash(kind, *args):
+            if kind == "BUILD_ATTEMPT_FINISHED":
+                raise InjectedControllerCrash()
+            return append(kind, *args)
+
+        with patch.object(controller, "_append", side_effect=crash), self.assertRaises(InjectedControllerCrash):
+            controller.advance(self.prepared_id)
+        # An in-scope implementation change preserves the existing acceptance contract.
+        self.plan["revision"] = 2
+        self.plan["workpacks"][0]["local_argv"] = ["python", "-c", self.write_reader(GOOD_READER)]
+        # First reconcile the original observation; a changed proposal must not
+        # supply a different task while recovering a prior attempt.
+        events, prepared, plan = controller._current(self.prepared_id)
+        attempts, _ = controller._state(events, self.prepared_id)
+        self.assertTrue(controller._recover_completed_observations(self.prepared_id, prepared, plan,
+                                                                  events, list(attempts.values())))
+        self.assertEqual(self.events("BUILD_ATTEMPT_FINISHED")[0]["payload"]["status"], "REJECTED")
+        record_build_plan_proposal(self.store, self.ir, self.plan, document_review=self.review,
+                                   **self.kwargs("repair-plan"))
+        self.assertEqual(self.advance()["status"], "PLAN_CHECKS_ACCEPTED")
+        self.assertEqual(len(self.runner.invocations), 6)
+
+    def test_recovery_rechecks_expiry_before_acceptance_commit(self):
+        self.prepare()
+        controller = self.controller()
+        append = controller._append
+
+        def crash(kind, *args):
+            if kind == "BUILD_ATTEMPT_FINISHED":
+                raise InjectedControllerCrash()
+            return append(kind, *args)
+
+        with patch.object(controller, "_append", side_effect=crash), self.assertRaises(InjectedControllerCrash):
+            controller.advance(self.prepared_id)
+        clock = [CLOCK()]
+        resumed = BuildController(self.store, self.program, runner=self.runner, clock=lambda: clock[0])
+        artifacts = resumed._artifacts
+
+        def expire(*args):
+            value = artifacts(*args)
+            clock[0] = datetime.fromisoformat(self.scope["expires_at"].replace("Z", "+00:00"))
+            return value
+
+        with patch.object(resumed, "_artifacts", side_effect=expire):
+            self.assertEqual(resumed.advance(self.prepared_id)["status"], "BUILD_STOPPED")
+        self.assertFalse(self.events("BUILD_ATTEMPT_FINISHED"))
+        self.assertEqual(len(self.runner.invocations), 3)
+
     def test_crash_after_dispatch_without_observation_is_held_not_replayed(self):
         self.prepare()
         self.runner.after_run = lambda *args: (_ for _ in ()).throw(InjectedControllerCrash())
@@ -591,6 +706,61 @@ else:
         self.assertEqual(len(commands), 5, "durable implementation must not be executed twice")
         self.assertTrue(all(not Path(row["payload"]["observation_root"]).is_relative_to(self.workspace)
                             for row in commands))
+
+    def _check_live_authority_stop(self, *, revoke):
+        # Exercise the real NativeBuildRunner and collector through a local
+        # sandbox-shaped fixture. This is not OS isolation or model evidence.
+        executable = self.root / "test-only-sandbox"
+        executable.write_text("#!" + sys.executable + "\n" + '''import subprocess, sys
+args = sys.argv[1:]
+if args == ["sandbox", "--help"]:
+    print("--permission-profile --include-managed-config --cd [COMMAND]")
+else:
+    assert args[0] == "sandbox"
+    sys.exit(subprocess.call(args[args.index("--") + 1:]))
+''')
+        executable.chmod(0o700)
+        self.scope["codex_executable"] = str(executable)
+        self.plan["workpacks"][0]["local_argv"] = ["python", "-B", "-c",
+            "import time; from pathlib import Path; Path('src/partial').write_text('retained'); time.sleep(10)"]
+        self.prepare()
+        clock = [CLOCK()]
+        native = NativeBuildRunner()
+        changed = []
+
+        def runner(invocation, before_dispatch):
+            def monitor():
+                if (self.workspace / "src/partial").exists() and not changed:
+                    changed.append(True)
+                    if revoke:
+                        revoke_build_authorization(self.store, self.program, self.prepared_id, **self.kwargs("revoke"))
+                    else:
+                        clock[0] = datetime.fromisoformat(self.scope["expires_at"].replace("Z", "+00:00"))
+                return invocation["cancellation_reason"]()
+            return native({**invocation, "cancellation_reason": monitor}, before_dispatch)
+
+        controller = BuildController(self.store, self.program, runner=runner, clock=lambda: clock[0])
+        result = controller.advance(self.prepared_id)
+        self.assertEqual(result["status"], "BUILD_STOPPED", result)
+        observed = self.events("BUILD_COMMAND_OBSERVED")
+        self.assertEqual(len(observed), 1)
+        capture = observed[0]["payload"]["result"]
+        self.assertEqual(capture["status"], "UNKNOWN_SIDE_EFFECT")
+        self.assertEqual(capture["cancellation_reason"], "BUILD_AUTHORIZATION_REVOKED" if revoke
+                         else "BUILD_AUTHORIZATION_EXPIRED")
+        self.assertFalse(capture["timed_out"])
+        self.assertEqual((self.workspace / "src/partial").read_text(), "retained")
+        self.assertEqual(len(self.events("BUILD_ATTEMPT_STARTED")), 1)
+        self.assertEqual(self.events("BUILD_ATTEMPT_FINISHED")[0]["payload"]["status"], "UNKNOWN_SIDE_EFFECT")
+        self.assertFalse(controller._state(self.events(), self.prepared_id)[1])
+        self.assertEqual(controller.advance(self.prepared_id)["status"], "BUILD_STOPPED")
+        self.assertEqual(len(self.events("BUILD_COMMAND_PLANNED")), 1, "no verification, successor or replay")
+
+    def test_revoke_stops_running_native_command_and_preserves_history(self):
+        self._check_live_authority_stop(revoke=True)
+
+    def test_expiry_stops_running_native_command_and_preserves_history(self):
+        self._check_live_authority_stop(revoke=False)
 
     def test_accepted_artifact_byte_drift_stops_later_reuse(self):
         self.scope["max_task_attempts"] = 1

@@ -138,13 +138,14 @@ class CompatibilityDocumentReviewTests(unittest.TestCase):
     def change_document(self):
         Path(self.current_review()["documents"][0]["path"]).write_text("Changed test build document\n")
 
-    def test_compatibility_cli_rejects_missing_review_before_service_creation(self):
+    def test_retired_cli_rejects_creation_before_review_or_service_loading(self):
         request = self.f._request("CREATE", number=1)
         request["payload"].pop("build_document_review")
         output = StringIO()
         with patch("sys.stdin", StringIO(json.dumps(request))), redirect_stdout(output), \
                 patch("harness_foundry_factory.cli._service", side_effect=AssertionError("must not create controller")):
             self.assertEqual(main(["chat-turn", "--request", "-", "--json"]), 2)
+        self.assertEqual(json.loads(output.getvalue())["error"]["code"], "LEGACY_WORKFLOW_RETIRED")
         with self.assertRaises(ProgramNotFoundError):
             self.f.store.get_program("PROGRAM-1")
 

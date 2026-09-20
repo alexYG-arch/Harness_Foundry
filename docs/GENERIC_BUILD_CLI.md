@@ -1,14 +1,15 @@
 # 通用 Build 公开宿主入口
 
-状态：`IMPLEMENTED_PENDING_REAL_CODEX_M1`。源码与本地进程回归不是实际
-Codex 建设、完整 PRD 接入或发行包验收。默认 core 不改变；本入口只响应用户显式选择的
+状态：`SCOPED_M1_AND_REENTRY_ACCEPTED_NOT_RELEASE_ACCEPTANCE`。源码与本地进程回归不是
+完整 PRD 接入或发行包验收。开发仓库与通用发行包的新建统一只提供本路由；旧流程已退役。
+本入口只响应用户显式选择的
 通用建设或有界验收案例，所有搭建路由另受下述上游文档 Review 政策约束。
 
 入口政策已修订：所有输入先在 Foundry 上游保留问答、输出版本化搭建文档，并取得真实人工
 Review，再使用本入口；原始材料保留追溯角色。后台检查全部通过也必须展示文档并等待用户确认。
 见 [统一搭建文档合同](GENERIC_BUILD_PLAN.md#搭建文档与人工-review-统一入口2026-09-19)。
 程序门禁已接入下列公开入口；对象合同见统一搭建文档合同。真实消息与语义映射仍由可信宿主
-核对，不由 JSON 标签认证。旧 CLI 请求缺少 Review 时不能启动新建设；历史仍可只读。
+核对，不由 JSON 标签认证。旧 CLI 请求一律返回 `LEGACY_WORKFLOW_RETIRED`，不是可选回退；历史仍可只读。
 
 ## 一条控制链，一次范围批准
 
@@ -41,6 +42,12 @@ Review，再使用本入口；原始材料保留追溯角色。后台检查全�
 | `resolve-build-attempt` | 同上 | `program_id`, `prepared_event_id`, `attempt_id`, `decision`, `reason` |
 | `advance-build` | 同上 | `program_id`, `prepared_event_id`, `expected_revision` |
 | `read-build` | `--control-db DB --program-id ID` | 无 request 文件 |
+| `read-history` | `--database DB --program-id ID` | 只读旧 authoring 数据库，无 request 文件 |
+
+`read-history` 只读取明确指定数据库中的原始 Program snapshot，不调用旧服务、不初始化
+数据库、不重放或迁移，不把历史批准作为当前权限。主库存在非空 WAL 时拒绝读取，要求
+数据库所有者先正常关闭；此入口不会代为 checkpoint。历史控制事件库不作自动格式转换；
+通用 `REVISION_V1` 数据仍用 `read-build`。记录中的旧 Hash 只是原数据，不重新计算或签发。
 
 除 `advance-build` 外的变更 request 还必须包含 `expected_revision` 和
 `idempotency_key`。新控制流从 stream revision 0、Requirement/Plan revision 1
@@ -53,6 +60,11 @@ Review 摘要标明只读历史未重新检查文件，不将历史确认当成�
 在途/未知尝试还提供宿主附件诊断；PID 存在不证明仍是原进程，PID 消失不证明没有副作用。
 `prepare` 的 Readback 绑定该次完整 Requirement/Plan、明确源文件读取、验收文件、
 范围及到期时间。提案版本、UUID 和文字状态均不是批准凭证。
+
+各 Case 必须绑定公开的 `acceptance_contract`。prepare 在现有来源快照中解析实际行，
+将 `acceptance_contracts` 投影到范围 Readback 和任务上下文；缺失或无效定位不能进入新运行。
+这只是公开依据的可用性检查，不代替语义审查和正常/错误样例预检。
+见[验收合同对齐](ACCEPTANCE_CONTRACT_ALIGNMENT.md)。旧范围缺少预检时只读保留，不自动追认。
 
 Requirement/Plan 见 [Plan 合同](GENERIC_BUILD_PLAN.md)，manifest 见
 [来源合同](GENERIC_SOURCE_INTAKE.md)。控制库必须使用 `REVISION_V1`；旧
@@ -83,8 +95,12 @@ LOCAL/独立验证命令的后续 argv 元素可以显式使用 `executable://NA
 接收子程序须实际使用该参数启动子进程；只修顶层 argv 不证明整条进程链已正确绑定。
 
 控制库、验证代码、源文档、执行器不能被目标任务写入。内部逻辑与调试由 Codex
-自行选择；不规定行业阶段或算法。当前只允许在不改变需求/任务图/产物/验收边界时
-调整未验收任务的 goal/local_argv。已验收的声明输出变化时，控制器失效其生产任务及
+自行选择；不规定行业阶段或算法。未开始任务可在同一 Job、执行器和完全相同的写域中
+拆分/合并，也可重排互不依赖任务；完整输出集合、路径/版本链、全部 Case 命令及产物绑定、
+原依赖顺序保持不变，不扩大输入。拆分沿用原任务共享预算，合并向每个原任务计费，不能靠
+改名增加次数。已开始任务保留身份/结构，未验收任务仍可调整 goal/local_argv；已验收任务
+不得静默改计划。公开 Plan revision 记录实施变化，不生成新批准。
+已验收的声明输出变化时，控制器失效其生产任务及
 依赖后继，在原范围/预算内重新建设和独立验收，不重跑无关分支、不删除文件或重置预算。
 需求/来源或验证器变化仍停止；涉及已经覆盖的历史 artifact 版本时需要明确重建计划，不能虚构旧字节。
 
@@ -122,9 +138,14 @@ JSON 格式或 actor 字符串不能认证人；模型文本、源文档和任�
 不得虚构消息 ID、借旧案例的批准或把“准备案例”解释为模型/写域授权。
 不要求人手复制 Hash 或随机冻结令牌，普通明确的自然语言批准即可由宿主记录。
 
-撤销阻止后续派发和成功验收；不回滚既有效果，也不声称能立即终止在途进程。
+撤销阻止后续派发和成功验收；活宿主的通用采集器也会检查撤销/到期并终止自己持有的
+当前进程组，保留取消和部分效果观测。它不回滚既有效果、不承诺即时终止，宿主退出后
+不会仅凭旧 PID 取消未知进程。具体边界见 [运行控制](GENERIC_BUILD_RUNTIME.md)。
 运行过程保留实际观测；有耐久完成记录时核对后恢复，部分检查只续跑尚未派发的 Case，
-不重复已完成实施。没有完整命令观测的结果保持 HELD，不盲目重放。
+不重复已完成实施。已有命令意图却没有完整观测的结果保持 HELD，不盲目重放。
+若仅预留 attempt、还没有命令意图，则以控制 revision 仲裁为 `NOT_DISPATCHED`，
+可以在当前授权与剩余预算内推进；旧预留仍计费，迟到调度器不能覆盖结果或重复执行。
+完整观测已证明实施结束但缺声明产物时，按正常业务失败进入范围内修复，而非永久停滞。
 
 启动/权限/接收器失败与产物检查失败分开处理：前者记录 `BLOCKED`，推进返回
 `HELD_COMMAND_FAILURE`，不会自动修复或重复派发，也不会启动后继。旧事件中误标为
@@ -139,6 +160,11 @@ JSON 格式或 actor 字符串不能认证人；模型文本、源文档和任�
 `{"status":"CHECKS_FAILED","failure_kind":"ASSERTION","reason":"实际值不符合要求"}`。
 不能捕获全部异常后统称 ASSERTION；检查器崩溃、缺依赖、非结构化失败或被截断的
 判定记为验证基础设施/未分类失败，不指使模型重写业务。既有已绑定检查器不得在运行中偷偷改写。
+
+若缺少明确公开约定或合同/检查器矛盾，检查器退出 1 并报告 `failure_kind="CONTRACT_GAP"`。
+控制器返回 `HELD_ACCEPTANCE_CONTRACT`，下一步为对齐合同及验证器，而非消耗更多实施重试。
+原尝试不退款、不变成验收通过；修订源文件/检查器后仍须新范围批准。单纯参数存在不能自动
+发现任意语义缺口，检查器编写者和宿主须据实际证据正确分类。
 
 ### 旧未知结果的真实处置
 
