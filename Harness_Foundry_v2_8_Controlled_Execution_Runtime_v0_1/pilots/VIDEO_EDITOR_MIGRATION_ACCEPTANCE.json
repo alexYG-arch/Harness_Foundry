@@ -1,0 +1,41 @@
+{
+  "schema_version": "1.0",
+  "pilot_id": "VIDEO_EDITOR_READ_ONLY_MIGRATION_V0_2",
+  "candidate_root": "/Users/guoxiaopang/Documents/Project/Codex_Video_Editor_Plugin_Hybrid_Start_Package_v0_2",
+  "legacy_execution_root": "/Users/guoxiaopang/Documents/Project/Codex_Video_Editor_Plugin_Execution_Runtime_v0_1",
+  "new_execution_root": "/Users/guoxiaopang/Documents/Project/Codex_Video_Editor_Plugin_Execution_Runtime_v0_2",
+  "migration_id": "MIGRATION-E2AA61C1D5C5A8DEAD37E010",
+  "migration_plan_sha256": "83753257db4861c55a947728b01e15e9ddaff5a562c709e56964097e9f1e1c27",
+  "new_epoch_id": "EPOCH-95cacc7c-a74f-4a6d-8f98-ba5087a2299e",
+  "classification_counts": {
+    "VERIFIED_COMPLETED": 0,
+    "REVERIFY_REQUIRED": 14,
+    "NOT_STARTED": 29,
+    "UNTRUSTED": 0
+  },
+  "source_tree_hashes": {
+    "candidate_before": "f650200224cc9c65b1d3afe96ff3f1d2eef9580878c056946d0797f6203e9a4c",
+    "candidate_after": "f650200224cc9c65b1d3afe96ff3f1d2eef9580878c056946d0797f6203e9a4c",
+    "legacy_execution_before": "e108b7a1e801ef2a5a8cc2cc20fd4c13e5c6919f11bf07180733b8069d785dea",
+    "legacy_execution_after": "e108b7a1e801ef2a5a8cc2cc20fd4c13e5c6919f11bf07180733b8069d785dea"
+  },
+  "acceptance": {
+    "old_directory_tree_hashes_unchanged": true,
+    "legacy_authorizations_imported": false,
+    "historical_pass_restored": false,
+    "target_code_executed": false,
+    "workpacks_executed": false,
+    "driver_runtime_verified": false,
+    "effective_mode": "A1_PLAN_ONLY",
+    "active_workpack": null,
+    "active_attempt": null,
+    "verify_run_status": "PASS",
+    "verify_run_event_count": 2,
+    "next_action_unique": true,
+    "next_human_gate": "MIGRATION_BOOTSTRAP_REVERIFICATION_REQUIRED",
+    "fresh_bootstrap_plan_status": "READY_FOR_HUMAN_CONFIRMATION",
+    "fresh_bootstrap_child_authorization_count": 5,
+    "fresh_bootstrap_plan_writes_performed": false
+  },
+  "result": "PASS"
+}

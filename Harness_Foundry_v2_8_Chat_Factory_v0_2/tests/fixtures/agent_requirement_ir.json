@@ -1,0 +1,62 @@
+{
+  "program_id": "PROGRAM-REFERENCE-AGENT",
+  "target": {
+    "id": "REFERENCE-AGENT",
+    "name": "Reference Review Agent",
+    "type": "AGENT",
+    "profile": "STANDARD",
+    "output_root": "/tmp/hffactory-reference-agent",
+    "mission": "Review bounded code changes and return evidence-linked findings without modifying the target.",
+    "scope": ["Read-only repository inspection", "Evidence-linked findings"],
+    "non_goals": ["Apply repairs", "Install a target"],
+    "primary_runtime": "Codex"
+  },
+  "sources": [{
+    "source_id": "SRC-AGENT-CHAT",
+    "path_or_uri": "chat://fixture/agent",
+    "sha256": "39cb94c6c95086e7467bb75a131d20b8c7b43f45351d92f3c804fe4c853b13ea",
+    "authority_level": "HUMAN_APPROVED",
+    "scope": "Agent mission",
+    "loaded_completely": true
+  }],
+  "atoms": [{
+    "atom_id": "ATOM-AGENT-001",
+    "source_id": "SRC-AGENT-CHAT",
+    "source_locator": "fixture#mission",
+    "text_or_lossless_paraphrase": "The Agent must remain read-only and link every finding to evidence.",
+    "modality": "MUST",
+    "qualifiers": [], "order_constraints": [], "units": [], "defaults": [],
+    "error_semantics": ["STOP_ON_WRITE_REQUEST"], "cancel_retry_timeout": [],
+    "compatibility_constraints": [], "explicit_non_goals": ["No repair"],
+    "owner": "MAIN_HARNESS_BUILD", "verification_mode": "READ_ONLY_TRACE"
+  }],
+  "acceptance_cases": [{
+    "case_id": "AC-AGENT-001", "atom_ids": ["ATOM-AGENT-001"],
+    "description": "Read-only trace proves no target mutation.", "evidence_type": "READ_ONLY_TRACE"
+  }],
+  "negative_cases": [{
+    "case_id": "NEG-AGENT-001", "atom_ids": ["ATOM-AGENT-001"],
+    "description": "A requested repair write must stop.", "expected_failure": "WRITE_FORBIDDEN"
+  }],
+  "assumptions": [], "open_questions": [], "decisions": [],
+  "user_adjustments": [], "source_conflicts": [],
+  "automation": {
+    "schema_version": "1.0",
+    "requested_level": "A1_PLAN_ONLY",
+    "activation_default": "DISABLED",
+    "max_transitions": 16,
+    "max_loop_rounds": 2,
+    "max_wall_time_seconds": 3600,
+    "stop_gate": "P4_CERTIFIED_RELEASE_LOCK",
+    "retryable_error_codes": ["RUNNER_TRANSPORT_TEMPORARY_FAILURE"],
+    "mandatory_human_gate_ids": [
+      "START_PACKAGE_HUMAN_APPROVAL",
+      "P3_NOT_APPLICABLE_DECISION",
+      "REAL_TARGET_INSTALL"
+    ],
+    "real_target_install_excluded": true,
+    "execution_mode": "AUTHORING_ONLY",
+    "auto_start_generated_workpacks": false,
+    "execution_started": false
+  }
+}

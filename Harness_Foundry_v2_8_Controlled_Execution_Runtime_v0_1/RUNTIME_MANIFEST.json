@@ -1,0 +1,40 @@
+{
+  "schema_version": "1.0",
+  "runtime_id": "HARNESS_FOUNDRY_V2_8_CONTROLLED_EXECUTION_RUNTIME_V0_1",
+  "version": "0.1.8",
+  "python_requires": ">=3.11",
+  "authoritative_store": "SQLITE_EVENT_STORE",
+  "derived_views": [
+    "control_plane/state/PROGRAM_DRIVER_STATE.json",
+    "control_plane/state/EXECUTION_AUTHORIZATION.json",
+    "control_plane/ledger/EVENTS.jsonl",
+    "control_plane/ledger/PHASE_TRANSITION_LEDGER.jsonl"
+  ],
+  "default_mode": "A1_PLAN_ONLY",
+  "continuous_mode": "A3_PROGRAM_BOUNDED",
+  "real_target_install_excluded": true,
+  "read_scope_contract": "COMMAND_ALLOWED_READ_ROOTS_REQUIRED",
+  "bundled_codex_provider_permissions": "CUSTOM_PERMISSION_PROFILE",
+  "bound_runtime_python_prefix_access": "READ_ONLY",
+  "bound_runtime_python_executable_projection": "EPHEMERAL_READ_ONLY_HASH_VERIFIED",
+  "review_finding_clearance": "CURRENT_REVIEW_MAY_CLEAR_PRIOR_FINDING",
+  "cli": "hfdriver",
+  "supported_commands": [
+    "status",
+    "plan-next",
+    "verify-run",
+    "bootstrap-plan",
+    "bootstrap-apply",
+    "resolve-overlays",
+    "register-overlays",
+    "authorization-plan",
+    "authorization-apply",
+    "authorization-revoke",
+    "advance-one",
+    "advance-until-gate",
+    "resume",
+    "migration-plan",
+    "migration-apply"
+  ],
+  "release_state": "GITHUB_DRAFT_PR_RELEASE_CANDIDATE"
+}
