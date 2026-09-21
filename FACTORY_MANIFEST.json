@@ -15,7 +15,7 @@
   "source_diagnostic_cli": ["verify-spec", "validate-core", "project-core-evidence", "self-check-diagnostic"],
   "public_python_api": ["harness_foundry_factory.build_plan.compile_build_plan", "harness_foundry_factory.build_plan.validate_compiled_build_plan", "harness_foundry_factory.build_entrypoint.apply_build_request", "harness_foundry_factory.build_entrypoint.read_build", "harness_foundry_factory.legacy_history.read_history"],
   "generic_build_update": {
-    "status": "IMPLEMENTATION_IN_PROGRESS",
+    "status": "IMPLEMENTED_BOUNDED_E2E_ACCEPTED_PUBLICATION_PENDING",
     "available_cli": [
       "compile-build-plan",
       "record-build-plan",
@@ -34,9 +34,9 @@
     "proposal_persistence_grants_authority": false,
     "requirements_semantically_accepted": false,
     "legacy_specialization_removed": false,
-    "generic_engineering_distribution": "ISOLATED_REVISION_RUNTIME_NOT_RELEASE_ACCEPTED",
+    "generic_engineering_distribution": "ISOLATED_REVISION_RUNTIME_SAME_PACKAGE_TWO_CASES_ACCEPTED",
     "runtime_authorization_or_acceptance_granted": false,
-    "real_coding_harness_e2e": "SCOPED_M1_AND_REENTRY_ACCEPTED_NOT_FULL_E2E",
+    "real_coding_harness_e2e": "SAME_PACKAGE_TWO_CASES_ACCEPTED_WITH_DECLARED_LIMITS",
     "release_ready": false
   },
   "implemented_core_capabilities": [

@@ -76,8 +76,16 @@ python3 devtools/package_committed_release.py --revision <explicit-commit>
 
 实现版本仍为 `0.2.0`，协议目标 `2.9`，MIT 许可，唯一正式仓库
 [alexYG-arch/Harness_Foundry](https://github.com/alexYG-arch/Harness_Foundry)。
-当前 `release_ready=false`：已完成限定 M1 和独立新会话重入，不代表完整 PRD 或
-同一最终发行包的双案例验收。用户已确认双案例搭建文档；尚需具体运行范围批准及实际验收。
+2026-09-21，固定提交 `3c52c30` 的同一份通用包已通过已批准的双案例最小端到端验收：
+完整小型 Task CLI 新工程和 CSV 既有工程增量，包含真实 Codex 建设/使用、独立业务检查、
+预定故障拒绝与复验、支持的中断恢复。共 4 个模型会话、8 次尝试；范围内无已知未解决交付缺陷。
+这不宣称任意 PRD、所有故障或全平台均已验收。当前 `release_ready=false` 表示发布前
+远端检查及实际发布尚未闭合，不表示双案例仍待运行；不再无故重跑已验案例。
+
+安装使用 Release 中明确命名的通用 ZIP，而非 GitHub 自动生成的全仓库 Source code ZIP。
+[v0.2.0 发布说明](docs/releases/v0.2.0.md)列出精确附件、支持环境、兼容性和验收边界；
+[发布清单](docs/releases/v0.2.0-checklist.md)区分本地已完成与待授权远端动作。
+安全问题见 [SECURITY.md](SECURITY.md)，不要在公开 Issue 中贴漏洞利用细节或凭据。
 
 [更新说明](docs/FOUNDRY_UPDATE_2026_09_20.md)、
 [发布准备](docs/RELEASE_READINESS.md)、
