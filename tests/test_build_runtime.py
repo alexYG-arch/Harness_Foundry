@@ -228,6 +228,128 @@ class BuildRuntimeTests(unittest.TestCase):
         self.assertEqual(self.advance()["status"], "PLAN_CHECKS_ACCEPTED")
         self.assertEqual(len(self.runner.invocations), 5, "accepted work must not be repeated")
 
+    def _upstream_repair_fixture(self, target="READER-SOURCE"):
+        # Reader's stage checks are deliberately partial; the consumer finds
+        # the real bad value and returns its declared input, not a guessed path.
+        (self.verifier / "check.py").write_text('''import ast, json, sys
+from pathlib import Path
+if sys.argv[1] != "report":
+    ast.parse(Path("src/reader.py").read_text())
+elif json.loads(Path("outputs/summary.json").read_text()) != {"rows":3,"invalid":2}:
+    print(json.dumps({"status":"CHECKS_FAILED","failure_kind":"ASSERTION",
+        "reason":"reader produced the wrong count","repair_artifact_ids":TARGET}))
+    raise SystemExit(1)
+'''.replace("TARGET", repr([target])))
+        self.plan["workpacks"][0]["local_argv"][-1] = (
+            "from pathlib import Path; p=Path('src/reader.py'); "
+            "p.write_text(" + repr(GOOD_READER) + " if p.exists() else " + repr(BAD_READER) + ")")
+        original = self.runner.after_run
+        def classify(invocation, result):
+            if invocation["phase"] == "VERIFICATION":
+                result.update(classify_verification_result(result))
+            if original:
+                original(invocation, result)
+        self.runner.after_run = classify
+
+    def test_independent_input_verdict_repairs_producer_without_editing_accepted_bytes(self):
+        self._upstream_repair_fixture()
+        self.prepare()
+        self.assertEqual(self.advance()["status"], "PLAN_CHECKS_ACCEPTED")
+        attempts = self.events("BUILD_ATTEMPT_STARTED")
+        self.assertEqual([row["payload"]["workpack_id"] for row in attempts],
+                         ["IMPLEMENT-READER", "MAKE-REPORT", "IMPLEMENT-READER", "MAKE-REPORT"])
+        invalidation = self.events("BUILD_ACCEPTANCE_INVALIDATED")[0]["payload"]
+        self.assertEqual(invalidation["reason"], "INDEPENDENT_ARTIFACT_REPAIR_REQUIRED")
+        self.assertFalse(invalidation["budget_reset"])
+        self.assertEqual(invalidation["workpack_ids"], ["IMPLEMENT-READER", "MAKE-REPORT"])
+        repair = [item for item in self.runner.invocations if item["phase"] == "IMPLEMENTATION"][2]
+        self.assertIn("reader produced the wrong count", repair["prompt"])
+        self.assertEqual(repair["write_roots"], [str(self.workspace / "src")])
+        self.assertEqual(self.advance()["status"], "PLAN_CHECKS_ACCEPTED")
+        self.assertEqual(len(self.events("BUILD_ATTEMPT_STARTED")), 4)
+        self.assertEqual(len(self.events("BUILD_AUTHORIZATION_APPROVED")), 1)
+
+    def test_input_repair_cannot_name_undeclared_artifact(self):
+        self._upstream_repair_fixture("UNKNOWN-INPUT")
+        self.prepare()
+        self.assertEqual(self.advance()["status"], "HELD_REPAIR_SCOPE")
+        self.assertEqual(len(self.events("BUILD_ATTEMPT_STARTED")), 2)
+        self.assertFalse(self.events("BUILD_ACCEPTANCE_INVALIDATED"))
+
+    def test_upstream_repair_keeps_consumer_budget_and_stops_without_useless_dispatch(self):
+        self._upstream_repair_fixture()
+        self.scope["max_task_attempts"] = 1
+        self.prepare()
+        self.assertEqual(self.advance()["status"], "TASK_REPAIR_BUDGET_EXHAUSTED")
+        self.assertEqual(len(self.events("BUILD_ATTEMPT_STARTED")), 2)
+        self.assertFalse(self.events("BUILD_ACCEPTANCE_INVALIDATED"))
+
+    def test_restart_after_repair_route_does_not_duplicate_invalidation_or_reset_budget(self):
+        self._upstream_repair_fixture()
+        self.prepare()
+        controller = self.controller()
+        append = controller._append
+        def crash(kind, *args):
+            result = append(kind, *args)
+            if kind == "BUILD_ACCEPTANCE_INVALIDATED":
+                raise InjectedControllerCrash()
+            return result
+        with patch.object(controller, "_append", side_effect=crash), self.assertRaises(InjectedControllerCrash):
+            controller.advance(self.prepared_id)
+        self.assertEqual(self.advance()["status"], "PLAN_CHECKS_ACCEPTED")
+        self.assertEqual(len(self.events("BUILD_ACCEPTANCE_INVALIDATED")), 1)
+        self.assertEqual(len(self.events("BUILD_ATTEMPT_STARTED")), 4)
+
+    def test_malformed_repair_target_is_not_ordinary_retry(self):
+        for targets in ([], "READER-SOURCE", [1], ["A", "A"]):
+            result = classify_verification_result({"status":"VALIDATION_FAILED", "exit_code":1,
+                "stdout":json.dumps({"status":"CHECKS_FAILED", "failure_kind":"ASSERTION",
+                                    "repair_artifact_ids":targets})})
+            self.assertFalse(result["automatic_retry_allowed"])
+
+    def test_repair_route_does_not_bypass_revocation_or_total_budget(self):
+        self._upstream_repair_fixture()
+        self.scope["max_attempts"] = 3
+        self.prepare()
+        self.assertEqual(self.advance()["status"], "ATTEMPT_BUDGET_EXHAUSTED")
+        self.assertEqual(len(self.events("BUILD_ATTEMPT_STARTED")), 2)
+        revoke_build_authorization(self.store, self.program, self.prepared_id, **self.kwargs("revoke"))
+        result = self.advance()
+        self.assertEqual(result["status"], "BUILD_STOPPED")
+        self.assertIn("revoked", result["reason"])
+        self.assertEqual(len(self.events("BUILD_ATTEMPT_STARTED")), 2)
+
+    def test_native_model_shaped_observation_recovers_without_reimplementation(self):
+        from devtools.release_acceptance.recovery_probe import after_observation_runner
+        first = self.plan["workpacks"][0]
+        first["executor"] = "CODEX"
+        first.pop("local_argv")
+        self.scope.update(model="test-only-no-model-call", allow_model_service=True)
+        self.prepare()
+        calls = []
+        def model_fixture(command, **kwargs):
+            kwargs["before_dispatch"]()
+            calls.append(command)
+            (self.workspace / "src/reader.py").write_text(GOOD_READER)
+            return {"status":"MODEL_TURN_COMPLETED", "exit_code":0}
+        def terminate(code):
+            self.assertEqual(code,86)
+            raise InjectedControllerCrash()
+        runner = after_observation_runner(NativeBuildRunner(), "IMPLEMENT-READER", terminate=terminate)
+        with patch("harness_foundry_factory.coding_process.CodexCodingRunner.run", side_effect=model_fixture), \
+                self.assertRaises(InjectedControllerCrash):
+            BuildController(self.store,self.program,runner=runner,clock=CLOCK).advance(self.prepared_id)
+        self.assertEqual(len(calls),1)
+        self.assertEqual(self.events("BUILD_COMMAND_OBSERVED"),[])
+        self.assertEqual(len(self.events("BUILD_ATTEMPT_STARTED")),1)
+        self.assertFalse((self.workspace / "outputs/summary.json").exists())
+        # Real CommandObservation/BuildController recovery, synthetic model output.
+        result = self.advance()
+        self.assertEqual(result["status"],"PLAN_CHECKS_ACCEPTED",result)
+        self.assertEqual(len(self.events("BUILD_ATTEMPT_STARTED")),2)
+        self.assertTrue(all(row["executor"] == "LOCAL" for row in self.runner.invocations))
+        self.assertEqual(len(self.events("BUILD_COMMAND_PLANNED")),5)
+
     def test_nested_executable_binding_uses_exact_approved_alias_without_new_reads(self):
         alias = self.root / "bound python"
         alias.symlink_to(sys.executable)

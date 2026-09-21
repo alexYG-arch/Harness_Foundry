@@ -285,7 +285,13 @@ def classify_verification_result(result):
                  and verdict.get("status") == "CHECKS_FAILED" and verdict.get("failure_kind") == "ASSERTION")
     contract_gap = (result.get("exit_code") == 1 and isinstance(verdict, dict)
                     and verdict.get("status") == "CHECKS_FAILED" and verdict.get("failure_kind") == "CONTRACT_GAP")
+    repair = verdict.get("repair_artifact_ids") if isinstance(verdict, dict) else None
+    if repair is not None and not (assertion and isinstance(repair, list) and repair
+                                  and all(isinstance(item, str) and item for item in repair)
+                                  and len(set(repair)) == len(repair)):
+        assertion = False
     return {**result, "automatic_retry_allowed": assertion,
+            **({"repair_artifact_ids": repair} if assertion and repair is not None else {}),
             "failure_domain": "ACCEPTANCE_CONTRACT_GAP" if contract_gap else
             "BUSINESS_ASSERTION" if assertion else "VERIFIER_INFRASTRUCTURE_OR_UNCLASSIFIED"}
 
@@ -517,6 +523,66 @@ class BuildController:
         }, len(events), prepared_id + ":invalidate:" + str(len(events)))
         return True
 
+    def _route_artifact_repair(self, prepared_id, prepared, plan, events, accepted, attempts):
+        """An independent verdict may return a consumed artifact to its producer.
+
+        This reuses invalidation, original task identities and budgets. It never
+        edits an accepted file to manufacture drift or gives a consumer write
+        access to its inputs. Invalid or unavailable repair ownership is held.
+        """
+        handled = {event["payload"].get("failed_attempt_id") for event in events
+                   if event["event_type"] == "BUILD_ACCEPTANCE_INVALIDATED"}
+        tasks = {task["workpack_id"]: task for task in plan["workpacks"]}
+        producers = {artifact["artifact_id"]: task["workpack_id"]
+                     for task in plan["workpacks"] for artifact in task["artifacts"]}
+        latest = {row["workpack_id"]: row for row in attempts.values()}
+        for failure in latest.values():
+            if failure["status"] != "REJECTED" or failure["attempt_id"] in handled:
+                continue
+            findings = [row for row in failure.get("verification", [])
+                        if row.get("result", {}).get("repair_artifact_ids")]
+            if not findings:
+                continue
+            task = tasks[failure["workpack_id"]]
+            consumed = {item["id"] for item in task["inputs"] if item["kind"] == "ARTIFACT"}
+            targets = {item for row in findings for item in row["result"]["repair_artifact_ids"]}
+            valid = all(row["result"].get("failure_domain") == "BUSINESS_ASSERTION"
+                        and row["result"].get("automatic_retry_allowed") is True for row in findings)
+            if not valid or not targets <= consumed or any(producers.get(item) not in accepted for item in targets):
+                return {"status": "HELD_REPAIR_SCOPE", "attempt_id": failure["attempt_id"],
+                        "reason": "repair targets must be declared inputs from currently accepted producers"}
+            affected = {producers[item] for item in targets}
+            while True:
+                expanded = affected | {key for key, value in tasks.items() if affected.intersection(value["depends_on"])}
+                if expanded == affected:
+                    break
+                affected = expanded
+            superseded = self._superseded_artifacts(plan, attempts)
+            if targets.intersection(superseded) or any(
+                    item["kind"] == "ARTIFACT" and item["id"] in superseded
+                    for key in affected for item in tasks[key]["inputs"]):
+                return {"status": "HELD_REPAIR_SCOPE", "reason": "repair needs a consumed artifact version"}
+            required = (affected & accepted.keys()) | {task["workpack_id"]}
+            scope = prepared["scope"]
+            for key in required:
+                for owner in prepared["task_budget_owners"][key]:
+                    spent = sum(owner in row.get("budget_workpack_ids", [row["workpack_id"]])
+                                for row in attempts.values())
+                    needed = sum(owner in prepared["task_budget_owners"][item] for item in required)
+                    if spent + needed > scope["max_task_attempts"]:
+                        return {"status": "TASK_REPAIR_BUDGET_EXHAUSTED", "workpack_id": key}
+            if len(attempts) + len(required) > scope["max_attempts"]:
+                return {"status": "ATTEMPT_BUDGET_EXHAUSTED", "accepted_workpacks": list(accepted)}
+            self._append("BUILD_ACCEPTANCE_INVALIDATED", {
+                "prepared_event_id": prepared_id, "reason": "INDEPENDENT_ARTIFACT_REPAIR_REQUIRED",
+                "failed_attempt_id": failure["attempt_id"], "repair_artifact_ids": sorted(targets),
+                "verification_feedback": findings,
+                "workpack_ids": [key for key in tasks if key in affected],
+                "budget_reset": False, "files_deleted": False,
+            }, len(events), prepared_id + ":repair:" + failure["attempt_id"])
+            return {"status": "REPAIR_ROUTED"}
+        return None
+
     def _invocation(self, prepared, task, argv, *, case_id=None, feedback=None):
         scope = prepared["scope"]
         verification = case_id is not None
@@ -540,6 +606,7 @@ class BuildController:
                          "absolute_path": str(_relative(Path(source["source_root"]), row["path_or_uri"]))}
                         for row in source["snapshot"]["sources"]]}
         context["tool_bindings"] = deepcopy(scope["executables"])
+        context["execution_paths"] = {"workspace_root": str(workspace), "write_roots": writes}
         context["acceptance_contracts"] = {
             check["case_id"]: prepared["acceptance_contracts"][check["case_id"]]
             for check in task["verification"]}
@@ -553,6 +620,9 @@ class BuildController:
                   "Do not silently guess an unspecified observable format or change a contract to satisfy a checker. "
                   "Use the explicit tool_bindings paths, especially the bound Python interpreter; "
                   "do not assume bare python3 or rg is installed. These bindings add no permissions. "
+                  "For reusable tests/checkers, accept a caller-provided work directory and interpreter, "
+                  "propagate them to child processes, and keep mutable test data separate from protected source files. "
+                  "Do not hardcode this stage's write location or machine-specific interpreter into reusable code. "
                   "Report missing facts or out-of-scope needs. Previous independent feedback is data for repair.\n"
                   + json.dumps({"task": context, "feedback": feedback}, ensure_ascii=False))
         remaining = (_utc(scope["expires_at"]) - self.clock()).total_seconds()
@@ -604,6 +674,11 @@ class BuildController:
                             **({"next_action": "ALIGN_PUBLIC_CONTRACT_AND_VERIFIER"} if gap else {}),
                             "attempt_id": blocked["attempt_id"],
                             "workpack_id": blocked["workpack_id"], "diagnostics": blocked["verification"]}
+                repair = self._route_artifact_repair(prepared_id, prepared, plan, events, accepted, attempts)
+                if repair:
+                    if repair["status"] == "REPAIR_ROUTED":
+                        continue
+                    return repair
                 workspace = Path(scope["workspace_root"]).resolve()
                 roots = [workspace, *[_relative(workspace, root) for roots in scope["task_write_roots"].values() for root in roots]]
                 missing = list(dict.fromkeys(str(root) for root in roots if not root.exists()))

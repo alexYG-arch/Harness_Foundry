@@ -110,6 +110,14 @@ Job、实施/验收阶段以及确切 Case。进程运行期间若撤销授权�
 非零 verifier 只有退出 1 且输出 `CHECKS_FAILED` / `failure_kind=ASSERTION` 的完整
 JSON 才作为正常业务断言失败；崩溃/未分类失败 BLOCKED，不触发目标业务修改。
 
+独立 ASSERTION 可显式提供 `repair_artifact_ids`，将失败消费者的已声明输入交回其
+当前已验收生产者修复。控制器先核对归属、版本和原剩余预算，追加
+`BUILD_ACCEPTANCE_INVALIDATED / INDEPENDENT_ARTIFACT_REPAIR_REQUIRED`，使生产者
+和依赖后继失效；原失败与次数保留，反馈进入生产者的下一次实施上下文。
+不扩展消费者写域、不修改已验收字节制造漂移、不重置预算或新增批准。未声明输入、
+未验收生产者或依赖被覆盖历史版本时返回 `HELD_REPAIR_SCOPE`；基础设施/未知错误
+不能通过这条路线猜测修改业务。详细接口见[合同对齐 v0.2](ACCEPTANCE_CONTRACT_ALIGNMENT.md)。
+
 ## 字节身份、顺序修改与恢复
 
 - 来源已经存有全文，使用全文比较，不重复建立 Source Hash。

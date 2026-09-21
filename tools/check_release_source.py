@@ -34,6 +34,8 @@ REQUIRED_MODULES = (
     "test_process_cancellation",
     "test_committed_distribution",
     "test_route_retirement",
+    "test_test_execution",
+    "test_release_acceptance_adapters",
 )
 
 

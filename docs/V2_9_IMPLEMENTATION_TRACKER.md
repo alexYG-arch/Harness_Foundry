@@ -12,7 +12,46 @@ acceptance gates are in the [generic update plan v0.2](FOUNDRY_GENERIC_CODEX_HAR
 No existing completion evidence, authorization or runtime state is changed by
 this planning note.
 
-## 发布闭环当前摘要 — 2026-09-20（晚于下方历史快照）
+## 跨阶段修复 — 2026-09-21（源码修复，不追认旧案例）
+
+依据用户更新的侧聊修复方案实施：通用测试目录/解释器绑定与结构化错误、独立检查指定
+上游 artifact 的原范围修复、发布适配器源码化及 MODEL_TURN_COMPLETED 恢复探针。
+没有修改旧包/控制库/绑定检查器，没有新增真实模型尝试或继承耗尽预算。
+Task/CSV 原业务判定函数保持不变，新增正常/错误与 U/E 组合检查，不以放宽 Validator 闭合。
+
+定向最终 85 项、公开源码 240/240 零跳过、原生离线 U/E 只读边界验证通过；spec 101 文件、
+Skill 4 引用通过。全量启动快照 962 项：942 通过、20 opt-in 跳过，835.067 秒；之后新增
+3 项适配器回归由最终定向/公开门禁覆盖。保留 SQLite ResourceWarning，不把跳过计作验收。
+详细范围、证据及未关闭项见
+[跨阶段修复记录](FOUNDRY_CROSS_STAGE_REPAIR_2026_09_21.md)。
+当前仍未正式发布；下一真实运行需新固定附件及展示后的有限范围批准。
+
+## 同包双案例真实运行 — 2026-09-21（以下保留失败快照）
+
+用户已明确批准双案例最小运行范围 v0.1；真实后续消息由宿主核对并通过公开 CLI 记录。
+使用固定 24a0172 附件，共 4 次真实 GPT-6 Astra 会话和 4 次 LOCAL 实施，没有换包、
+追加预算、修改绑定 verifier、推送或发布。两例 H/U 完成计划中的资源/源码前置检查；
+E 均两次拒绝后到达逐任务上限，最终 `TASK_REPAIR_BUDGET_EXHAUSTED`，各 revision 41。
+H/U 的 ACCEPTED 不是完整 Harness 验收。正式发布仍未闭合。
+
+已取得可保留的实际行为证据：Task 真正 app 的 25 条 CLI 观察、CSV 的 13 条观察通过
+原业务断言；Task 生成的行为检查入口也在 E 独立目录通过。CSV 原 summary API、原测试
+与用户笔记保留。两个后继 Codex 会话确实读取并使用了各自 Harness 规则。
+
+本次共性阻塞为阶段组合缺口：生成的检查入口拒绝 app 内 workdir，U 因其写域不能调用；
+生成的单测反而硬编码向 app 写临时目录，到了只允许写 scenario 的 E 环境产生权限错误。
+本轮外部验收适配器将嵌套错误概括为 ASSERTION，控制器于是重复无法修改上游产物的 LOCAL E；
+不能靠增加 E 次数闭合。需要修复测试目录接口、跨阶段可用性预检和错误/修复归属。
+
+另一个独立的本轮宿主测试编排错误：恢复中断脚本只识别 PASS，而真实模型成功为
+MODEL_TURN_COMPLETED，故预定中断未发生。恢复窗口标为 NOT_TESTED，不把正常后继执行
+当成恢复证明，也不宣称 Foundry 恢复实现已被证实失败。该脚本不在发行包内。
+
+原失败、来源与控制库不改；已停止实际运行。完整本地报告和停机后证据保全副本在
+`build/release-24a0172/execution-20260921.os1jhZ/RESULT.md`。修复后须展示受影响的绑定/预算
+差异并取得新运行范围批准；本次批准不沿用为检查器变更、额外尝试或发布授权。
+
+## 发布闭环当前摘要 — 2026-09-20（以下保留历史快照）
 
 ### 来源已固定、同包范围已准备；仍待真实运行批准
 

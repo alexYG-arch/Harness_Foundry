@@ -168,6 +168,41 @@ class RealCodexSandboxTests(unittest.TestCase):
         self.assertEqual((self.work / "output.txt").read_text(), "INPUT")
         self.assertEqual(Path(result["stdout"].strip()).resolve(), Path(sys.prefix).resolve())
 
+    def test_structured_tests_in_development_and_readonly_acceptance_domains(self):
+        from harness_foundry_factory import test_execution
+        adapter = Path(test_execution.__file__).resolve()
+        source = self.input / "test_bound.py"
+        source.write_text('''import os, subprocess, tempfile, unittest
+from pathlib import Path
+class Bound(unittest.TestCase):
+ def test_data(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   self.assertTrue(Path(tmp).is_relative_to(Path(os.environ["FOUNDRY_TEST_WORKDIR"])))
+   subprocess.run([os.environ["BOUND_PYTHON"],'-B','-c',"from pathlib import Path; Path('child').write_text('ok')"],cwd=tmp,check=True)
+''')
+        development = self.input / "scratch"; development.mkdir()
+        def check(work, writes):
+            command = LocalCommand.prepare(argv=[sys.executable,"-B",str(adapter),"--project",str(self.input),
+                "--workdir",str(work),"--python",sys.executable], cwd=work,
+                read_roots=[*self.runtime_reads,self.input,adapter],write_roots=writes,timeout_seconds=20)
+            return self.runner.run(command)
+        for work, writes in ((development,[self.input]),(self.work,[self.work])):
+            result = check(work,writes)
+            self.assertEqual(result["status"],"PASS",result)
+            self.assertTrue(json.loads(result["stdout"])["protected_source_unchanged"])
+        source.write_text('''import unittest
+from pathlib import Path
+class Broken(unittest.TestCase):
+ def setUp(self): Path(__file__).with_name('forbidden').write_text('wrong domain')
+ def test_one(self): pass
+''')
+        denied = check(self.work,[self.work])
+        self.assertEqual(denied["exit_code"],1,denied)
+        result = json.loads(denied["stdout"])
+        self.assertEqual(result["failure_kind"],"INFRASTRUCTURE")
+        self.assertEqual(result["errors"][0]["exception_type"],"PermissionError")
+        self.assertFalse((self.input / "forbidden").exists())
+
     def test_explicit_nested_interpreter_binding_preserves_venv_and_write_domain(self):
         # An interpreter's self-reported alias is not an execution binding.
         # Keep the exact host path (including venv selection) for both levels.

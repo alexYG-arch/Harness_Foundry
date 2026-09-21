@@ -1,4 +1,4 @@
-# 公开验收合同与检查器对齐（v0.1）
+# 公开验收合同与检查器对齐（v0.2）
 
 这是通用 Build 的输入/验证准备合同，不是新的授权层、领域 Schema 或万能判定器。
 内部源码修复、定位和离线样例回归不新增人工门；外部合同实质变化仍回到既有搭建文档 Review。
@@ -78,3 +78,40 @@ assert local["status"] == independent["status"] == "CONTRACT_EXAMPLES_MATCHED"
 合同修订必须同时处理公开说明、样例、实施输入、相应验证器及回归，不单独放宽检查。
 新源文件/检查器绑定必须进入后续新范围；禁止直接修改已绑定旧文件以复活旧批准。
 没有新增 Hash、逐步人工批准、独立数据库或“自评已完成”的验收权威。
+
+## 跨阶段测试接口与产物修复
+
+可复用检查器应由调用方传入 project、workdir 和绑定的 Python，而不是写死开发机器
+或某阶段目录。开发阶段可在 project 内的明确临时子目录测试；独立使用阶段 project
+只读、workdir 位于另外的已批准写域。全部子进程须传播同一目录/解释器绑定。
+源码保护仅排除那个临时子树，不能因为 workdir 位于 project 内而放弃检查整个 project。
+
+发行包提供可选标准库工具 `harness_foundry_factory.test_execution`：
+
+```text
+BOUND_PYTHON -B test_execution.py --project APP --workdir SCRATCH --python BOUND_PYTHON
+```
+
+调用者负责提供已有目录和权限；此工具不是沙箱或验收权威，不自动启动。
+它将 `FOUNDRY_TEST_WORKDIR`、`BOUND_PYTHON`、`TMPDIR/TMP/TEMP` 传入测试进程，
+区分 unittest 的 assertion failures 与 unexpected errors，保留错误阶段、异常类型、
+traceback、子进程输出和退出码。结构化结果走独立临时文件，测试子进程 stdout 不作为
+JSON 判定；预期异常测试正常通过不因日志出现 PermissionError 被误报。零测试或跳过
+不能成为该工具的成功结果。测试仍需消费绑定，提供环境变量不等于任意测试已兼容。
+
+错误分类与修复归属是两件事。独立检查器有公开依据和确定产物归属时，可用：
+
+```json
+{"status":"CHECKS_FAILED","failure_kind":"ASSERTION","reason":"已声明输入未实现公开行为","repair_artifact_ids":["UPSTREAM-CHECKER"]}
+```
+
+退出仍为 1。非空、去重的 ID 必须是失败消费者声明的 ARTIFACT 输入，生产者仍处于
+已验收状态。控制器追加现有失效事件，重建生产者和依赖后继，沿用原身份、写域、Case、
+累计预算与授权有效期；独立分支不失效。目标不合法/需要已覆盖的旧版本则停止。
+不得让 E 改 H/U 文件、修改 SQLite，或手改已验收文件制造漂移。未知运行错误不猜生产者，
+合同缺口仍暂停对齐；不能只把 INFRASTRUCTURE 改成 ASSERTION 来启动自动修复。
+
+源码回归应将相同正常/错误夹具放入两种目录布局，原生预检还需实际拒绝 E 写源码。
+文件存在、AST、可调用的 --help 只是前置检查；真正交付验收须有组合行为证据。
+发布双案例的具体有限方法见 `devtools/release_acceptance/RUN_METHOD_v0.2.md`，不注入
+通用产品默认流程，也不将开发目录的成功推广成只读阶段成功。
