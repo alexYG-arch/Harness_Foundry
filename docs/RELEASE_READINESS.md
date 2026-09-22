@@ -1,5 +1,9 @@
 # Foundry 发布准备与接入边界
 
+> 维护者历史快照：下文保留 2026-09-21 发布前的准备记录。
+> v0.2.0 随后已正式发布；普通使用者请阅读[在线使用指南](https://github.com/alexYG-arch/Harness_Foundry/blob/main/docs/USER_GUIDE.md)，
+> 当前发行状态见 [GitHub Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.2.0)。
+
 更新：2026-09-21。当前产品版本 **0.2.0**，协议目标 **2.9**。
 状态：**已批准的同包双案例最小端到端验收通过，发布收尾待远端执行**。
 本页是用户说明，不签发运行授权或发布批准。精确范围见开发仓库在线

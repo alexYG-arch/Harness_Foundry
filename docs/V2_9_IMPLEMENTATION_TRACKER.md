@@ -12,6 +12,18 @@ acceptance gates are in the [generic update plan v0.2](FOUNDRY_GENERIC_CODEX_HAR
 No existing completion evidence, authorization or runtime state is changed by
 this planning note.
 
+## v0.2.0 发布与用户文档 — 2026-09-22
+
+2026-09-21 已按用户明确批准的范围完成正式发布：main 与 v0.2.0 tag 当时指向
+`b1b1d41`，必需远端 CI 240/240、零 skip，私密漏洞报告启用，原 ZIP 上传后下载
+字节一致，包外隔离 Python 的 version/help 通过。正式地址为
+[v0.2.0 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.2.0)。
+
+2026-09-22 用户要求 GitHub 增加使用、依赖、场景与案例说明，并移除对外验收范围。
+首页和本版说明改为用户导向，新增 USER_GUIDE；内部验收计数/阶段编号不再作为介绍主体。
+工程历史、运行合同与原始证据保留；必要平台/工具限制仍公开说明。
+本次只更新文档及 Release 文字，不改运行代码、版本、tag 或 ZIP，不触发新的模型建设。
+
 ## v0.2.0 发布收尾 — 2026-09-21（本地准备，不是远端发布）
 
 补齐发布说明、版本/兼容性/支持限制、MIT 与依赖说明、安全报告政策和最终清单；

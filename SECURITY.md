@@ -1,11 +1,11 @@
 # Security reporting and support
 
 The canonical repository is `alexYG-arch/Harness_Foundry`. The v0.2.0 portable
-distribution is the supported release candidate; historical Candidate/epoch
+distribution is the supported release; historical Candidate/epoch
 workflows are retired, not a second supported production route.
 
 For a suspected vulnerability, use the repository's **Security → Report a
-vulnerability** private channel once available. Do not post exploit details,
+vulnerability** [private channel](https://github.com/alexYG-arch/Harness_Foundry/security/advisories/new). Do not post exploit details,
 credentials, private requirements, controller databases or raw session logs in a
 public issue. Ordinary non-sensitive defects belong in Issues with a minimal,
 sanitized reproduction and version information.
@@ -15,9 +15,8 @@ publicly. A neutral issue may request that maintainers enable the private channe
 wait for that channel before sending the report. No response-time SLA or unverified
 contact address is promised.
 
-Publication checklist: enable and verify private vulnerability reporting before
-publishing v0.2.0. As checked on 2026-09-21 during local release preparation, it was
-not yet enabled; this policy file does not change repository settings.
+Private vulnerability reporting was enabled and verified when v0.2.0 was
+published on 2026-09-21. This policy file does not change repository settings.
 
 Native execution requires the displayed, user-approved model/tool/path/budget scope
 and a working native sandbox. Never bypass isolation or replay unknown side effects.

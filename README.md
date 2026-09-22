@@ -1,94 +1,98 @@
-# Harness Foundry v2.9 Chat Factory v0.2
+# Harness Foundry
 
-Foundry 用于搭建由 Codex Agent 控制运行的通用 Harness：约束输入输出、依赖、权限和
-独立验收；推理与实现方式由 Agent 在范围内选择，确定性阶段可由本地程序处理。
+用 Codex 搭建适合你的项目的 Harness，让 Agent 按明确需求持续实施、检查、修复和继续工作。
 
-## 新建统一使用通用 Build
+**Foundry 搭建 Harness；生成的 Harness 再指导 Codex 完成项目工作。** 它不是另一套模型，
+也不是固定行业流水线：Codex 负责理解、推理和实现，Foundry 负责输入输出约定、任务依赖、
+权限、独立检查和进度保存。确定性步骤可以交给本地 Python 等程序。
 
-2026-09-20 用户决定停止维护旧的新建流程。开发入口与通用发行包统一采用
-`GENERIC_REVIEWED_BUILD_ONLY`，不再提供可选 Start Package/Candidate/epoch 新建路线。
+[下载 v0.2.0](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.2.0) ·
+[完整使用指南](docs/USER_GUIDE.md) ·
+[案例说明](docs/USER_GUIDE.md#案例说明) ·
+[问题反馈](https://github.com/alexYG-arch/Harness_Foundry/issues)
 
-1. 读取完整需求、PRD 或现有项目资料，保留澄清问答。
-2. 输出并展示版本化搭建文档，等待用户确认实际版本和范围。
-3. 编制 Requirement/Plan、来源和独立检查；展示模型、目录、工具、预算、到期时间，
-   获得真实运行范围批准。
-4. 在批准范围内自动实施、独立检查、有限修复、推进和恢复，不逐 Workpack 要求批准。
-5. 报告实际验收范围和缺陷；模型完成、文件生成或源码测试通过不等于完整 Harness 可用。
+产品版本 **0.2.0**，协议版本 **2.9**，采用 [MIT](LICENSE) 许可。
 
-详见[搭建文档合同](docs/GENERIC_BUILD_PLAN.md)、[Build CLI](docs/GENERIC_BUILD_CLI.md)
-和[运行控制](docs/GENERIC_BUILD_RUNTIME.md)。源码工程和只读诊断不因此增加人工门禁。
+## 适合什么场景
+
+| 场景 | 你提供什么 | Foundry 帮你建立什么 |
+|---|---|---|
+| 根据 PRD 开发新项目 | 完整 PRD、技术要求、交付目标 | 开发规则、任务计划、检查入口和恢复说明 |
+| 为已有项目增加功能 | 现有代码、变更说明、必须保留的行为 | 适配既有工程的开发流程，保护原功能和无关改动 |
+| 组织多阶段本地工作 | 各阶段输入输出、依赖、判断成功的方法 | Codex 与本地程序协作的任务链、独立检查和持久进度 |
+
+仓库附带两个可上手的示例：**Task CLI 任务管理工具**与 **CSV 工具增量开发**。
+更多领域可以按需求设计，但本版不内置浏览器自动化、云部署或媒体生成流水线。
+
+## 快速开始
+
+### 1. 下载并打开
+
+在 Release 的 Assets 中下载 `Harness-Foundry-0.2.0-generic-3c52c30.zip`，
+解压到普通独立项目目录，并用 Codex 打开该目录。
+
+请使用这个通用运行包，而不是 GitHub 自动生成的 `Source code.zip`。
+不用安装为全局 Skill，也不需要把整个开发仓库复制到你的业务项目。
+
+### 2. 检查环境
+
+在解压目录运行：
 
 ```bash
+python3 --version
 python3 tools/hffactory.py version --json
 python3 tools/hffactory.py --help
 ```
 
-普通用户向 Codex 描述需求即可，无须手写 JSON 或复制 Hash。文档确认不暗含执行批准，
-原始 PRD 不是直接启动指令；旧批准、代理委托和后台 PASS 均不能替代真实用户决定。
-`compile-build-plan` 只是无状态检查，不创建 Program、目标目录或运行权限。
+- **Python 3.11+**；通用运行包仅依赖 Python 标准库。
+- **可用且已登录的 Codex**，以及能够调用的模型；真实执行需可用的 Codex 可执行程序和原生沙箱。
+- 当前实际使用环境为 macOS、Python 3.13.3、Codex 0.155.0-alpha.9.2、GPT-6 Astra。
+  其他客户端版本需要先核对接口和权限；Linux/Windows 暂不承诺同等运行支持。
+- macOS 下不要把运行包、输入或目标放在共享 `/tmp` 或 `/private/tmp`。
+- 项目自己的工具链按项目需要准备，并不是 Foundry 的默认依赖。
 
-## 历史保留，不再新建
+安装方式、账号、网络和开发依赖的区别见[环境与依赖](docs/USER_GUIDE.md#环境与依赖)。
 
-旧 `chat-turn`、`compile`、Freeze/Generate、旧运行授权/恢复及 `package-local`
-等公开命令明确返回 `LEGACY_WORKFLOW_RETIRED`，没有兼容回退或重新启用开关。
-历史 Candidate、快照和数据库不改写、不自动迁移，也不将历史批准追认为新授权。
+### 3. 向 Codex 描述目标
 
-查看关闭的旧 authoring 数据库：
+可以直接复制以下内容，替换材料位置：
 
-```bash
-python3 tools/hffactory.py read-history --database /absolute/path/factory.sqlite3 --program-id ID --json
+```text
+请使用本目录的 harness-foundry-build Skill，
+基于我提供的 PRD 和开发要求，为项目搭建 Coding Harness。
+
+先完整阅读材料、澄清缺口，输出带版本的搭建文档给我确认。
+文档应说明目标、交付物、工作流程、工具与目录，以及怎样判断结果正确。
+我确认文档后，再展示具体运行范围；不要直接开始搭建。
 ```
 
-该命令只读原记录，不重放事件；非空 WAL 会被拒绝以免漏读未提交到主库的数据。
-当前通用 `REVISION_V1` 状态仍用 `read-build`。旧内部实现及行为测试暂留开发源码作
-历史回归，**不是继续维护的生产路线，也不随通用包分发**。旧 41 项验证只证明历史基线，
-不能作为新版公开接口或发布验收。详见[Chat 使用说明](docs/CHAT_USAGE.md)。
+不需要手写内部 JSON、复制冻结令牌或手工管理 Hash。
 
-## 开发验证与通用打包
+### 4. 确认后自动推进
 
-通用运行依赖 Python 3.11+ 标准库；真实 Codex 运行还须在范围中声明其可执行程序、
-模型/服务、本地工具与原生隔离能力。没有隐式模型切换或无沙箱降级。
+你先确认搭建文档，再批准展示的模型、工具、读写目录、次数预算和期限。
+随后 Codex 在该范围内自动实施、独立检查、修复和继续，不逐任务请求批准。
+需求改变、预算耗尽、权限不足或结果不明时会停下说明原因。
 
-完整开发环境安装 `.[test,security]` 后运行：
+完成后，按生成工程的入口说明使用 Harness；需要在其中继续开发业务程序时，
+明确相应任务和运行范围。详细步骤见[完整使用指南](docs/USER_GUIDE.md)。
 
-```bash
-PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py' -v
-python3 tools/check_release_source.py --report build/new-source-checks.json
-python3 tools/validate_skill.py
-```
+## 内置案例
 
-历史源码诊断仍可运行 `verify-spec`、`validate-core`、`project-core-evidence`；
-其中 sibling 规范和历史 Hash 合同不是通用运行依赖。历史测试适用断言仍保留，不用
-改标签、跳过或删除用例冒充新版验收。当前公开接口另有退役/通用流程行为测试。
+- **新项目：Task CLI。** 根据完整小型 PRD 搭建 Coding Harness，再用它开发本地任务工具：
+  新增、列出、完成、删除任务，并保存 JSON 数据。[查看 PRD](examples/task-cli/PRD.md)。
+- **已有项目：CSV 增量。** 为已有 CSV 汇总工具增加必填列检查，保留原命令、API、测试和用户笔记。
+  [查看项目说明](examples/csv-increment/PROJECT_BRIEF.md)。
 
-通用包开发预检和固定提交组装：
+`examples/` 提供的是需求和起始代码，不是已搭建好的业务程序；案例中的具体用法和预期产物见
+[案例说明](docs/USER_GUIDE.md#案例说明)。
 
-```bash
-python3 devtools/package_generic_release.py
-python3 devtools/package_committed_release.py --revision <explicit-commit>
-```
+## 说明与支持
 
-默认预检不发布；固定提交组装会临时提取该提交的源码，不混入脏工作区。需要输出时按
-工具帮助指定尚不存在的路径。归档只保留必要身份校验，不增加逐日志 Hash 链。
-旧的 `package-local` 不再是交付入口。
+- [使用指南](docs/USER_GUIDE.md)：接入、依赖、案例、继续工作和常见问题。
+- [v0.2.0 更新说明](docs/releases/v0.2.0.md)：本版能力、下载和兼容性。
+- [Build CLI](docs/GENERIC_BUILD_CLI.md)：为接入工具或维护者提供的底层接口，不是初次使用的必读材料。
+- [安全报告](SECURITY.md)：漏洞请使用私密报告，不在公开 Issue 上传凭据、私有 PRD 或原始运行记录。
 
-## 发布边界
-
-实现版本仍为 `0.2.0`，协议目标 `2.9`，MIT 许可，唯一正式仓库
-[alexYG-arch/Harness_Foundry](https://github.com/alexYG-arch/Harness_Foundry)。
-2026-09-21，固定提交 `3c52c30` 的同一份通用包已通过已批准的双案例最小端到端验收：
-完整小型 Task CLI 新工程和 CSV 既有工程增量，包含真实 Codex 建设/使用、独立业务检查、
-预定故障拒绝与复验、支持的中断恢复。共 4 个模型会话、8 次尝试；范围内无已知未解决交付缺陷。
-这不宣称任意 PRD、所有故障或全平台均已验收。当前 `release_ready=false` 表示发布前
-远端检查及实际发布尚未闭合，不表示双案例仍待运行；不再无故重跑已验案例。
-
-安装使用 Release 中明确命名的通用 ZIP，而非 GitHub 自动生成的全仓库 Source code ZIP。
-[v0.2.0 发布说明](docs/releases/v0.2.0.md)列出精确附件、支持环境、兼容性和验收边界；
-[发布清单](docs/releases/v0.2.0-checklist.md)区分本地已完成与待授权远端动作。
-安全问题见 [SECURITY.md](SECURITY.md)，不要在公开 Issue 中贴漏洞利用细节或凭据。
-
-[更新说明](docs/FOUNDRY_UPDATE_2026_09_20.md)、
-[发布准备](docs/RELEASE_READINESS.md)、
-[通用更新计划](docs/FOUNDRY_GENERIC_CODEX_HARNESS_UPDATE_PLAN_v0_2.md)及
-[Tracker](docs/V2_9_IMPLEMENTATION_TRACKER.md)区分已实现、历史证据和未闭合项。
-本次入口切换不构成目标执行、Git 推送、正式发布或既有数据迁移授权。
+新建统一使用通用 Build；旧 Start Package、Candidate、epoch、Driver 新建流程已退役。
+详细的工程测试和历史记录保留在开发文档中，不是普通用户的使用步骤。
