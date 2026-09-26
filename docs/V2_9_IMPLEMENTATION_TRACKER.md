@@ -1,6 +1,7 @@
 # Harness Foundry v2.9 Implementation Tracker
 
-截至 2026-09-20 的公开摘要见 [源码更新说明](FOUNDRY_UPDATE_2026_09_20.md)。
+最新公开摘要见 [2026-09-26 更新说明](FOUNDRY_UPDATE_2026_09_26.md)；
+此前摘要见 [2026-09-20 源码更新说明](FOUNDRY_UPDATE_2026_09_20.md)。
 下文按时间保留工程快照；较早的“门禁待实现”“M1 未运行”等状态由后续同主题记录更新，
 不表示当前状态。`build/`、`runs/` 和私人 Case 的证据引用仅用于本地追溯，不随 Git
 或发行包公开，也不是他人可以直接执行的批准。公开回归可由仓库测试复跑。
@@ -11,6 +12,17 @@ and accepting usable Codex-carried Harnesses. Forward work and its unimplemented
 acceptance gates are in the [generic update plan v0.2](FOUNDRY_GENERIC_CODEX_HARNESS_UPDATE_PLAN_v0_2.md).
 No existing completion evidence, authorization or runtime state is changed by
 this planning note.
+
+## 搭建质量真实双案例完成 — 2026-09-26
+
+文档和具体运行范围经用户分别确认后，固定 `b48e3fc` 包完成双案例：Task A1–A6、
+CSV B1–B5 及约定 B01–B09 覆盖检查通过，合计 5 次 CODEX 任务、9 次实施尝试。
+实际观察到生成 Harness 的新会话使用、Task 注入缺陷的模型修复、同版两任务复用、
+完整耐久观测后中断恢复，以及最终再次 advance 零新增执行；CSV 原功能、测试、笔记保留。
+B08 是既有离线边界回归，未自然触发的 REJECTED 自动返修分支不算本次原生证明。
+详见[公开运行摘要](BUILD_QUALITY_RUN_RESULT_2026_09_26.md)；原始本机记录不随 Git 上传。
+用户本次授权推送正式仓库的源码与说明，不改产品/协议版本、历史 tag 或已发布 ZIP。
+下方“尚未启动/待确认”保留为之前的阶段快照。
 
 ## 搭建质量更新执行 — 2026-09-26（源码与本地测试）
 
