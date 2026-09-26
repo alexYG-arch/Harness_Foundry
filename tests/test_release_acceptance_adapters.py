@@ -1,5 +1,7 @@
 """Source-owned acceptance adapters: synthetic fixtures, no real model approval."""
 import contextlib
+from copy import deepcopy
+import importlib.util
 import io
 import json
 from pathlib import Path
@@ -13,6 +15,8 @@ from devtools.release_acceptance import exercise, prepare, recovery_probe, verif
 from harness_foundry_factory import test_execution
 from harness_foundry_factory.build_runtime import classify_verification_result
 from harness_foundry_factory.build_plan import compile_build_plan
+from harness_foundry_factory.build_types import RequestValidationError
+from test_build_plan import request_fixture
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,6 +32,114 @@ class ReleaseAcceptanceAdapterTests(unittest.TestCase):
         return {"protected_source_unchanged": True,
                 "tests": {"status": "CHECKS_PASS", "tests_run": 2},
                 "harness_check": {"exit_code": 0, "stdout": '{"status":"CHECKS_PASS"}', "stderr": ""}}
+
+    def quality_module(self):
+        path = ROOT / "devtools/release_acceptance/quality_report.py"
+        self.assertTrue(path.is_file(), "WP4 requires a descriptive initial/final/reuse report")
+        spec = importlib.util.spec_from_file_location("quality_report", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_authored_plan_is_preserved_without_fixed_stages_or_authority(self):
+        proposed = getattr(prepare, "authored_proposal", None)
+        self.assertTrue(callable(proposed), "Run Test must accept the Agent's actual Plan")
+        request = request_fixture()
+        original = deepcopy(request)
+        scope = {"workspace_root": str(self.root / "not-created"),
+                 "task_write_roots": {"IMPLEMENT-READER": ["src"], "MAKE-REPORT": ["outputs"]}}
+        with patch("subprocess.Popen", side_effect=AssertionError("proposal cannot execute")):
+            result = proposed(request, scope)
+        self.assertEqual(result["request"], original)
+        self.assertEqual(result["scope"], scope)
+        self.assertFalse(result["authority_granted"])
+        self.assertFalse(result["scope_validated"])
+        self.assertFalse((self.root / "not-created").exists())
+        result["request"]["plan"]["workpacks"][0]["goal"] = "changed copy"
+        self.assertEqual(request, original)
+        request["plan"]["workpacks"][1]["depends_on"] = []
+        with self.assertRaises(RequestValidationError):
+            proposed(request, scope)
+
+    def evaluation(self, ref, result, harness="H1", package="P1"):
+        return {"evaluation_ref": ref, "package_ref": package, "harness_ref": harness,
+                "results": {"B02": result}, "evidence_refs": [ref + ".json"],
+                "usage": None, "failure_origin": "NATURAL"}
+
+    def test_quality_report_preserves_initial_failure_and_missing_final_coverage(self):
+        quality = self.quality_module()
+        rows = [self.evaluation("first", "FAIL"), self.evaluation("repaired", "PASS", "H2")]
+        original = deepcopy(rows)
+        result = quality.summarize(rows, ["B02", "B09"])
+        self.assertEqual(result["initial"]["results"]["B02"], "FAIL")
+        self.assertEqual(result["final"]["results"]["B02"], "PASS")
+        self.assertEqual(result["final"]["results"]["B09"], "NOT_RUN")
+        self.assertIsNone(result["initial"]["usage"])
+        self.assertFalse(result["release_accepted"])
+        self.assertFalse(result["harness_e2e_verified"])
+        self.assertEqual(rows, original)
+        result["history"][0]["results"]["B02"] = "PASS"
+        self.assertEqual(rows, original)
+
+    def use(self, task, kind, session, snapshot):
+        return {"task_id": task, "task_kind": kind, "session_ref": session,
+                "package_ref": "P1", "harness_ref": "H1", "result": "PASS",
+                "evidence_refs": [task + ".json"], "harness_before": snapshot,
+                "harness_after": deepcopy(snapshot)}
+
+    def test_unready_build_is_not_dropped_and_old_passes_do_not_fill_new_version(self):
+        quality = self.quality_module()
+        first = self.evaluation("not-ready", "NOT_READY", harness=None)
+        partial = self.evaluation("old-package", "PASS", package="P0")
+        last = self.evaluation("new-package", "BLOCKED", harness="H2")
+        last["results"] = {"B03": "BLOCKED"}
+        result = quality.summarize([first, partial, last], ["B02", "B03"])
+        self.assertIsNone(result["initial"]["harness_ref"])
+        self.assertEqual(result["initial"]["results"]["B02"], "NOT_READY")
+        self.assertEqual(result["final"]["results"]["B02"], "NOT_RUN")
+        self.assertEqual(result["final"]["results"]["B03"], "BLOCKED")
+        self.assertEqual(len(result["history"]), 3)
+        self.assertEqual(result["comparison"]["status"], "NOT_REQUESTED")
+
+    def test_reuse_compares_declared_harness_bytes_not_only_version_labels(self):
+        quality = self.quality_module()
+        harness = self.root / "harness"; harness.mkdir()
+        entry = harness / "check.py"; entry.write_text("print('check')\n")
+        snapshot = quality.capture_harness(harness, ["check.py"])
+        uses = [self.use("implement", "IMPLEMENT", "session-1", snapshot),
+                self.use("repair", "REPAIR", "session-2", snapshot)]
+        args = dict(package_ref="P1", harness_ref="H1")
+        self.assertEqual(quality.reuse_summary(uses, **args)["status"], "OBSERVED")
+        (harness / "runtime-data").write_text("legit changing state")
+        self.assertEqual(quality.capture_harness(harness, ["check.py"]), snapshot)
+        entry.write_text("print('different check')\n")
+        uses[1]["harness_after"] = quality.capture_harness(harness, ["check.py"])
+        self.assertEqual(quality.reuse_summary(uses, **args)["status"], "NOT_DEMONSTRATED")
+        for field, value in (("harness_before", {}), ("task_kind", "IMPLEMENT"),
+                             ("session_ref", "session-1"), ("harness_ref", "H2"),
+                             ("package_ref", "P2"), ("result", "BLOCKED"), ("evidence_refs", [])):
+            changed = deepcopy(uses)
+            changed[1] = self.use("repair", "REPAIR", "session-2", snapshot)
+            changed[1][field] = value
+            with self.subTest(field=field):
+                self.assertEqual(quality.reuse_summary(changed, **args)["status"], "NOT_DEMONSTRATED")
+
+    def test_comparison_needs_actual_conditions_and_never_claims_improvement(self):
+        quality = self.quality_module()
+        conditions = {key: "same" for key in quality.COMPARISON_FIELDS}
+        conditions["executor"] = {"requested_model": "model", "effective_model": "model",
+                                  "client_version": "client", "service_revision": None}
+        old = {"conditions": conditions, "evidence_refs": ["old.json"]}
+        new = deepcopy(old); new["evidence_refs"] = ["new.json"]
+        result = quality.comparison_summary(old, new)
+        self.assertEqual(result["status"], "MATCHED_OBSERVABLE_CONDITIONS")
+        self.assertFalse(result["improvement_demonstrated"])
+        self.assertIn("SERVICE_REVISION_UNKNOWN", result["limitations"])
+        new["conditions"]["executor"]["effective_model"] = None
+        self.assertEqual(quality.comparison_summary(old, new)["status"], "NOT_COMPARABLE")
+        for key in quality.COMPARISON_FIELDS:
+            changed = deepcopy(new); changed["conditions"].pop(key)
+            self.assertEqual(quality.comparison_summary(old, changed)["status"], "NOT_COMPARABLE")
 
     def test_nested_unexpected_error_is_not_flattened_by_failed_harness(self):
         report = self.report()

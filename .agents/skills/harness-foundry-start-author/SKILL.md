@@ -13,6 +13,10 @@ Do not inject video, fixed three-project, Candidate or epoch protocols.
 ## Select work without implicit execution
 
 For source engineering or status, inspect the current Tracker and relevant tests.
+For a demonstrated repair, add the smallest contract-based failing regression,
+fix its responsible producer/control path, then run adjacent checks. Existing
+correct behavior needs coverage, not an invented defect. Keep independent real
+use testing separate; source PASS does not authorize that workload.
 Do not create a Program or target merely to answer a question or validate Foundry.
 `version` reports the generic product. Development-only `validate-core` and
 `project-core-evidence` describe historical baseline behavior, not current release
@@ -39,6 +43,13 @@ The trusted host still authenticates actual messages and semantic coverage; JSON
 actor labels do not prove a human decision. Never manufacture message references.
 Material contract changes require renewed review; ordinary coding choices do not.
 
+Apply the build policy's quality guidance: distinguish Codex, Foundry and project
+capabilities before adding modules; reuse what exists. Derive the minimum plan
+from actual inputs/outputs and delivery obligations, not a fixed DAG. Reason
+through one producer/consumer call, and after runtime approval implement a thin
+working path first without treating it as full delivery. Preserve complete
+source access and global constraints. Algorithms and module layout remain free.
+
 ## One bounded runtime approval, autonomous work within scope
 
 Read [the public Build CLI](../../../docs/GENERIC_BUILD_CLI.md) completely before
@@ -63,6 +74,12 @@ dispatching or recovering.
 6. Report actual per-Case independent results and remaining gaps. Model completion,
    files, test counts and `PLAN_CHECKS_ACCEPTED` do not prove full-PRD acceptance,
    installed-Harness usability or release readiness.
+
+Use actual behavior to check changed, required mechanisms, not just their names
+in code. Repair at the smallest responsible layer: project-specific fixes stay
+local; a reproducible public Foundry guarantee failure belongs in the core.
+Do not turn every fix into a universal rule. Stop when agreed delivery is met;
+do not autonomously add optimizations or project-independent benchmark duties.
 
 ## Historical records, not a second build route
 

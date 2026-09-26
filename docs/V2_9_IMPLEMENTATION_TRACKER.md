@@ -12,6 +12,22 @@ acceptance gates are in the [generic update plan v0.2](FOUNDRY_GENERIC_CODEX_HAR
 No existing completion evidence, authorization or runtime state is changed by
 this planning note.
 
+## 搭建质量更新执行 — 2026-09-26（源码与本地测试）
+
+用户授权执行计划 v0.2。已更新通用搭建政策、仓库及发行包 Skill，并新增开发测试的
+真实 Plan 接入和首轮/最终/同版复用报告支持；保留已验证的自驱/返修/恢复控制器，
+未新增 Hash 链、逐任务批准或运行状态库。详见[执行记录](BUILD_QUALITY_UPDATE_EXECUTION_2026_09_26.md)。
+真实 Run Test 尚未启动；下一边界为[新版测试搭建文档 v0.1](BUILD_QUALITY_RUN_TEST_BUILD_DOCUMENT_v0_1.md)
+的实际人工确认，随后另行展示具体运行范围。不推送、不改版本、不发布，不覆盖历史验收。
+
+## 搭建质量修补与双层测试计划 v0.2 — 2026-09-26（仅计划更新）
+
+按用户要求更新 [修补与测试计划 v0.2](FOUNDRY_BUILD_QUALITY_REPAIR_AND_TEST_PLAN_v0_2.md)，保留 v0.1。
+新增能力归属/复用优先、首轮与修复后分报、同版 Harness 第二任务；加强关键机制行为证据，
+并仅针对优化收益主张安排同条件比较。沿用 A/B 双层测试与 WP0–WP5，
+不新增人工 Hash、逐任务授权或自修改控制器。
+本轮仅更新计划与导航，未修源码、未运行模型/目标、未推送发布；不改变历史验收或当前运行权限。
+
 ## v0.2.0 发布与用户文档 — 2026-09-22
 
 2026-09-21 已按用户明确批准的范围完成正式发布：main 与 v0.2.0 tag 当时指向

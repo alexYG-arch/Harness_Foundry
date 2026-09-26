@@ -1,14 +1,35 @@
 """Write proposed requests only; no Program, approval, target or model execution."""
+from copy import deepcopy
 from pathlib import Path
+
+from harness_foundry_factory.build_plan import compile_build_plan, validate_compiled_build_plan
+
+
+def authored_proposal(request, scope):
+    """Check the host/Agent's real proposal, without imposing the fixture DAG.
+
+    Use after drafting from raw materials. This is only the existing stateless
+    compiler, not semantic review or runtime preparation. The public entrypoint
+    must still bind the actual reviewed document and validate/approve the scope.
+    Scope data is copied as supplied; there are deliberately no runtime defaults.
+    """
+    compiled = compile_build_plan(**request)
+    validate_compiled_build_plan(request["requirement_ir"], request["plan"], compiled)
+    return {"request": deepcopy(request), "scope": deepcopy(scope),
+            "status": compiled["status"], "authority_granted": False,
+            "scope_validated": False, "semantic_coverage_verified": False}
+
+
 SOURCES = {"RELEASE-BUILD-DOCUMENT": "BUILD_DOCUMENT_v0.1.md", "TASK-CLI-PRD": "TASK_PRD.md",
            "CSV-PROJECT-BRIEF": "CSV_BRIEF.md", "CSV-STARTER": "csv_tool.py.txt",
            "CSV-STARTER-TESTS": "test_summary.py.txt", "CSV-USER-NOTES": "USER_NOTES.md", "RUN-METHOD": "RUN_METHOD_v0.2.md"}
 
 
 def proposal(kind, *, root, bundle, inputs, program_id, runtime):
-    """Stateless proposal only. All paths, model and finite bounds are caller data.
+    """Fixed-DAG regression fixture, not an evaluation of Agent plan design.
 
-    No defaults from a historical approval and no filesystem writes. The host must
+    All paths, model and finite bounds are caller data. No defaults from a
+    historical approval and no filesystem writes. The host must
     show the result, bind reviewed documents and obtain a later runtime decision.
     """
     if kind not in {"task", "csv"}:

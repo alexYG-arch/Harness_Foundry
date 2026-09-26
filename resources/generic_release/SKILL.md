@@ -17,6 +17,12 @@ the PRD/development requirements and existing-project compatibility. Do not crea
 a Program/target or start construction before the user's actual confirmation of
 that displayed version. Background PASS and old approvals cannot replace review.
 
+Apply the policy's quality guidance: reuse Codex and Foundry capabilities; only
+generate the project's missing rules/adapters/local steps. Infer a minimal plan
+from observable behavior and delivery, not a fixed framework or DAG. Check one
+producer/consumer call's data, paths, interpreter and permissions. Preserve access
+to complete sources and global constraints; implementation choices remain free.
+
 After confirmation, read the [CLI contract](../../../docs/GENERIC_BUILD_CLI.md).
 Prepare the plan, complete source binding, public Case contracts and independent
 checkers. Show exact model/service, tools, read/write paths, attempt/time limits
@@ -29,6 +35,13 @@ algorithms, module layout and debugging methods; the controller must validate pl
 changes against the existing contract. Use read-build to recover context. Explain
 contract gaps or infrastructure failures instead of spending implementation retries
 on them. Retain failures and budgets; never rewrite unknown effects into success.
+
+After approval, prefer an early working input-to-output path, but keep the whole
+delivery contract. Check required changed mechanisms through actual behavior,
+not declarations. Keep project-specific fixes local; do not add a universal rule
+for each defect. A core/checker fault does not grant the target self-modification
+authority. Stop once agreed delivery is met; further optimization is follow-up,
+not a reason to reopen completed work or ask for per-task Hash confirmations.
 
 Independently check actual behavior and artifacts, then let the controller commit
 acceptance. Demonstrate using the generated Harness, not only its files or a plan.
