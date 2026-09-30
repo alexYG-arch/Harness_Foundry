@@ -1,0 +1,4 @@
+interface:
+  display_name: "Harness Foundry Start Author"
+  short_description: "通过 Codex Chat 生成符合 v2.8 的 Start 包"
+  default_prompt: "Use $harness-foundry-start-author to clarify my requirements and generate a v2.8-compliant Start Package candidate."

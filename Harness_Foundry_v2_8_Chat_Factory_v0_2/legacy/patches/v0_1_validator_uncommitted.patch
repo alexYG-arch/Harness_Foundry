@@ -1,0 +1,794 @@
+diff --git a/src/harness_foundry_factory/validator.py b/src/harness_foundry_factory/validator.py
+index 7648220..9e57a64 100644
+--- a/src/harness_foundry_factory/validator.py
++++ b/src/harness_foundry_factory/validator.py
+@@ -2117,6 +2117,15 @@ def _check_authoring_boundary(root: Path) -> list[dict[str, Any]]:
+                     or _authorized_linkage_tool_release_materialization(
+                         root, execution_root, executable_path, command
+                     )
++                    or _authorized_p4_build_input_lock_success_stale_runtime_blocker(
++                        root, execution_root, executable_path, command
++                    )
++                    or _authorized_p4_build_input_lock_output_directory_failure(
++                        root, execution_root, executable_path, command
++                    )
++                    or _authorized_release_pipeline_handoff_entry_preflight_failure(
++                        root, execution_root, executable_path, command
++                    )
+                     or _authorized_release_pipeline_handoff_preparation(
+                         root, execution_root, executable_path, command
+                     )
+@@ -3571,6 +3580,9 @@ def _authorized_main_p4_local_closure_completion(
+     command: Mapping[str, Any],
+     *,
+     allow_release_preparation_state: bool = False,
++    allow_release_entry_failure_state: bool = False,
++    allow_release_output_directory_failure_state: bool = False,
++    allow_release_p4_success_state: bool = False,
+ ) -> bool:
+     """Accept only the receipt-bound stdin-isolated MB-P4 successful retry."""
+ 
+@@ -3687,19 +3699,97 @@ def _authorized_main_p4_local_closure_completion(
+             "MB-P4",
+         ]
+         expected_control_state = (
+-            "RELEASE_PIPELINE_HANDOFF_PREPARED_WAITING_ENTRY_EXECUTION_AUTHORIZATION"
+-            if allow_release_preparation_state
+-            else "MAIN_P4_LOCAL_CLOSURE_PASS_WAITING_RELEASE_PIPELINE_HANDOFF_PREPARATION_AUTHORIZATION"
++            "P4_BUILD_INPUT_LOCK_PASS_BLOCKED_STALE_RUNTIME_FAILURE_BLOCKER_WAITING_REPAIR_REVERIFY_AUTHORIZATION"
++            if allow_release_p4_success_state
++            else (
++                "P4_BUILD_INPUT_LOCK_BLOCKED_OUTPUT_DIRECTORY_OWNERSHIP_MISMATCH_WAITING_REPAIR_REVERIFY_AND_RETRY_AUTHORIZATION"
++                if allow_release_output_directory_failure_state
++                else (
++                    "RELEASE_PIPELINE_HANDOFF_ENTRY_BLOCKED_OUTPUT_POLICY_MISMATCH_WAITING_REPAIR_REVERIFY_AND_RETRY_AUTHORIZATION"
++                    if allow_release_entry_failure_state
++                    else (
++                        "RELEASE_PIPELINE_HANDOFF_PREPARED_WAITING_ENTRY_EXECUTION_AUTHORIZATION"
++                        if allow_release_preparation_state
++                        else "MAIN_P4_LOCAL_CLOSURE_PASS_WAITING_RELEASE_PIPELINE_HANDOFF_PREPARATION_AUTHORIZATION"
++                    )
++                )
++            )
+         )
+         expected_blockers = (
+-            ["RELEASE_PIPELINE_HANDOFF_ENTRY_EXECUTION_AUTHORIZATION_REQUIRED"]
+-            if allow_release_preparation_state
+-            else ["RELEASE_PIPELINE_HANDOFF_PREPARATION_AUTHORIZATION_REQUIRED"]
++            [
++                "PROGRAM_DRIVER_STALE_PIPELINE_ACTION_FAILURE_BLOCKER_AFTER_SUCCESS",
++                "P4_BUILD_INPUT_LOCK_POST_SUCCESS_RUNTIME_BLOCKER_COHERENCE_REPAIR_REVERIFY_AUTHORIZATION_REQUIRED",
++            ]
++            if allow_release_p4_success_state
++            else (
++            [
++                "P4_BUILD_INPUT_LOCK_DRIVER_PRECREATED_OUTPUT_DIRECTORY_CONFLICTS_WITH_ACTION_ATOMIC_CREATE",
++                "P4_BUILD_INPUT_LOCK_RETRY_AUTHORIZATION_CONSUMED_REAUTHORIZATION_REQUIRED",
++            ]
++            if allow_release_output_directory_failure_state
++            else (
++                [
++                    "RELEASE_PIPELINE_HANDOFF_ENTRY_ATTEMPT_SCOPED_OUTPUT_TEMPLATE_POLICY_MISMATCH",
++                    "RELEASE_PIPELINE_HANDOFF_ENTRY_EXECUTION_RETRY_REAUTHORIZATION_REQUIRED",
++                ]
++                if allow_release_entry_failure_state
++                else (
++                    ["RELEASE_PIPELINE_HANDOFF_ENTRY_EXECUTION_AUTHORIZATION_REQUIRED"]
++                    if allow_release_preparation_state
++                    else ["RELEASE_PIPELINE_HANDOFF_PREPARATION_AUTHORIZATION_REQUIRED"]
++                )
++            )
++            )
+         )
+         expected_next_action = (
+-            "OBTAIN_RELEASE_PIPELINE_HANDOFF_ENTRY_EXECUTION_AUTHORIZATION"
+-            if allow_release_preparation_state
+-            else "OBTAIN_RELEASE_PIPELINE_HANDOFF_PREPARATION_AUTHORIZATION"
++            "OBTAIN_P4_BUILD_INPUT_LOCK_POST_SUCCESS_RUNTIME_BLOCKER_COHERENCE_REPAIR_REVERIFY_AUTHORIZATION"
++            if allow_release_p4_success_state
++            else (
++                "OBTAIN_P4_BUILD_INPUT_LOCK_OUTPUT_DIRECTORY_OWNERSHIP_REPAIR_REVERIFY_AND_RETRY_AUTHORIZATION"
++                if allow_release_output_directory_failure_state
++                else (
++                    "OBTAIN_RELEASE_PIPELINE_HANDOFF_ENTRY_PIPELINE_ACTION_OUTPUT_POLICY_REPAIR_REVERIFY_AND_RETRY_AUTHORIZATION"
++                    if allow_release_entry_failure_state
++                    else (
++                        "OBTAIN_RELEASE_PIPELINE_HANDOFF_ENTRY_EXECUTION_AUTHORIZATION"
++                        if allow_release_preparation_state
++                        else "OBTAIN_RELEASE_PIPELINE_HANDOFF_PREPARATION_AUTHORIZATION"
++                    )
++                )
++            )
++        )
++        expected_runtime_revision = (
++            50
++            if allow_release_p4_success_state
++            else (48 if allow_release_output_directory_failure_state else 46)
++        )
++        expected_runtime_status = (
++            "STOPPED_AFTER_AUTHORIZED_SCOPE_CONSUMED"
++            if allow_release_p4_success_state
++            else "STOPPED_AFTER_AUTHORIZED_SCOPE_CONSUMED"
++            if not allow_release_output_directory_failure_state
++            else "BLOCKED_PIPELINE_ACTION_VALIDATION_FAIL"
++        )
++        expected_runtime_active_dag_node = (
++            "RELEASE_PIPELINE_HANDOFF"
++            if allow_release_output_directory_failure_state
++            else None
++        )
++        expected_state_active_dag_node = (
++            "RELEASE_PIPELINE_HANDOFF"
++            if (
++                allow_release_p4_success_state
++                or allow_release_output_directory_failure_state
++            )
++            else None
++        )
++        expected_runtime_blockers = (
++            ["PIPELINE_ACTION_RESULT_OR_INDEPENDENT_VALIDATION_FAILED"]
++            if (
++                allow_release_p4_success_state
++                or allow_release_output_directory_failure_state
++            )
++            else []
+         )
+ 
+         return bool(
+@@ -3788,26 +3878,38 @@ def _authorized_main_p4_local_closure_completion(
+             and promotion.get("release_pipeline_handoff_started") is False
+             and bound(promotion, "result_ref", "result_sha256")
+             and runtime_hash == _json_hash(runtime_material)
+-            and runtime.get("state_revision") == 46
+-            and runtime.get("driver_status")
+-            == "STOPPED_AFTER_AUTHORIZED_SCOPE_CONSUMED"
++            and runtime.get("state_revision") == expected_runtime_revision
++            and runtime.get("driver_status") == expected_runtime_status
+             and runtime.get("completed_workpack_ids") == expected_workpacks
+             and runtime.get("completed_workpack_ids", []).count("MB-P4") == 1
+             and runtime.get("authorization_consumptions", {}).get(
+                 "AUTH-VSCDSL-MAIN-P4-STDIN-ISOLATED-RETRY-V03-001"
+             )
+             == 1
+-            and runtime.get("active_dag_node") is None
++            and runtime.get("active_dag_node") == expected_runtime_active_dag_node
+             and runtime.get("active_workpack_id") is None
++            and runtime.get("open_blocker_codes") == expected_runtime_blockers
++            and (
++                not allow_release_p4_success_state
++                or runtime.get("completed_pipeline_action_ids", []).count(
++                    "P4_BUILD_INPUT_LOCK"
++                )
++                == 1
++            )
+             and runtime.get("side_effects_allowed") is False
+             and state.get("state") == expected_control_state
+             and state.get("highest_completed_external_gate")
+-            == "MAIN_P4_LOCAL_CLOSURE_PASS"
++            == (
++                "P4_BUILD_INPUT_LOCK_PASS"
++                if allow_release_p4_success_state
++                else "MAIN_P4_LOCAL_CLOSURE_PASS"
++            )
+             and state.get("open_blocker_codes") == expected_blockers
+             and state.get("next_eligible_action") == expected_next_action
+-            and state.get("active_dag_node") is None
++            and state.get("active_dag_node") == expected_state_active_dag_node
+             and state.get("active_workpack_id") is None
+-            and state.get("release_pipeline_handoff_started") is False
++            and state.get("release_pipeline_handoff_started")
++            is allow_release_p4_success_state
+             and state.get("install_started") is False
+             and repository_hash(repository) == expected_repository
+             and not (repository / ".git").exists()
+@@ -3825,6 +3927,610 @@ def _authorized_main_p4_local_closure_completion(
+         return False
+ 
+ 
++def _authorized_p4_build_input_lock_success_stale_runtime_blocker(
++    candidate_root: Path,
++    execution_root: Path,
++    executable_path: Path,
++    command: Mapping[str, Any],
++) -> bool:
++    """Accept only the receipt-bound P4 lock success stopped before PACK_DRAFT."""
++
++    if not _authorized_main_p4_local_closure_completion(
++        candidate_root,
++        execution_root,
++        executable_path,
++        command,
++        allow_release_p4_success_state=True,
++    ):
++        return False
++    try:
++        build_root = execution_root.parent
++
++        def resolve_ref(ref: Any) -> Path:
++            path = Path(str(ref))
++            return (path if path.is_absolute() else build_root / path).resolve()
++
++        def read_json(path: Path) -> Mapping[str, Any]:
++            value = json.loads(path.read_text(encoding="utf-8"))
++            if not isinstance(value, dict):
++                raise TypeError(f"expected object: {path}")
++            return value
++
++        def bound(document: Mapping[str, Any], ref_key: str, hash_key: str) -> bool:
++            path = resolve_ref(document.get(ref_key))
++            return bool(path.is_file() and document.get(hash_key) == _file_hash(path))
++
++        control = execution_root / "control_plane"
++        evidence = execution_root / "evidence"
++        planned = execution_root / "planned_executors"
++        output_dir = evidence / "release_pipeline/P4_BUILD_INPUT_LOCK"
++        manifest_path = planned / "manifests/P4_BUILD_INPUT_LOCK.resolved-action.json"
++        action_path = planned / "bin/materialize_p4_build_input_lock.py"
++        schema_path = planned / "schemas/P4_BUILD_INPUT_LOCK_OUTPUT.schema.json"
++        contract_path = planned / "contracts/P4_BUILD_INPUT_LOCK_CONTRACT.json"
++        isolation_path = evidence / (
++            "release-pipeline-handoff-entry-output-directory-repair-reverification/"
++            "FAILED_ATTEMPT_EVIDENCE_ISOLATION_RECEIPT.json"
++        )
++        repair_authorization_path = control / (
++            "P4_BUILD_INPUT_LOCK_OUTPUT_DIRECTORY_OWNERSHIP_"
++            "REPAIR_REVERIFY_AND_RETRY_AUTHORIZATION.json"
++        )
++        repair_receipt_path = control / (
++            "P4_BUILD_INPUT_LOCK_OUTPUT_DIRECTORY_OWNERSHIP_"
++            "REPAIR_REVERIFICATION_RECEIPT.json"
++        )
++        retry_authorization_path = control / (
++            "P4_BUILD_INPUT_LOCK_OUTPUT_DIRECTORY_REPAIRED_RETRY_AUTHORIZATION.json"
++        )
++        issuance_path = control / (
++            "P4_BUILD_INPUT_LOCK_OUTPUT_DIRECTORY_REPAIRED_RETRY_"
++            "AUTHORIZATION_ISSUANCE_RECEIPT.json"
++        )
++        independent_path = evidence / (
++            "release-pipeline-handoff-entry-output-directory-repair-reverification/"
++            "POST_RETRY_INDEPENDENT_VALIDATION_RECEIPT.json"
++        )
++        completion_path = control / (
++            "P4_BUILD_INPUT_LOCK_OUTPUT_DIRECTORY_REPAIRED_RETRY_"
++            "COMPLETION_RECEIPT.json"
++        )
++        next_draft_path = control / (
++            "P4_BUILD_INPUT_LOCK_POST_SUCCESS_RUNTIME_BLOCKER_COHERENCE_"
++            "REPAIR_REVERIFY_AUTHORIZATION_DRAFT.json"
++        )
++        runtime_path = control / "runtime/PROGRAM_DRIVER_RUNTIME_STATE.json"
++        transition_path = control / "runtime/PHASE_TRANSITION_LEDGER.jsonl"
++        promotion_path = control / "runtime/PROMOTION_LEDGER.jsonl"
++        state_path = control / "CONTROL_PLANE_STATE.json"
++        lock_path = output_dir / "P4_BUILD_INPUT_LOCK.json"
++        action_result_path = output_dir / "P4_BUILD_INPUT_LOCK.action-result.json"
++
++        isolation = read_json(isolation_path)
++        repair_authorization = read_json(repair_authorization_path)
++        repair_receipt = read_json(repair_receipt_path)
++        retry_authorization = read_json(retry_authorization_path)
++        issuance = read_json(issuance_path)
++        independent = read_json(independent_path)
++        completion = read_json(completion_path)
++        next_draft = read_json(next_draft_path)
++        manifest = read_json(manifest_path)
++        runtime = read_json(runtime_path)
++        state = read_json(state_path)
++        lock = read_json(lock_path)
++        action_result = read_json(action_result_path)
++        retry_scope = retry_authorization.get("scope", {})
++        next_scope = next_draft.get("scope", {})
++        active_attempt = runtime.get("active_attempt", {})
++        state_entry = state.get("release_pipeline_handoff_entry_execution", {})
++        output_files = (
++            {path.name for path in output_dir.iterdir() if path.is_file()}
++            if output_dir.is_dir()
++            else set()
++        )
++
++        return bool(
++            repair_authorization.get("status")
++            == "GRANTED_REPAIR_REVERIFY_AND_SINGLE_RETRY_PREPARATION"
++            and repair_authorization.get("driver_source_change_authorized") is False
++            and repair_authorization.get("driver_transitions_during_repair") == 0
++            and repair_receipt.get("status")
++            == "PASS_REPAIR_REVERIFIED_READY_TO_ISSUE_ONE_TIME_HASH_BOUND_P4_BUILD_INPUT_LOCK_OUTPUT_DIRECTORY_REPAIRED_RETRY_AUTHORIZATION"
++            and isolation.get("status")
++            == "PASS_FAILED_ATTEMPT_EVIDENCE_ISOLATED_HASH_BOUND_BEFORE_CLEANUP"
++            and bound(isolation, "isolated_stdout_ref", "isolated_stdout_sha256")
++            and bound(isolation, "isolated_stderr_ref", "isolated_stderr_sha256")
++            and retry_authorization.get("status") == "GRANTED"
++            and retry_authorization.get("authorization_id")
++            == "AUTH-VSCDSL-P4-BUILD-INPUT-LOCK-OUTPUT-DIRECTORY-REPAIRED-RETRY-V03-001"
++            and retry_authorization.get("authorization_scope_sha256")
++            == _json_hash(retry_scope)
++            and retry_scope.get("pipeline_action_ids") == ["P4_BUILD_INPUT_LOCK"]
++            and retry_scope.get("workpack_ids") == []
++            and retry_authorization.get("max_transitions") == 1
++            and retry_authorization.get("granted_transitions") == 1
++            and retry_authorization.get("consumption_policy", {}).get(
++                "exact_pipeline_action_order"
++            )
++            == ["P4_BUILD_INPUT_LOCK"]
++            and retry_authorization.get("consumption_policy", {}).get(
++                "stop_before_next_release_step"
++            )
++            == "PACK_DRAFT"
++            and issuance.get("status")
++            == "PASS_ONE_TIME_HASH_BOUND_P4_BUILD_INPUT_LOCK_OUTPUT_DIRECTORY_REPAIRED_RETRY_AUTHORIZATION_ISSUED"
++            and issuance.get("authorization_sha256")
++            == _file_hash(retry_authorization_path)
++            and _file_hash(manifest_path)
++            == "5d9dea22d9361f5dea8ecfcc2f8115691bc7ce07acce9cf92a8bd939b38b3ca4"
++            and _file_hash(action_path)
++            == "e83f10bb1f806e2fa6717513dad23b223dcabae4e39a477c1190795a7cb1e581"
++            and _file_hash(schema_path)
++            == "5db7343bcaefe0a314e5e9255cd3b0e98e02266032d61ca3bc0731664505f404"
++            and _file_hash(contract_path)
++            == "efc8e8d651de342f3731a04458eb57f82293703632e872817a24456f762f16aa"
++            and manifest.get("action_script_sha256") == _file_hash(action_path)
++            and output_files
++            == {
++                "P4_BUILD_INPUT_LOCK.json",
++                "P4_BUILD_INPUT_LOCK.action-result.json",
++                "P4_BUILD_INPUT_LOCK.stdout",
++                "P4_BUILD_INPUT_LOCK.stderr",
++            }
++            and _file_hash(lock_path)
++            == "82bf4b60321543d463cca58865b5dea8a1e3b87e2f2eb0c1f3bbbef5154bde01"
++            and _file_hash(action_result_path)
++            == "ced6851924f13da1751d28552920567877bea8a12df0b4396ba4e7cf21582f58"
++            and lock.get("status") == "P4_BUILD_INPUT_LOCK_VALID"
++            and action_result.get("status") == "PASS"
++            and len(action_result.get("checks", [])) == 10
++            and all(
++                item.get("status") == "PASS"
++                for item in action_result.get("checks", [])
++            )
++            and independent.get("status")
++            == "PASS_P4_BUILD_INPUT_LOCK_VALID_STOPPED_BEFORE_PACK_DRAFT_STALE_RUNTIME_BLOCKER_REPAIR_REQUIRED"
++            and independent.get("authorization_consumption_count") == 1
++            and len(independent.get("checks", [])) == 12
++            and all(
++                item.get("status") == "PASS"
++                for item in independent.get("checks", [])
++            )
++            and completion.get("status")
++            == "P4_BUILD_INPUT_LOCK_COMPLETE_STOPPED_BEFORE_PACK_DRAFT_RUNTIME_BLOCKER_REPAIR_REQUIRED"
++            and completion.get("attempt_id")
++            == "ATTEMPT-F3D5BA4086584164A1B4B373A9D9860E"
++            and completion.get("authorization_transitions_consumed") == 1
++            and completion.get("driver_transition_count") == 2
++            and completion.get("p4_build_input_lock_completed") is True
++            and completion.get("promotion_created") is True
++            and completion.get("runtime_stale_blocker_present") is True
++            and completion.get("pack_draft_started") is False
++            and bound(completion, "authorization_ref", "authorization_sha256")
++            and bound(completion, "lock_ref", "lock_sha256")
++            and bound(completion, "action_result_ref", "action_result_sha256")
++            and bound(
++                completion,
++                "independent_validation_ref",
++                "independent_validation_sha256",
++            )
++            and runtime.get("state_revision") == 50
++            and active_attempt.get("attempt_id")
++            == "ATTEMPT-F3D5BA4086584164A1B4B373A9D9860E"
++            and active_attempt.get("status") == "VALIDATED_PASS"
++            and runtime.get("authorization_consumptions", {}).get(
++                retry_authorization.get("authorization_id")
++            )
++            == 1
++            and runtime.get("open_blocker_codes")
++            == ["PIPELINE_ACTION_RESULT_OR_INDEPENDENT_VALIDATION_FAILED"]
++            and len(transition_path.read_text(encoding="utf-8").splitlines()) == 50
++            and len(promotion_path.read_text(encoding="utf-8").splitlines()) == 18
++            and state.get("projects", {}).get("MAIN_HARNESS_BUILD")
++            == "P4_BUILD_INPUT_LOCK_PASS_COMPLETE_STOPPED_BEFORE_PACK_DRAFT_RUNTIME_BLOCKER_REPAIR_REQUIRED"
++            and state_entry.get("status")
++            == "PASS_P4_BUILD_INPUT_LOCK_VALID_STOPPED_BEFORE_PACK_DRAFT_RUNTIME_BLOCKER_REPAIR_REQUIRED"
++            and state_entry.get("pack_draft_started") is False
++            and next_draft.get("status") == "DRAFT_READY_NOT_GRANTED"
++            and next_draft.get("grantable") is False
++            and next_draft.get("execution_authorized") is False
++            and next_draft.get("driver_execution_authorized") is False
++            and next_draft.get("authorization_scope_sha256") == _json_hash(next_scope)
++            and next_draft.get("max_driver_transitions") == 0
++            and next_draft.get("granted_driver_transitions") == 0
++            and next_draft.get("repair_contract", {}).get(
++                "p4_build_input_lock_rerun_allowed"
++            )
++            is False
++            and not (evidence / "release_pipeline/PACK_DRAFT").exists()
++            and not (evidence / "engineering_dag/RELEASE_PIPELINE_HANDOFF").exists()
++            and not (execution_root / "planned_runtime").exists()
++        )
++    except (
++        KeyError,
++        OSError,
++        UnicodeError,
++        json.JSONDecodeError,
++        TypeError,
++        ValueError,
++    ):
++        return False
++
++
++def _authorized_p4_build_input_lock_output_directory_failure(
++    candidate_root: Path,
++    execution_root: Path,
++    executable_path: Path,
++    command: Mapping[str, Any],
++) -> bool:
++    """Accept only the one-time P4 lock retry's output-directory fail-stop."""
++
++    if not _authorized_main_p4_local_closure_completion(
++        candidate_root,
++        execution_root,
++        executable_path,
++        command,
++        allow_release_output_directory_failure_state=True,
++    ):
++        return False
++    try:
++        build_root = execution_root.parent
++
++        def resolve_ref(ref: Any) -> Path:
++            path = Path(str(ref))
++            return (path if path.is_absolute() else build_root / path).resolve()
++
++        def read_json(path: Path) -> Mapping[str, Any]:
++            value = json.loads(path.read_text(encoding="utf-8"))
++            if not isinstance(value, dict):
++                raise TypeError(f"expected object: {path}")
++            return value
++
++        def bound(document: Mapping[str, Any], ref_key: str, hash_key: str) -> bool:
++            path = resolve_ref(document.get(ref_key))
++            return bool(path.is_file() and document.get(hash_key) == _file_hash(path))
++
++        control = execution_root / "control_plane"
++        evidence = execution_root / "evidence"
++        output_dir = evidence / "release_pipeline/P4_BUILD_INPUT_LOCK"
++        manifest_path = execution_root / (
++            "planned_executors/manifests/P4_BUILD_INPUT_LOCK.resolved-action.json"
++        )
++        repair_authorization_path = control / (
++            "RELEASE_PIPELINE_HANDOFF_ENTRY_PIPELINE_ACTION_OUTPUT_POLICY_"
++            "REPAIR_REVERIFY_AND_RETRY_AUTHORIZATION.json"
++        )
++        repair_receipt_path = control / (
++            "RELEASE_PIPELINE_HANDOFF_ENTRY_OUTPUT_POLICY_REPAIR_"
++            "REVERIFICATION_RECEIPT.json"
++        )
++        retry_authorization_path = control / (
++            "P4_BUILD_INPUT_LOCK_OUTPUT_POLICY_REPAIRED_RETRY_AUTHORIZATION.json"
++        )
++        issuance_path = control / (
++            "P4_BUILD_INPUT_LOCK_OUTPUT_POLICY_REPAIRED_RETRY_"
++            "AUTHORIZATION_ISSUANCE_RECEIPT.json"
++        )
++        failure_path = control / (
++            "P4_BUILD_INPUT_LOCK_OUTPUT_POLICY_REPAIRED_RETRY_FAILURE_RECEIPT.json"
++        )
++        independent_path = evidence / (
++            "release-pipeline-handoff-entry-output-directory-failure/"
++            "INDEPENDENT_OUTPUT_DIRECTORY_OWNERSHIP_FAILURE_VERIFICATION_RECEIPT.json"
++        )
++        next_draft_path = control / (
++            "P4_BUILD_INPUT_LOCK_OUTPUT_DIRECTORY_OWNERSHIP_"
++            "REPAIR_REVERIFY_AND_RETRY_AUTHORIZATION_DRAFT.json"
++        )
++        runtime_path = control / "runtime/PROGRAM_DRIVER_RUNTIME_STATE.json"
++        transition_path = control / "runtime/PHASE_TRANSITION_LEDGER.jsonl"
++        promotion_path = control / "runtime/PROMOTION_LEDGER.jsonl"
++        state_path = control / "CONTROL_PLANE_STATE.json"
++
++        manifest = read_json(manifest_path)
++        repair_authorization = read_json(repair_authorization_path)
++        repair_receipt = read_json(repair_receipt_path)
++        retry_authorization = read_json(retry_authorization_path)
++        issuance = read_json(issuance_path)
++        failure = read_json(failure_path)
++        independent = read_json(independent_path)
++        next_draft = read_json(next_draft_path)
++        runtime = read_json(runtime_path)
++        state = read_json(state_path)
++        retry_scope = retry_authorization.get("scope", {})
++        next_scope = next_draft.get("scope", {})
++        active_attempt = runtime.get("active_attempt", {})
++        state_entry = state.get("release_pipeline_handoff_entry_execution", {})
++        output_files = (
++            {path.name for path in output_dir.iterdir() if path.is_file()}
++            if output_dir.is_dir()
++            else set()
++        )
++
++        return bool(
++            repair_authorization.get("status")
++            == "GRANTED_REPAIR_REVERIFY_AND_SINGLE_RETRY_PREPARATION"
++            and repair_authorization.get("driver_transitions_during_repair") == 0
++            and repair_receipt.get("status")
++            == "PASS_REPAIR_REVERIFIED_READY_TO_ISSUE_ONE_TIME_HASH_BOUND_P4_BUILD_INPUT_LOCK_RETRY_AUTHORIZATION"
++            and retry_authorization.get("status") == "GRANTED"
++            and retry_authorization.get("authorization_scope_sha256")
++            == _json_hash(retry_scope)
++            and retry_scope.get("pipeline_action_ids") == ["P4_BUILD_INPUT_LOCK"]
++            and retry_scope.get("workpack_ids") == []
++            and retry_authorization.get("max_transitions") == 1
++            and retry_authorization.get("granted_transitions") == 1
++            and retry_authorization.get("consumption_policy", {}).get(
++                "require_fixed_output_paths"
++            )
++            is True
++            and retry_authorization.get("consumption_policy", {}).get(
++                "require_attempt_scoped_output_paths"
++            )
++            is None
++            and issuance.get("status")
++            == "PASS_ONE_TIME_HASH_BOUND_P4_BUILD_INPUT_LOCK_RETRY_AUTHORIZATION_ISSUED"
++            and issuance.get("authorization_sha256")
++            == _file_hash(retry_authorization_path)
++            and manifest.get("pipeline_action_id") == "P4_BUILD_INPUT_LOCK"
++            and _file_hash(manifest_path)
++            == "0864e49cc5b9c3546428aef2adf97b8a3d684b7c8cea35e43ff7afcbb97c3b9a"
++            and manifest.get("result_output_abs")
++            == str(output_dir / "P4_BUILD_INPUT_LOCK.action-result.json")
++            and manifest.get("stdout_abs")
++            == str(output_dir / "P4_BUILD_INPUT_LOCK.stdout")
++            and manifest.get("stderr_abs")
++            == str(output_dir / "P4_BUILD_INPUT_LOCK.stderr")
++            and failure.get("status")
++            == "FAIL_STOPPED_OUTPUT_DIRECTORY_OWNERSHIP_MISMATCH_ONE_RETRY_CONSUMED_REAUTHORIZATION_REQUIRED"
++            and failure.get("attempt_id")
++            == "ATTEMPT-142300F1D149443599FFEEBBA07B6B07"
++            and failure.get("authorization_transitions_consumed") == 1
++            and failure.get("driver_transition_count") == 2
++            and failure.get("command_exit_code") == 1
++            and failure.get("independent_validation_exit_code") == 1
++            and failure.get("lock_output_exists") is False
++            and failure.get("result_output_exists") is False
++            and failure.get("p4_build_input_lock_completed") is False
++            and failure.get("pack_draft_started") is False
++            and failure.get("certification_started") is False
++            and failure.get("git_operation_started") is False
++            and failure.get("install_started") is False
++            and bound(
++                failure,
++                "independent_failure_verification_ref",
++                "independent_failure_verification_sha256",
++            )
++            and independent.get("status")
++            == "FAIL_CONFIRMED_OUTPUT_DIRECTORY_OWNERSHIP_MISMATCH_ONE_RETRY_CONSUMED_STOPPED"
++            and independent.get("authorization_consumption_count") == 1
++            and independent.get("failure_cause", {}).get("action_error")
++            == "FileExistsError"
++            and len(independent.get("checks", [])) == 10
++            and all(
++                check.get("status") == "PASS"
++                for check in independent.get("checks", [])
++            )
++            and bound(independent, "manifest_ref", "manifest_sha256")
++            and bound(independent, "stdout_ref", "stdout_sha256")
++            and bound(independent, "stderr_ref", "stderr_sha256")
++            and next_draft.get("status") == "DRAFT_READY_NOT_GRANTED"
++            and next_draft.get("grantable") is False
++            and next_draft.get("execution_authorized") is False
++            and next_draft.get("driver_execution_authorized") is False
++            and next_draft.get("max_driver_transitions") == 0
++            and next_draft.get("granted_driver_transitions") == 0
++            and next_draft.get("proposed_max_driver_transitions") == 1
++            and next_draft.get("authorization_scope_sha256")
++            == _json_hash(next_scope)
++            and bound(
++                next_draft,
++                "based_on_failure_receipt_ref",
++                "based_on_failure_receipt_sha256",
++            )
++            and bound(
++                next_draft,
++                "based_on_retry_authorization_ref",
++                "based_on_retry_authorization_sha256",
++            )
++            and runtime.get("state_revision") == 48
++            and runtime.get("state_hash")
++            == "60fc3fc9ad1eaf91d34f9d91d7fd5651a53917b19bf4738dc52668faf1979a4a"
++            and _file_hash(runtime_path)
++            == "d98d56478474705c92fa12dacef6a90e234d817d0af97d8f2407f4debff04830"
++            and runtime.get("authorization_consumptions", {}).get(
++                retry_authorization.get("authorization_id")
++            )
++            == 1
++            and active_attempt.get("attempt_id")
++            == "ATTEMPT-142300F1D149443599FFEEBBA07B6B07"
++            and active_attempt.get("status") == "VALIDATED_FAIL"
++            and active_attempt.get("command_exit_code") == 1
++            and active_attempt.get("independent_validation_exit_code") == 1
++            and len(transition_path.read_text(encoding="utf-8").splitlines()) == 48
++            and _file_hash(transition_path)
++            == "5e18f20a2dd3c8a904e58086c109961c131d1721ea4e360e359ee5f5e9fc0fff"
++            and len(promotion_path.read_text(encoding="utf-8").splitlines()) == 17
++            and _file_hash(promotion_path)
++            == "9611ac6f3aa2711e38dbe194a336a2b0c35f0f92eb017b8f9693a61ae64a78b5"
++            and output_files
++            == {"P4_BUILD_INPUT_LOCK.stdout", "P4_BUILD_INPUT_LOCK.stderr"}
++            and not (output_dir / "P4_BUILD_INPUT_LOCK.json").exists()
++            and not (output_dir / "P4_BUILD_INPUT_LOCK.action-result.json").exists()
++            and state.get("projects", {}).get("MAIN_HARNESS_BUILD")
++            == "P4_BUILD_INPUT_LOCK_BLOCKED_OUTPUT_DIRECTORY_OWNERSHIP_MISMATCH_ONE_RETRY_CONSUMED"
++            and state_entry.get("status")
++            == "FAIL_STOPPED_OUTPUT_DIRECTORY_OWNERSHIP_MISMATCH_ONE_RETRY_CONSUMED_REAUTHORIZATION_REQUIRED"
++            and state_entry.get("p4_build_input_lock_started") is True
++            and state_entry.get("p4_build_input_lock_lock_exists") is False
++            and state_entry.get("p4_build_input_lock_result_exists") is False
++            and state_entry.get("pack_draft_started") is False
++            and bound(state_entry, "failure_receipt_ref", "failure_receipt_sha256")
++            and not (evidence / "engineering_dag/RELEASE_PIPELINE_HANDOFF").exists()
++            and not (execution_root / "planned_runtime").exists()
++        )
++    except (
++        KeyError,
++        OSError,
++        UnicodeError,
++        json.JSONDecodeError,
++        TypeError,
++        ValueError,
++    ):
++        return False
++
++
++def _authorized_release_pipeline_handoff_entry_preflight_failure(
++    candidate_root: Path,
++    execution_root: Path,
++    executable_path: Path,
++    command: Mapping[str, Any],
++) -> bool:
++    """Accept only the zero-write entry preflight failure and blocked repair draft."""
++
++    if not _authorized_main_p4_local_closure_completion(
++        candidate_root,
++        execution_root,
++        executable_path,
++        command,
++        allow_release_entry_failure_state=True,
++    ):
++        return False
++    try:
++        build_root = execution_root.parent
++
++        def resolve_ref(ref: Any) -> Path:
++            path = Path(str(ref))
++            return (path if path.is_absolute() else build_root / path).resolve()
++
++        def read_json(path: Path) -> Mapping[str, Any]:
++            value = json.loads(path.read_text(encoding="utf-8"))
++            if not isinstance(value, dict):
++                raise TypeError(f"expected object: {path}")
++            return value
++
++        def bound(document: Mapping[str, Any], ref_key: str, hash_key: str) -> bool:
++            path = resolve_ref(document.get(ref_key))
++            return bool(path.is_file() and document.get(hash_key) == _file_hash(path))
++
++        control = execution_root / "control_plane"
++        evidence = execution_root / "evidence"
++        authorization_path = (
++            control / "RELEASE_PIPELINE_HANDOFF_ENTRY_EXECUTION_AUTHORIZATION.json"
++        )
++        manifest_path = execution_root / (
++            "planned_executors/manifests/P4_BUILD_INPUT_LOCK.resolved-action.json"
++        )
++        independent_path = evidence / (
++            "release-pipeline-handoff-entry-failure/"
++            "INDEPENDENT_PREFLIGHT_FAILURE_VERIFICATION_RECEIPT.json"
++        )
++        failure_path = control / (
++            "RELEASE_PIPELINE_HANDOFF_ENTRY_EXECUTION_PREFLIGHT_FAILURE_RECEIPT.json"
++        )
++        repair_draft_path = control / (
++            "RELEASE_PIPELINE_HANDOFF_ENTRY_PIPELINE_ACTION_OUTPUT_POLICY_"
++            "REPAIR_REVERIFY_AND_RETRY_AUTHORIZATION_DRAFT.json"
++        )
++        runtime_path = control / "runtime/PROGRAM_DRIVER_RUNTIME_STATE.json"
++        transition_path = control / "runtime/PHASE_TRANSITION_LEDGER.jsonl"
++        promotion_path = control / "runtime/PROMOTION_LEDGER.jsonl"
++        state_path = control / "CONTROL_PLANE_STATE.json"
++
++        authorization = read_json(authorization_path)
++        manifest = read_json(manifest_path)
++        independent = read_json(independent_path)
++        failure = read_json(failure_path)
++        repair_draft = read_json(repair_draft_path)
++        runtime = read_json(runtime_path)
++        state = read_json(state_path)
++        scope = authorization.get("scope", {})
++        repair_scope = repair_draft.get("scope", {})
++        state_entry = state.get("release_pipeline_handoff_entry_execution", {})
++
++        return bool(
++            authorization.get("status") == "GRANTED"
++            and authorization.get("authorization_scope_sha256") == _json_hash(scope)
++            and scope.get("pipeline_action_ids") == ["P4_BUILD_INPUT_LOCK"]
++            and authorization.get("consumption_policy", {}).get(
++                "require_attempt_scoped_output_paths"
++            )
++            is True
++            and manifest.get("result_output_template_abs") is None
++            and manifest.get("stdout_template_abs") is None
++            and manifest.get("stderr_template_abs") is None
++            and "--output-last-message" not in manifest.get("argv", [])
++            and independent.get("status")
++            == "FAIL_CONFIRMED_PREFLIGHT_ZERO_WRITE_ZERO_TRANSITION_STOPPED"
++            and independent.get("driver_error")
++            == "ATTEMPT_SCOPED_OUTPUT_TEMPLATE_INVALID"
++            and independent.get("driver_response", {}).get("writes_performed")
++            is False
++            and independent.get("driver_transition_count") == 0
++            and independent.get("runtime_authorization_consumption_count") == 0
++            and failure.get("status")
++            == "FAIL_STOPPED_PREFLIGHT_ZERO_WRITE_ZERO_TRANSITION_REAUTHORIZATION_REQUIRED"
++            and failure.get("authorization_status_after_failure")
++            == "PRECHECK_FAILED_UNCONSUMED_SUPERSEDED_NOT_REUSABLE"
++            and failure.get("residual_transition_budget_reusable") is False
++            and failure.get("p4_build_input_lock_started") is False
++            and bound(
++                failure,
++                "independent_failure_verification_ref",
++                "independent_failure_verification_sha256",
++            )
++            and repair_draft.get("status") == "DRAFT_READY_NOT_GRANTED"
++            and repair_draft.get("grantable") is False
++            and repair_draft.get("execution_authorized") is False
++            and repair_draft.get("driver_execution_authorized") is False
++            and repair_draft.get("authorization_scope_sha256")
++            == _json_hash(repair_scope)
++            and repair_draft.get("failed_authorization_residual_budget_reusable")
++            is False
++            and repair_draft.get("proposed_max_driver_transitions") == 1
++            and bound(
++                repair_draft,
++                "based_on_failed_authorization_ref",
++                "based_on_failed_authorization_sha256",
++            )
++            and bound(
++                repair_draft,
++                "based_on_failure_receipt_ref",
++                "based_on_failure_receipt_sha256",
++            )
++            and runtime.get("state_revision") == 46
++            and runtime.get("state_hash")
++            == "74b87f76953c11e555b5f4ed07f1f7f2728f525a56bc4859fa5b65c7afaf7ff2"
++            and _file_hash(runtime_path)
++            == "f315e2b25630ed6e9f2c92554e4553cc353597be11c8fe6385f47e9275bb352e"
++            and runtime.get("authorization_consumptions", {}).get(
++                "AUTH-VSCDSL-RELEASE-PIPELINE-HANDOFF-ENTRY-EXECUTION-V03-001"
++            )
++            is None
++            and len(transition_path.read_text(encoding="utf-8").splitlines()) == 46
++            and len(promotion_path.read_text(encoding="utf-8").splitlines()) == 17
++            and state.get("projects", {}).get("MAIN_HARNESS_BUILD")
++            == "RELEASE_PIPELINE_HANDOFF_ENTRY_BLOCKED_PREFLIGHT_ZERO_WRITE_ZERO_TRANSITION"
++            and state.get("workspace_status")
++            == "RELEASE_PIPELINE_HANDOFF_ENTRY_PREFLIGHT_FAILED_ZERO_WRITE_ZERO_TRANSITION"
++            and state_entry.get("status")
++            == "FAIL_STOPPED_PREFLIGHT_ZERO_WRITE_ZERO_TRANSITION_REAUTHORIZATION_REQUIRED"
++            and bound(state_entry, "failure_receipt_ref", "failure_receipt_sha256")
++            and not (evidence / "release_pipeline/P4_BUILD_INPUT_LOCK").exists()
++            and not (evidence / "engineering_dag/RELEASE_PIPELINE_HANDOFF").exists()
++            and not (execution_root / "planned_runtime").exists()
++        )
++    except (
++        KeyError,
++        OSError,
++        UnicodeError,
++        json.JSONDecodeError,
++        TypeError,
++        ValueError,
++    ):
++        return False
++
++
+ def _authorized_release_pipeline_handoff_preparation(
+     candidate_root: Path,
+     execution_root: Path,

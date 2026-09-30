@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://harness-foundry.local/schemas/automation-resolver-bundle-1.0.json",
+  "title": "Workpack Automation Resolver Bundle",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "resolver_kind",
+    "program_id",
+    "epoch_id",
+    "candidate_content_sha256",
+    "node_ids",
+    "default_profile_id",
+    "profiles"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "resolver_kind": {
+      "const": "WORKPACK_AUTOMATION_RESOLVER_BUNDLE"
+    },
+    "program_id": {"type": "string", "minLength": 1},
+    "epoch_id": {"type": "string", "minLength": 1},
+    "candidate_content_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "node_ids": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "default_profile_id": {"type": "string", "minLength": 1},
+    "node_profile_bindings": {
+      "type": "object",
+      "additionalProperties": {"type": "string", "minLength": 1}
+    },
+    "workpack_profile_bindings": {
+      "type": "object",
+      "additionalProperties": {"type": "string", "minLength": 1}
+    },
+    "profiles": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["commands"],
+        "properties": {
+          "commands": {
+            "type": "array",
+            "minItems": 3,
+            "items": {"type": "object"}
+          }
+        }
+      }
+    }
+  }
+}
