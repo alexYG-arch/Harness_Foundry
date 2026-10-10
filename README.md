@@ -13,7 +13,7 @@
 
 产品版本 **0.2.0**，协议版本 **2.9**，采用 [MIT](LICENSE) 许可。
 
-## 本地源码升级 · 2026-10-10
+## 开发分支源码升级 · 2026-10-10
 
 新增前置验收检查、只读环境预检、正式输入交接、文件效果验收和修复/进度上下文。
 沿用同一控制器与范围内自动推进，不增设逐任务人工 Review；详见
@@ -21,7 +21,9 @@
 已完成限定真实模型评测及定向修复：Ledger 小样本内中位耗时降低 19.0%，Config 为 1.2%；
 原 Task 失败保留，后续两个隔离 Task 样本业务通过，不据此宣称普遍提速或完整稳定性。
 结果、源码验证及限制见[升级评测与交付摘要](docs/FOUNDRY_UPGRADE_EVALUATION_2026_10_10.md)。
-本轮升级尚未推送或发布，未应用到 AICut，也未进入下面已发布的 v0.2.0 下载包。
+本轮升级已推送至 [开发分支 `codex/foundry-upgrade-eval-20261010`](https://github.com/alexYG-arch/Harness_Foundry/tree/codex/foundry-upgrade-eval-20261010)；
+源码提交 `7d9a6c4` 的 [GitHub CI 已通过](https://github.com/alexYG-arch/Harness_Foundry/actions/runs/38060810294)，公开源码门禁 279/279 PASS。
+尚未合并 main 或发布，未应用到 AICut，也未进入下面已发布的 v0.2.0 下载包；CI 通过不等于正式发行验收。
 
 ## 已公开源码更新 · 2026-09-26
 
