@@ -2,6 +2,30 @@
 
 import json
 
+
+def _contract_blocker(message):
+    """A model may report a blocker, never grant scope or certify acceptance."""
+    if not isinstance(message, str):
+        return None
+    try:
+        report = json.loads(message)
+    except ValueError:
+        return None
+    if not isinstance(report, dict) or "foundry_blocker" not in report:
+        return None
+    blocker = report["foundry_blocker"]
+    valid = (isinstance(blocker, dict) and blocker.get("failure_kind") == "CONTRACT_GAP"
+             and all(isinstance(blocker.get(key), str) and 0 < len(blocker[key].strip()) <= 4096
+                     for key in ("reason", "owner", "minimum_return_path"))
+             and isinstance(blocker.get("evidence"), list) and 0 < len(blocker["evidence"]) <= 16
+             and all(isinstance(item, str) and 0 < len(item.strip()) <= 4096 for item in blocker["evidence"]))
+    if not valid:
+        return {"reason_code": "CODEX_BLOCKER_REPORT_INVALID", "failure_domain": "MODEL_REPORT_INVALID"}
+    return {"reason_code": "CODEX_REPORTED_CONTRACT_GAP", "failure_domain": "ACCEPTANCE_CONTRACT_GAP",
+            "model_blocker": {key: blocker[key] for key in
+                              ("failure_kind", "reason", "owner", "evidence", "minimum_return_path")}}
+
+
 class CodingEventObserver:
     """Bounded, incremental JSONL lifecycle parser; never an acceptance Oracle.
 
@@ -13,6 +37,7 @@ class CodingEventObserver:
         self.max_event_bytes = max_event_bytes
         self.pending = bytearray()
         self.phase, self.failed, self.protocol_error = "NEW", False, False
+        self.blocker = None
         self.result = {"thread_id": None, "usage": None, "final_message": None, "event_count": 0,
                        "reported_command_failures": [], "workpack_accepted": False,
                        "automatic_retry_allowed": False}
@@ -67,6 +92,7 @@ class CodingEventObserver:
             item = event["item"]
             if kind == "item.completed" and item.get("type") == "agent_message":
                 message = item.get("text")
+                self.blocker = _contract_blocker(message)
                 self.result["final_message"] = message[:65536] if isinstance(message, str) else None
             if (kind == "item.completed" and item.get("type") == "command_execution"
                     and (item.get("status") == "failed" or item.get("exit_code") not in {None, 0})):
@@ -95,7 +121,10 @@ class CodingEventObserver:
         elif exit_code is not None and exit_code != 0 or self.failed:
             result.update(status="MODEL_PROCESS_FAILED", reason_code="CODEX_PROCESS_OR_TURN_FAILED")
         elif self.phase == "DONE" and exit_code == 0:
-            result.update(status="MODEL_TURN_COMPLETED", reason_code="CODEX_TURN_COMPLETED_NOT_WORKPACK_ACCEPTANCE")
+            if self.blocker is not None:
+                result.update(status="VALIDATION_FAILED", **self.blocker)
+            else:
+                result.update(status="MODEL_TURN_COMPLETED", reason_code="CODEX_TURN_COMPLETED_NOT_WORKPACK_ACCEPTANCE")
         return result
 
 

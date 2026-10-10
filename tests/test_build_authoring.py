@@ -68,6 +68,26 @@ class BuildAuthoringTests(unittest.TestCase):
         self.assertNotEqual(old["workpack"]["goal"], self.plan["workpacks"][0]["goal"])
         self.assertEqual(self.store.list_events(self.ir["program_id"]), [first, second])
 
+    def test_producer_gets_pinned_downstream_contract_without_future_execution_authority(self):
+        first = self.record()
+        self.plan["revision"] = 2
+        self.plan["workpacks"][1]["goal"] = "Changed future implementation method"
+        self.record(1, "new-method")
+        context = read_build_task_context(self.store, self.ir["program_id"], "IMPLEMENT-READER",
+                                          event_id=first["event_id"])
+        consumer = context["downstream_obligations"][0]
+        original = first["payload"]["plan"]["workpacks"][1]
+        self.assertEqual(consumer["goal"], original["goal"])
+        self.assertEqual(consumer["input_artifact_ids"], ["READER-SOURCE"])
+        self.assertEqual(consumer["requirements"], [self.ir["atoms"][1]])
+        self.assertEqual(consumer["cases"], [self.ir["acceptance_cases"][1]])
+        self.assertEqual(consumer["replacement_artifacts"], [])
+        self.assertEqual(context["workpack"]["artifacts"], self.plan["workpacks"][0]["artifacts"])
+        self.assertFalse(context["authority_validated"])
+        self.assertFalse(context["execution_started"])
+        self.assertEqual(read_build_task_context(self.store, self.ir["program_id"], "MAKE-REPORT",
+                         event_id=first["event_id"])["downstream_obligations"], [])
+
     def test_requirement_change_requires_a_new_revision_but_does_not_approve_it(self):
         self.record()
         self.plan["revision"] = 2

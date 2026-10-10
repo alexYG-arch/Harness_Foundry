@@ -4,6 +4,20 @@
 文件效果 baseline/提交前比较；正常与恢复共用检查，不扩张批准或退款预算。
 详见[源码增量与边界](FOUNDRY_UPGRADE_2026_10_10.md)。下文旧切片状态为历史范围。
 
+2026-10-10 定向修复：生产任务上下文增加 `downstream_obligations`，从同一已固定提案的
+实际产物消费者投影目标、需求、Case 和显式替换关系。生成可复用测试时不得把已批准的
+后续能力额外定义为永久非法；不提前实施后续功能，也不允许静默修改受保护测试。
+若完整来源与受保护测试确有冲突，模型须以最终 JSON 报告：
+
+```json
+{"foundry_blocker":{"failure_kind":"CONTRACT_GAP","reason":"具体冲突","owner":"需求决定者","evidence":["来源或产物位置"],"minimum_return_path":"所需的最小合同决定"}}
+```
+
+完整正常结束的原生模型回合携带该报告时，复用现有 `ACCEPTANCE_CONTRACT_GAP` 路径，
+在缺产物检查之前停止为 `HELD_ACCEPTANCE_CONTRACT`；恢复不重派、不退款、不自动改合同。
+报告只表达模型判断，不能充当独立验收。无结构化报告的普通缺产物仍按原流程处理；
+超时、流丢失或未决副作用优先保持未决，不被报告覆盖。
+
 状态：`SCOPED_M1_AND_REENTRY_ACCEPTED_NOT_RELEASE_ACCEPTANCE`。本接口已连接完整来源、
 Plan、建设范围、执行适配器、独立验证和 SQLite 验收提交，并由
 [公开 Build 入口](GENERIC_BUILD_CLI.md)消费；真实 Codex 限定 M1 子流程及新会话重入已通过，
@@ -113,6 +127,17 @@ Job、实施/验收阶段以及确切 Case。进程运行期间若撤销授权�
 内容进入下一次任务上下文。本地命令只做有界重试，自身不会获得模型推理能力。
 非零 verifier 只有退出 1 且输出 `CHECKS_FAILED` / `failure_kind=ASSERTION` 的完整
 JSON 才作为正常业务断言失败；崩溃/未分类失败 BLOCKED，不触发目标业务修改。
+`reason` 不作为 `failure_kind` 的别名。如果完整结果同时声明 errors、discovery_errors、
+skipped、expected_failures，或声明的 tests_run 不是正整数，则不能用 ASSERTION 标签
+掩盖未完整执行而触发业务返修。原始 JSON 保留，不重写成通过。
+生成提示与[准备模板说明](GENERIC_BUILD_PLAN.md#搭建质量最小方案接口与交付2026-09-26)
+使用相同分类和两种合法 scratch 布局；现有 `test_execution.py` 已具备这些行为。
+开发用 `release_acceptance.verify` 还拒绝测试计数缺失、矛盾 PASS 及 reason-only 失败，
+保留嵌套证据。它不随通用包分发，不替换任何已批准评测绑定的检查器。
+普通非 JSON 的 exit 0 独立检查不因此增加新必填字段；未报告错误不能被宣称为错误路径
+已验证。失败分支以源码回归为证；后续 Task 正常路径实测不证明未触发的失败路由。
+最新结果见开发仓库 `docs/FOUNDRY_UPGRADE_EVALUATION_2026_10_10.md`（不随运行包分发），
+不把限定样本通过视为完整 Harness 或发行验收。
 
 独立 ASSERTION 可显式提供 `repair_artifact_ids`，将失败消费者的已声明输入交回其
 当前已验收生产者修复。控制器先核对归属、版本和原剩余预算，追加

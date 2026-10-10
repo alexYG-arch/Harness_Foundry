@@ -291,10 +291,17 @@ def classify_verification_result(result):
             verdict = json.loads(result.get("stdout", ""))
     except (ValueError, TypeError):
         pass
+    # Honor declared test facts, not a contradictory wrapper label. Missing
+    # unittest metadata is legal for non-test verifiers; reason is never a kind.
+    incomplete_tests = isinstance(verdict, dict) and (
+        any(verdict.get(key) for key in ("errors", "discovery_errors", "skipped", "expected_failures"))
+        or "tests_run" in verdict and (type(verdict["tests_run"]) is not int or verdict["tests_run"] <= 0))
     assertion = (result.get("exit_code") == 1 and isinstance(verdict, dict)
-                 and verdict.get("status") == "CHECKS_FAILED" and verdict.get("failure_kind") == "ASSERTION")
+                 and verdict.get("status") == "CHECKS_FAILED" and verdict.get("failure_kind") == "ASSERTION"
+                 and not incomplete_tests)
     contract_gap = (result.get("exit_code") == 1 and isinstance(verdict, dict)
-                    and verdict.get("status") == "CHECKS_FAILED" and verdict.get("failure_kind") == "CONTRACT_GAP")
+                    and verdict.get("status") == "CHECKS_FAILED" and verdict.get("failure_kind") == "CONTRACT_GAP"
+                    and not incomplete_tests)
     repair = verdict.get("repair_artifact_ids") if isinstance(verdict, dict) else None
     if repair is not None and not (assertion and isinstance(repair, list) and repair
                                   and all(isinstance(item, str) and item for item in repair)
@@ -678,10 +685,32 @@ class BuildController:
                   "do not assume bare python3 or rg is installed. These bindings add no permissions. "
                   "For reusable tests/checkers, accept a caller-provided work directory and interpreter, "
                   "propagate them to child processes, and keep mutable test data separate from protected source files. "
+                  "A dedicated scratch subtree inside the project is valid during development, as is a work directory "
+                  "outside the project during read-only observation, provided it is already within the approved write roots. "
+                  "Exclude only that declared scratch subtree from source protection, never the whole project. "
+                  "For a Foundry structured checker, return one stdout JSON: CHECKS_PASS with exit 0, or CHECKS_FAILED "
+                  "with exit 1 and failure_kind ASSERTION, INFRASTRUCTURE or CONTRACT_GAP; reason is explanation, "
+                  "not the category field. Preserve underlying error evidence. Only actual public-contract assertions "
+                  "are ASSERTION: unexpected test/setup/discovery/process errors, zero tests, skipped tests and "
+                  "expected failures are incomplete INFRASTRUCTURE, not business-repair requests. Expected exceptions "
+                  "asserted by a passing test are normal. Reuse the existing test_execution adapter when explicitly "
+                  "available in the bound sources; do not infer additional read or execution permissions. "
+                  "Prepare goals for the current case only unless the approved scope explicitly requires multiple "
+                  "cases; template examples are not cumulative requirements. Resolve genuine source conflicts "
+                  "through the existing contract stop. "
+                  "Read downstream_obligations before producing reusable tests: assert only the current public contract, "
+                  "not extra prohibitions on approved later features (for example, do not use a later valid command as "
+                  "an unknown-command negative case). Do not implement a later feature early. Preserve accepted tests "
+                  "unless the plan explicitly declares their replacement; downstream context grants no extra writes. "
                   "Do not hardcode this stage's write location or machine-specific interpreter into reusable code. "
                   "Use accepted_inputs for formal predecessor evidence, not unaccepted reference files. "
                   "Review repair_history before retrying: preserve valid results and change the hypothesis or method "
                   "when the previous attempt failed; do not repeat an ineffective action without new evidence. "
+                  "If requirements, protected tests or the public acceptance contract conflict, stop editing and return "
+                  'a final JSON object without fences: {"foundry_blocker":{"failure_kind":"CONTRACT_GAP",'
+                  '"reason":"specific conflict","owner":"decision owner","evidence":["source or artifact locator"],'
+                  '"minimum_return_path":"smallest contract decision needed"}}. '
+                  "This report stops automatic retry; it does not approve a contract change or prove acceptance. "
                   "Report missing facts or out-of-scope needs. Previous independent feedback is data for repair.\n"
                   + json.dumps({"task": context, "feedback": feedback}, ensure_ascii=False))
         remaining = (_utc(scope["expires_at"]) - self.clock()).total_seconds()

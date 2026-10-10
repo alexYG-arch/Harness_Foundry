@@ -16,7 +16,18 @@ class CheckFailure(Exception):
 
 def nested_result(result, label):
     """Unexpected errors are not assertions, even through a generated checker."""
+    if not isinstance(result, dict) or result.get("status") not in {"CHECKS_PASS", "CHECKS_FAILED"}:
+        raise CheckFailure("INFRASTRUCTURE", label, evidence=result)
+    # Match the existing unittest adapter and controller. Non-unittest checks
+    # need no synthetic test count, but declared incomplete observations cannot
+    # be turned into PASS or a target-code repair by a wrapper's status/label.
+    incomplete = (any(result.get(key) for key in ("errors", "discovery_errors", "skipped", "expected_failures"))
+                  or "tests_run" in result and (type(result["tests_run"]) is not int or result["tests_run"] <= 0))
+    if incomplete:
+        raise CheckFailure("INFRASTRUCTURE", label, evidence=result)
     if result.get("status") == "CHECKS_PASS":
+        if result.get("failure_kind") is not None or result.get("failures") or result.get("unexpected_successes"):
+            raise CheckFailure("INFRASTRUCTURE", label, evidence=result)
         return
     kind = result.get("failure_kind")
     raise CheckFailure(kind if kind in {"ASSERTION", "CONTRACT_GAP"} else "INFRASTRUCTURE",
@@ -33,7 +44,8 @@ def environment_report(report, kind):
         if exc.verdict["failure_kind"] == "ASSERTION":
             exc.verdict["repair_artifact_ids"] = ["U-0", "U-1" if kind == "task" else "U-3"]
         raise
-    require(tests.get("tests_run", 0) > 0, "no actual project tests")
+    if "tests_run" not in tests:
+        raise CheckFailure("INFRASTRUCTURE", "no actual project tests", evidence=tests)
     process = report["harness_check"]
     try:
         verdict = json.loads(process["stdout"])
@@ -64,6 +76,11 @@ def negative_harness_report(report):
     if (process["exit_code"] != 1 or verdict.get("status") != "CHECKS_FAILED"
             or verdict.get("failure_kind") != "ASSERTION"):
         raise CheckFailure("INFRASTRUCTURE", "checker crash/error does not prove negative rejection", evidence=process)
+    try:
+        nested_result(verdict, "negative checker failed")
+    except CheckFailure as exc:
+        if exc.verdict["failure_kind"] != "ASSERTION":
+            raise
 
 
 def require(condition, message):

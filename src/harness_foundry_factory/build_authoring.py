@@ -115,9 +115,27 @@ def read_build_task_context(store: ControlEventStore, program_id: str, workpack_
     source_ids.update(cases[check["case_id"]][1]["acceptance_contract"]["source_id"]
                       for check in task["verification"]
                       if "acceptance_contract" in cases[check["case_id"]][1])
+    # Producers need the approved evolution obligations of their outputs, not
+    # permission to implement successors or invent permanent negative rules.
+    outputs = {item["artifact_id"] for item in task["artifacts"]}
+    consumers = []
+    for consumer in plan["workpacks"]:
+        consumed = outputs & {item["id"] for item in consumer["inputs"] if item["kind"] == "ARTIFACT"}
+        if not consumed:
+            continue
+        requirements = [atom for atom in ir["atoms"] if atom["atom_id"] in consumer["atom_ids"]]
+        declarations = [cases[check["case_id"]][1] for check in consumer["verification"]]
+        source_ids.update(atom["source_id"] for atom in requirements)
+        source_ids.update(case["acceptance_contract"]["source_id"] for case in declarations
+                          if "acceptance_contract" in case)
+        consumers.append({"workpack_id": consumer["workpack_id"], "goal": consumer["goal"],
+                          "input_artifact_ids": sorted(consumed), "requirements": requirements,
+                          "cases": declarations, "replacement_artifacts": [item for item in consumer["artifacts"]
+                              if item.get("replaces_artifact_id") in consumed]})
     context = {
         "status": "TASK_CONTEXT_NOT_AUTHORIZED", "proposal_binding": _binding(event),
         "workpack": task, "requirements": atoms,
+        "downstream_obligations": consumers,
         # Preserve non-atom context rather than silently dropping a global
         # requirement or constraint an intake adapter may have supplied.
         "requirement_context": {key: value for key, value in ir.items()

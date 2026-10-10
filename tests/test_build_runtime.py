@@ -102,6 +102,24 @@ class BuildRuntimeTests(unittest.TestCase):
         clipped = classify_verification_result({**noisy, "stdout_truncated": True})
         self.assertFalse(clipped["automatic_retry_allowed"])
 
+    def test_failure_category_is_not_reason_and_incomplete_tests_never_request_business_repair(self):
+        verdicts = [{"status": "CHECKS_FAILED", "reason": "ASSERTION"}]
+        for details in ({"errors": [{"exception_type": "PermissionError"}]},
+                        {"discovery_errors": ["import failed"]}, {"skipped": ["not run"]},
+                        {"expected_failures": ["known failure"]}, {"tests_run": 0},
+                        {"tests_run": True}, {"tests_run": "2"}):
+            verdicts.append({"status": "CHECKS_FAILED", "failure_kind": "ASSERTION", **details})
+        for verdict in verdicts:
+            with self.subTest(verdict=verdict):
+                result = classify_verification_result({"status": "VALIDATION_FAILED", "exit_code": 1,
+                                                       "stdout": json.dumps(verdict)})
+                self.assertFalse(result["automatic_retry_allowed"])
+                self.assertEqual(BuildController._failure_status(result), "BLOCKED")
+                self.assertEqual(json.loads(result["stdout"]), verdict, "retain the original observation")
+        # Ordinary independently executed checks do not acquire a new JSON requirement.
+        passed = {"status": "PASS", "exit_code": 0, "stdout": "CHECKED"}
+        self.assertEqual(classify_verification_result(passed), passed)
+
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
@@ -227,6 +245,23 @@ class BuildRuntimeTests(unittest.TestCase):
         self.assertNotIn("event_hash", json.dumps(rows))
         self.assertEqual(self.advance()["status"], "PLAN_CHECKS_ACCEPTED")
         self.assertEqual(len(self.runner.invocations), 5, "accepted work must not be repeated")
+
+    def test_producer_prompt_delivers_checker_protocol_without_new_scope(self):
+        self.prepare()
+        controller = self.controller()
+        _, prepared, _ = controller._current(self.prepared_id)
+        task = self.plan["workpacks"][0]
+        invocation = controller._invocation(prepared, task, task["local_argv"])
+        prompt = invocation["prompt"].split("\n", 1)[0]
+        for required in ("failure_kind", "reason", "CHECKS_FAILED", "INFRASTRUCTURE", "CONTRACT_GAP",
+                         "zero tests", "skipped", "inside the project", "outside the project",
+                         "current case only"):
+            self.assertIn(required, prompt)
+        self.assertEqual(invocation["write_roots"], [str(self.workspace / "src")])
+        self.assertEqual(invocation["scope"], prepared["scope"])
+        for key in ("executables", "task_write_roots", "max_attempts", "max_task_attempts"):
+            self.assertEqual(invocation["scope"][key], self.scope[key])
+        self.assertEqual(self.runner.invocations, [], "prompt assembly must not execute")
 
     def test_downstream_gets_current_accepted_input_and_acceptance_event(self):
         self.prepare()
@@ -474,6 +509,58 @@ elif json.loads(Path("outputs/summary.json").read_text()) != {"rows":3,"invalid"
         self.assertEqual(len(self.events("BUILD_ATTEMPT_STARTED")),2)
         self.assertTrue(all(row["executor"] == "LOCAL" for row in self.runner.invocations))
         self.assertEqual(len(self.events("BUILD_COMMAND_PLANNED")),5)
+
+    def test_model_contract_blocker_precedes_missing_outputs_and_stays_stopped_on_resume(self):
+        from harness_foundry_factory.coding_events import observe_coding_process
+        from harness_foundry_factory.build_entrypoint import read_build
+        from test_coding_protocol import blocker_capture, CONTRACT_BLOCKER
+        self.prepare()
+        invocations = []
+        def runner(invocation, before_dispatch):
+            before_dispatch()
+            invocations.append(invocation)
+            return observe_coding_process(blocker_capture(), exit_code=0)
+        controller = self.controller()
+        controller.runner = runner
+        result = controller.advance(self.prepared_id)
+        self.assertEqual(result["status"], "HELD_ACCEPTANCE_CONTRACT", result)
+        self.assertEqual(len(invocations), 1)
+        self.assertFalse((self.workspace / "src/reader.py").exists())
+        self.assertEqual(result["diagnostics"][0]["result"]["model_blocker"], CONTRACT_BLOCKER)
+        self.assertNotIn("DECLARED_OUTPUT_MISSING", json.dumps(result))
+        context = json.loads(invocations[0]["prompt"].split("\n", 1)[1])["task"]
+        self.assertEqual(context["downstream_obligations"][0]["workpack_id"], "MAKE-REPORT")
+        self.assertEqual(invocations[0]["write_roots"], [str(self.workspace / "src")])
+        before = self.events()
+        self.assertEqual(controller.advance(self.prepared_id)["status"], "HELD_ACCEPTANCE_CONTRACT")
+        self.assertEqual(self.events(), before)
+        self.assertEqual(len(invocations), 1)
+        readback = read_build(self.root / "controller.sqlite3", self.program)
+        self.assertEqual(readback["attempts"][0]["recovery"]["next_action"], "ALIGN_PUBLIC_CONTRACT_AND_VERIFIER")
+
+    def test_durable_model_blocker_recovers_without_redispatch_or_missing_output_retry(self):
+        from harness_foundry_factory.coding_events import observe_coding_process
+        from test_coding_protocol import blocker_capture
+        first = self.plan["workpacks"][0]
+        first["executor"] = "CODEX"
+        first.pop("local_argv")
+        self.scope.update(model="test-only-no-model-call", allow_model_service=True)
+        self.prepare()
+        def model_fixture(command, **kwargs):
+            kwargs["before_dispatch"]()
+            return observe_coding_process(blocker_capture(), exit_code=0)
+        def runner(invocation, before_dispatch):
+            NativeBuildRunner()(invocation, before_dispatch)
+            raise InjectedControllerCrash()
+        with patch("harness_foundry_factory.coding_process.CodexCodingRunner.run", side_effect=model_fixture) as model, \
+                self.assertRaises(InjectedControllerCrash):
+            BuildController(self.store, self.program, runner=runner, clock=CLOCK).advance(self.prepared_id)
+        self.assertEqual(model.call_count, 1)
+        self.assertEqual(self.events("BUILD_COMMAND_OBSERVED"), [])
+        self.assertEqual(self.advance()["status"], "HELD_ACCEPTANCE_CONTRACT")
+        self.assertEqual(self.runner.invocations, [])
+        self.assertEqual(len(self.events("BUILD_ATTEMPT_STARTED")), 1)
+        self.assertEqual(len(self.events("BUILD_COMMAND_PLANNED")), 1)
 
     def test_nested_executable_binding_uses_exact_approved_alias_without_new_reads(self):
         alias = self.root / "bound python"

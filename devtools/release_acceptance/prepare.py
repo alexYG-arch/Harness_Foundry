@@ -36,14 +36,24 @@ def proposal(kind, *, root, bundle, inputs, program_id, runtime):
         raise ValueError("unknown acceptance case")
     ROOT, BUNDLE, INPUTS = (Path(path).resolve() for path in (root, bundle, inputs))
     source_id = "TASK-CLI-PRD" if kind == "task" else "CSV-PROJECT-BRIEF"
+    sources = {key: name for key, name in SOURCES.items()
+               if key in {"RELEASE-BUILD-DOCUMENT", "RUN-METHOD"}
+               or (key == "TASK-CLI-PRD" if kind == "task" else key.startswith("CSV-"))}
+    implementation_goal = ("按当前 Task PRD 完整实现基础 CLI。" if kind == "task" else
+                           "按当前 CSV 项目说明实现 audit 增量，保留原测试和笔记。")
+    observation_goal = "真实本地业务观察；独立校验。" + (
+        "Task 首次合成缺陷与原预算恢复按已展示方法执行。" if kind == "task" else "只检查当前 CSV 合同。")
     atoms, cases, tasks = [], [], []
     for phase, executor, dependency, artifact_names, goal in [
         ("H", "CODEX", [], ["harness/AGENTS.md", "harness/BUILD.md", "harness/check.py"],
-         "完整阅读当前案例 PRD/项目说明和 RUN-METHOD；仅建设该例 Coding Harness。check.py 必须支持 --help、--project、--workdir、--python；检查 JSON 状态、错误分类、工作目录及子进程传播遵循 RUN-METHOD v0.2。内部结构自由，不得实施 app。"),
+         "完整阅读当前案例 PRD/项目说明和 RUN-METHOD；仅建设该例 Coding Harness。check.py 必须支持 --help、--project、--workdir、--python；检查 JSON 状态、错误分类、工作目录及子进程传播遵循 RUN-METHOD v0.2。"
+         "失败类别写 failure_kind，reason 只作说明；业务断言为 ASSERTION，运行错误、零测试或跳过为 INFRASTRUCTURE，合同缺口为 CONTRACT_GAP。"
+         "工作目录接受批准写域内的 app/scratch（开发）及 app 外的 scenario（只读观察），只排除指定 scratch 子树，不排除整个源码目录。内部结构自由，不得实施 app。"),
         ("U", "CODEX", ["H"], ["app/tasks.py", "app/test_tasks.py", "app/README.md", "app/HARNESS_USE.md"] if kind == "task" else
          ["app/csv_tool.py", "app/test_summary.py", "app/USER_NOTES.md", "app/test_audit.py", "app/README.md", "app/HARNESS_USE.md"],
-         "这是全新会话的实际使用：首先读取 harness/AGENTS.md 和 BUILD.md，依据生成的 Harness 完整开发 app 并实际执行其检查。不修改 harness 或独立 lab。CSV 保留原测试和笔记。测试接受 FOUNDRY_TEST_WORKDIR 和 BOUND_PYTHON 并传给全部子进程；U 调用时目录在 app 内，E 调用时源码只读、数据在 scenario。禁止把 U 的本机路径写死在测试中。HARNESS_USE.md 记录真实使用，不自签验收。"),
-        ("E", "LOCAL", ["U"], ["scenario/report.json"], "真实本地业务观察；独立校验；Task 首次合成缺陷与原预算恢复按已展示方法执行。"),
+         "这是全新会话的实际使用：首先读取 harness/AGENTS.md 和 BUILD.md，依据生成的 Harness 完整开发 app 并实际执行其检查。"
+         + implementation_goal + "不修改 harness 或独立 lab。测试接受 FOUNDRY_TEST_WORKDIR 和 BOUND_PYTHON 并传给全部子进程；U 调用时目录在 app/scratch，E 调用时源码只读、数据在 scenario。禁止把 U 的本机路径写死在测试中。HARNESS_USE.md 记录真实使用，不自签验收。"),
+        ("E", "LOCAL", ["U"], ["scenario/report.json"], observation_goal),
     ] + ([("F", "LOCAL", ["E"], ["completion/result.json"], "只在真实场景已接受后形成后继记录。")] if kind == "task" else []):
         atom = "REQ-" + phase
         contract_source = "RUN-METHOD" if phase in {"H", "F"} else source_id
@@ -58,7 +68,7 @@ def proposal(kind, *, root, bundle, inputs, program_id, runtime):
         predecessors = [artifact["artifact_id"] for task in tasks for artifact in task["artifacts"]]
         task = {"workpack_id": phase, "job_id": kind.upper(), "executor": executor, "goal": goal,
                 "depends_on": dependency, "atom_ids": [atom],
-                "inputs": [{"kind": "SOURCE", "id": key} for key in SOURCES] +
+                "inputs": [{"kind": "SOURCE", "id": key} for key in sources] +
                           [{"kind": "ARTIFACT", "id": key} for key in predecessors],
                 "artifacts": outputs, "verification": [{"case_id": kind.upper() + "-" + phase,
                     "artifact_ids": [row["artifact_id"] for row in outputs],
@@ -75,7 +85,7 @@ def proposal(kind, *, root, bundle, inputs, program_id, runtime):
                    "scope": ["TASK_PRD.md A1–A6 全范围" if kind == "task" else "CSV_BRIEF.md B1–B5 全范围",
                              "机器前置检查与本地观察不能单独验收真实 Harness；宿主保留逐项实际证据判定"],
                    "non_goals": ["私有 PRD、旧 M1、专项视频、全平台支持、远端发布"]},
-        "sources": [{"source_id": key, "path_or_uri": name, "loaded_completely": True} for key, name in SOURCES.items()],
+        "sources": [{"source_id": key, "path_or_uri": name, "loaded_completely": True} for key, name in sources.items()],
         "atoms": atoms, "acceptance_cases": cases, "negative_cases": [], "open_questions": [], "source_conflicts": []},
         "plan": {"schema_version": "1.0", "plan_id": kind.upper(), "revision": 1,
                  "requirement_revision": 1, "workpacks": tasks}}

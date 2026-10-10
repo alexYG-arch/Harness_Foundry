@@ -22,6 +22,12 @@ generate the project's missing rules/adapters/local steps. Infer a minimal plan
 from observable behavior and delivery, not a fixed framework or DAG. Check one
 producer/consumer call's data, paths, interpreter and permissions. Preserve access
 to complete sources and global constraints; implementation choices remain free.
+Expand a shared preparation template for the current case only, not a cumulative
+list of unrelated cases. Use the build policy's existing structured-checker
+failure_kind protocol (reason is explanation, not a category), and accept caller
+scratch inside or outside the project within the approved write roots. Preserve
+test-error/incomplete-execution evidence; neither skips nor unexpected errors
+are business assertions. These conventions add no Case, gate or write permission.
 
 After confirmation, read the [CLI contract](../../../docs/GENERIC_BUILD_CLI.md).
 Separate as-is facts, target behavior, persistent constraints and user decisions.

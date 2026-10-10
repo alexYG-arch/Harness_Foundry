@@ -217,6 +217,93 @@ class ReleaseAcceptanceAdapterTests(unittest.TestCase):
             verify.environment_report(report, "task")
         self.assertEqual(caught.exception.verdict["repair_artifact_ids"], ["U-0", "U-1"])
 
+    def test_failure_protocol_preserves_category_not_reason(self):
+        for kind in ("ASSERTION", "INFRASTRUCTURE", "CONTRACT_GAP"):
+            report = self.report()
+            verdict = {"status": "CHECKS_FAILED", "failure_kind": kind, "reason": "explanation"}
+            report["harness_check"] = {"exit_code": 1, "stdout": json.dumps(verdict), "stderr": ""}
+            with self.subTest(kind=kind), self.assertRaises(verify.CheckFailure) as caught:
+                verify.environment_report(report, "task")
+            result = caught.exception.verdict
+            self.assertEqual(result["failure_kind"], kind)
+            self.assertEqual(result["evidence"], verdict)
+            routed = classify_verification_result({"status": "VALIDATION_FAILED", "exit_code": 1,
+                                                   "stdout": json.dumps(result)})
+            self.assertEqual(routed["automatic_retry_allowed"], kind == "ASSERTION")
+        for verdict in ({"status": "CHECKS_FAILED", "reason": "ASSERTION"},
+                        {"status": "CHECKS_FAILED", "failure_kind": "unknown"}):
+            with self.subTest(verdict=verdict), self.assertRaises(verify.CheckFailure) as caught:
+                verify.nested_result(verdict, "checker failed")
+            self.assertEqual(caught.exception.verdict["failure_kind"], "INFRASTRUCTURE")
+
+    def test_real_test_adapter_failure_kind_survives_wrapper_and_controller(self):
+        # Ordinary local unittest fixtures, not a generated/modified Harness or model run.
+        fixtures = (
+            ("def test_one(self): self.assertEqual(1, 2)", "ASSERTION"),
+            ("def test_one(self): raise PermissionError('fixture unavailable')", "INFRASTRUCTURE"),
+            ("@unittest.skip('not run')\n def test_one(self): pass", "INFRASTRUCTURE"),
+            ("pass", "INFRASTRUCTURE"),
+        )
+        for index, (body, kind) in enumerate(fixtures):
+            app, scratch = self.root / f"app-{index}", self.root / f"scratch-{index}"
+            app.mkdir(); scratch.mkdir()
+            (app / "test_subject.py").write_text("import unittest\nclass Subject(unittest.TestCase):\n " + body + "\n")
+            result = test_execution.run_tests(app, scratch, sys.executable)
+            report = self.report()
+            report["tests"] = result
+            with self.subTest(body=body):
+                with self.assertRaises(verify.CheckFailure) as caught:
+                    verify.environment_report(report, "task")
+                verdict = caught.exception.verdict
+                self.assertEqual(verdict["failure_kind"], kind)
+                self.assertEqual(verdict["evidence"], result)
+                routed = classify_verification_result({"status": "VALIDATION_FAILED", "exit_code": 1,
+                                                       "stdout": json.dumps(verdict)})
+                self.assertEqual(routed["automatic_retry_allowed"], kind == "ASSERTION")
+                if kind == "ASSERTION":
+                    self.assertEqual(routed["repair_artifact_ids"], ["U-0", "U-1"])
+                else:
+                    self.assertNotIn("repair_artifact_ids", routed)
+
+    def test_incomplete_or_contradictory_json_test_results_do_not_pass_or_trigger_repair(self):
+        for status in ("CHECKS_PASS", "CHECKS_FAILED"):
+            for details in ({"errors": [{"phase": "setUp"}]}, {"discovery_errors": ["import"]},
+                            {"skipped": ["not run"]}, {"expected_failures": ["known"]},
+                            {"tests_run": 0}, {"tests_run": True}, {"tests_run": "2"}):
+                verdict = {"status": status, "failure_kind": None if status == "CHECKS_PASS" else "ASSERTION",
+                           "tests_run": 2, **details}
+                for origin in ("tests", "harness_check"):
+                    report = self.report()
+                    report[origin] = verdict if origin == "tests" else {
+                        "exit_code": 0 if status == "CHECKS_PASS" else 1,
+                        "stdout": json.dumps(verdict), "stderr": ""}
+                    with self.subTest(status=status, details=details, origin=origin):
+                        with self.assertRaises(verify.CheckFailure) as caught:
+                            verify.environment_report(report, "task")
+                        self.assertEqual(caught.exception.verdict["failure_kind"], "INFRASTRUCTURE")
+                        self.assertNotIn("repair_artifact_ids", caught.exception.verdict)
+                        self.assertEqual(caught.exception.verdict["evidence"], verdict)
+        for verdict in (None, [], {"status": "CHECKS_PASS", "failure_kind": "ASSERTION"},
+                        {"status": "CHECKS_PASS", "failures": ["wrong result"]},
+                        {"status": "CHECKS_PASS", "unexpected_successes": ["unexpected"]}):
+            with self.subTest(verdict=verdict), self.assertRaises(verify.CheckFailure) as caught:
+                verify.nested_result(verdict, "invalid report")
+            self.assertEqual(caught.exception.verdict["failure_kind"], "INFRASTRUCTURE")
+        report = self.report()
+        report["tests"].pop("tests_run")
+        with self.assertRaises(verify.CheckFailure) as caught:
+            verify.environment_report(report, "task")
+        self.assertEqual(caught.exception.verdict["failure_kind"], "INFRASTRUCTURE")
+
+    def test_incomplete_json_negative_observation_is_not_successful_rejection(self):
+        for details in ({"errors": ["unexpected"]}, {"skipped": ["not run"]}, {"tests_run": 0}):
+            verdict = {"status": "CHECKS_FAILED", "failure_kind": "ASSERTION", **details}
+            report = {"negative_source_unchanged": True, "negative_harness_check": {
+                "exit_code": 1, "stdout": json.dumps(verdict), "stderr": ""}}
+            with self.subTest(details=details), self.assertRaises(verify.CheckFailure) as caught:
+                verify.negative_harness_report(report)
+            self.assertEqual(caught.exception.verdict["failure_kind"], "INFRASTRUCTURE")
+
     def test_checker_contract_mismatch_returns_its_producer(self):
         report = self.report()
         report["harness_check"]["stdout"] = '{"status":"PASS"}'
@@ -328,6 +415,33 @@ p.parse_args()
             self.assertEqual(scope["model"], "test-model")
             self.assertFalse(Path(scope["workspace_root"]).exists())
             self.assertEqual(tasks[2]["artifacts"], [{"artifact_id":"E-0", "path":"scenario/report.json"}])
+
+    def test_preparation_selects_only_case_sources_and_goal_without_changing_write_budget(self):
+        inputs = self.root / "inputs"; inputs.mkdir()
+        for name in prepare.SOURCES.values():
+            (inputs / name).write_text("Public fixture contract.\n")
+        runtime = {"source_read_roots": [], "executables": {"python": sys.executable},
+                   "codex_executable": "/test-only/codex", "model": "test-model",
+                   "allow_model_service": True, "max_attempts": 8, "max_task_attempts": 3,
+                   "command_timeout_seconds": 15, "expires_at": "2030-01-01T00:00:00Z"}
+        for kind, other in (("task", "CSV"), ("csv", "Task")):
+            request, scope = prepare.proposal(kind, root=self.root, bundle=ROOT, inputs=inputs,
+                                             program_id="TEST-" + kind, runtime=runtime)
+            sources = {row["source_id"] for row in request["requirement_ir"]["sources"]}
+            self.assertNotIn("TASK-CLI-PRD" if kind == "csv" else "CSV-PROJECT-BRIEF", sources)
+            for task in request["plan"]["workpacks"]:
+                self.assertNotIn(other, task["goal"])
+                self.assertNotIn("Ledger", task["goal"])
+                self.assertNotIn("Config", task["goal"])
+                self.assertEqual({row["id"] for row in task["inputs"] if row["kind"] == "SOURCE"}, sources)
+            goals = [row["goal"] for row in request["plan"]["workpacks"]]
+            self.assertIn("failure_kind", goals[0])
+            self.assertIn("app/scratch", goals[0])
+            self.assertIn("app/scratch", goals[1])
+            self.assertEqual(scope["task_write_roots"], {"H": ["harness"], "U": ["app"], "E": ["scenario"],
+                                                       **({"F": ["completion"]} if kind == "task" else {})})
+            self.assertEqual(scope["max_attempts"], runtime["max_attempts"])
+            self.assertFalse(Path(scope["workspace_root"]).exists())
 
     def test_probe_real_success_shape_exits_86_before_successor(self):
         script = '''import sys

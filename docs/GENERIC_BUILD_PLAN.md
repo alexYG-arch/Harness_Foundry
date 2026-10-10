@@ -79,6 +79,24 @@ Coding Harness 的搭建文档还应基于完整 PRD 和开发需求，包含功
    业务/局部适配留在项目；可复现的公共保证缺陷修对应 Foundry 实现，但不因此自动新增
    通用规则。不得为通过检查修改合同或仅放宽 Validator。
 
+2026-10-10 准备模板补充（既有接口澄清，不新增业务 Case 或 Gate）：
+
+- 每个 Workpack 的 goal/需求摘要只展开当前案例和当前阶段的义务，不粘贴多个案例的
+  功能名作为共用实施目标；只绑定该案例来源及必要的共用约束。后续已批准能力作为
+  `downstream_obligations` 上下文，不提前实施，也不额外写成永久禁止项。
+  已明确要求的跨案例工作仍保留，不能借模板澄清删减真实范围。
+- 采用 Foundry 结构化检查接口时，stdout 是单个 JSON：`CHECKS_PASS` / exit 0，或
+  `CHECKS_FAILED` / exit 1；失败类别放在 `failure_kind`，`reason` 仅为可读说明。
+  `ASSERTION` 是已公开业务断言失败；`INFRASTRUCTURE` 包含非预期测试/准备/发现/
+  子进程错误及零用例、跳过、expected failure 导致的未完整执行；`CONTRACT_GAP`
+  是公开合同缺口。保留原始错误证据，不将任意非零退出改成 ASSERTION，不把未执行算 PASS。
+  测试中正常捕获并断言的预期异常仍可通过。能复用已显式绑定的 `test_execution.py`
+  时不另写测试结果解析器；接口说明本身不授予额外读取或执行权限。
+- `--workdir` 接受已批准写域内的两种位置：开发期可为 `app/scratch` 专用子目录，
+  只读观察期可为 app 外的 scenario。只从源码保护中排除该专用子树，不能排除整个 app；
+  workdir 不得等于或包含 project。原样传递绑定解释器及 `FOUNDRY_TEST_WORKDIR`、
+  `BOUND_PYTHON` 给子进程，不因 scratch 在 app 内就拒绝，不为调试要求扩大写域。
+
 实现违约且属于既有写域/预算时，自主修复、复验和推进；机器处理 revision/事件引用，
 不让用户复制 Hash 或逐任务说“继续”。合同矛盾、检查基础设施故障、预算/权限失效及
 未知副作用按真实边界停顿。目标 Agent 不热修改 Foundry/独立检查器，源码修补另属工程范围。

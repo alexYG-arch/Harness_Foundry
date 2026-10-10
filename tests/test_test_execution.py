@@ -78,6 +78,25 @@ class Subject(unittest.TestCase):
         self.assertEqual(result["failure_kind"], "INFRASTRUCTURE")
         self.assertEqual(result["tests_run"], 0)
 
+    def test_skipped_and_expected_failure_stay_incomplete(self):
+        for decorator, body, field in (("unittest.skip('not run')", "pass", "skipped"),
+                                       ("unittest.expectedFailure", "self.fail('known')", "expected_failures")):
+            with self.subTest(decorator=decorator):
+                result = self.run_fixture('import unittest\nclass Subject(unittest.TestCase):\n'
+                    f' @{decorator}\n def test_one(self): {body}\n')
+                self.assertEqual(result["status"], "CHECKS_FAILED")
+                self.assertEqual(result["failure_kind"], "INFRASTRUCTURE")
+                self.assertTrue(result[field])
+
+    def test_discovery_and_teardown_errors_keep_infrastructure_route(self):
+        for body in ('raise ImportError("missing fixture dependency")\n',
+                     'import unittest\nclass Subject(unittest.TestCase):\n'
+                     ' def test_one(self): pass\n def tearDown(self): raise OSError("fixture cleanup")\n'):
+            with self.subTest(body=body):
+                result = self.run_fixture(body)
+                self.assertEqual(result["failure_kind"], "INFRASTRUCTURE")
+                self.assertTrue(result["errors"] or result["discovery_errors"])
+
     def test_project_itself_is_not_a_scratch_exclusion(self):
         with self.assertRaises(ValueError):
             execution_paths(self.project, self.project, sys.executable)

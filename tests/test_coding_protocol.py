@@ -21,7 +21,53 @@ def capture(events):
     return b"\n".join(json.dumps(event, ensure_ascii=False).encode("utf-8") for event in events) + b"\n"
 
 
+CONTRACT_BLOCKER = {"failure_kind": "CONTRACT_GAP", "reason": "Protected base test forbids approved stats",
+                    "owner": "REQUIREMENT_OWNER", "evidence": ["app/test_tasks.py:71", "TASK_STATS.md:1"],
+                    "minimum_return_path": "Decide the conflicting test contract; do not silently edit it"}
+
+
+def blocker_capture(blocker=CONTRACT_BLOCKER):
+    events = deepcopy(EVENTS)
+    events[2]["item"]["text"] = json.dumps({"foundry_blocker": blocker})
+    return capture(events)
+
+
 class CodingProtocolTests(unittest.TestCase):
+    def test_typed_contract_blocker_stops_but_never_certifies_its_claim(self):
+        result = observe_coding_process(blocker_capture(), exit_code=0)
+        self.assertEqual(result["status"], "VALIDATION_FAILED")
+        self.assertEqual(result["failure_domain"], "ACCEPTANCE_CONTRACT_GAP")
+        self.assertEqual(result["model_blocker"], CONTRACT_BLOCKER)
+        self.assertFalse(result["automatic_retry_allowed"])
+        self.assertFalse(result["workpack_accepted"])
+
+    def test_explicit_but_invalid_blocker_does_not_become_a_repair_loop(self):
+        for blocker in (None, {}, {**CONTRACT_BLOCKER, "evidence": []},
+                        {**CONTRACT_BLOCKER, "failure_kind": "PASS"}):
+            with self.subTest(blocker=blocker):
+                result = observe_coding_process(blocker_capture(blocker), exit_code=0)
+                self.assertEqual(result["reason_code"], "CODEX_BLOCKER_REPORT_INVALID")
+                self.assertFalse(result["automatic_retry_allowed"])
+
+    def test_prose_and_tool_output_are_not_typed_blockers(self):
+        for kind in ("agent_message", "command_execution"):
+            events = deepcopy(EVENTS)
+            events[2]["item"].update(type=kind, text="A contract conflict was investigated and resolved.")
+            if kind == "command_execution":
+                events[2]["item"]["text"] = json.dumps({"foundry_blocker": CONTRACT_BLOCKER})
+            result = observe_coding_process(capture(events), exit_code=0)
+            self.assertEqual(result["status"], "MODEL_TURN_COMPLETED")
+            self.assertNotIn("model_blocker", result)
+
+    def test_blocker_cannot_override_incomplete_or_failed_native_capture(self):
+        for options, expected in (({"timed_out": True}, "UNKNOWN_SIDE_EFFECT"),
+                                  ({"output_truncated": True}, "UNKNOWN_SIDE_EFFECT"),
+                                  ({"exit_code": 1}, "MODEL_PROCESS_FAILED")):
+            result = observe_coding_process(blocker_capture(), **{"exit_code": 0, **options})
+            self.assertEqual(result["status"], expected)
+        result = observe_coding_process(blocker_capture().rsplit(b"\n", 2)[0], exit_code=0)
+        self.assertEqual(result["status"], "UNKNOWN_SIDE_EFFECT")
+
     def test_arbitrary_chunk_boundaries_do_not_corrupt_utf8_or_lifecycle(self):
         events = deepcopy(EVENTS)
         events[2]["item"]["text"] = "中文跨块"
