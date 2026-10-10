@@ -1,5 +1,9 @@
 # 通用建设控制器：可执行工程切片
 
+2026-10-10：原控制器已接入 Plan 1.1 只读环境预检、accepted 输入包、修复摘要及宿主
+文件效果 baseline/提交前比较；正常与恢复共用检查，不扩张批准或退款预算。
+详见[源码增量与边界](FOUNDRY_UPGRADE_2026_10_10.md)。下文旧切片状态为历史范围。
+
 状态：`SCOPED_M1_AND_REENTRY_ACCEPTED_NOT_RELEASE_ACCEPTANCE`。本接口已连接完整来源、
 Plan、建设范围、执行适配器、独立验证和 SQLite 验收提交，并由
 [公开 Build 入口](GENERIC_BUILD_CLI.md)消费；真实 Codex 限定 M1 子流程及新会话重入已通过，

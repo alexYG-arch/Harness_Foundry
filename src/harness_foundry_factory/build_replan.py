@@ -62,6 +62,9 @@ def adapt_build_plan(original, current, scope, started_tasks=()):
         owners[key], writes[key] = parents, list(roots)
         for parent in parents:
             replacements[parent].add(key)
+            for field in ("environment", "effects"):
+                _check(task.get(field) == old_tasks[parent].get(field),
+                       f"replan changed approved {field} contract")
         allowed_atoms = {atom for parent in parents for atom in old_tasks[parent]["atom_ids"]}
         _check(set(task["atom_ids"]) <= allowed_atoms, "task requirements changed outside approval")
         allowed_inputs = {canonical_json(item) for parent in parents for item in old_tasks[parent]["inputs"]}

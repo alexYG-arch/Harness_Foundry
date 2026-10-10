@@ -1,5 +1,10 @@
 # 通用建设计划接口（首个实现切片）
 
+2026-10-10 当前接口补充：Plan 1.0 不自动迁移；Plan 1.1 支持 Case 的
+`required_artifact_ids` / `acceptance_stage`，Workpack 的 `environment` / `effects`。
+字段、兼容范围、来源归类和观察边界见[升级契约](FOUNDRY_UPGRADE_2026_10_10.md#plan-11-公开增量)。
+下文首个切片状态保留历史含义，不覆盖后续运行实现与已有范围内验收。
+
 2026-09-20 路由更新：用户已停止维护旧新建流程。通用 Build 是开发入口和发行包
 唯一的新建路线；下文涉及兼容入口的实现记录仅描述历史，不再授予使用旧流程的资格。
 旧文档 Review、Freeze、Generate 或委托不能替代新 Build 批准。旧数据只读保留。

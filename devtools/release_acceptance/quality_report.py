@@ -12,6 +12,67 @@ from pathlib import Path
 COMPARISON_FIELDS = ("contract", "inputs", "executor", "tools", "permissions", "checker", "budget")
 
 
+def factorial_summary(runs=()):
+    """Describe a 2x2 Foundry/document comparison; never invent missing costs.
+
+    One row is one independent task/run. The host supplies real evidence and
+    condition identities. This function checks comparability, not authenticity
+    or statistical significance. Empty cells remain NOT_RUN.
+    """
+    import math
+    runs = deepcopy(list(runs))
+    metrics = ("attempts", "human_interventions", "elapsed_seconds", "tokens", "cost")
+    cells = {}
+    seen = set()
+    for row in runs:
+        key = (row.get("foundry"), row.get("document"))
+        if key[0] not in {"baseline", "upgraded"} or key[1] not in {"original", "clarified"}:
+            raise ValueError("unknown comparison factor")
+        if not row.get("run_id") or row["run_id"] in seen or not row.get("task_id") or not row.get("evidence_refs"):
+            raise ValueError("distinct runs require task identity and independent evidence references")
+        seen.add(row["run_id"])
+        if row.get("outcome") not in {"PASS", "FAIL", "BLOCKED"}:
+            raise ValueError("record an observed outcome; absent runs are not zero-cost failures")
+        for metric in metrics:
+            value = row.get(metric)
+            if value is not None and (type(value) not in {int, float} or not math.isfinite(value) or value < 0):
+                raise ValueError("metrics must be nonnegative finite numbers or null")
+    for foundry in ("baseline", "upgraded"):
+        for document in ("original", "clarified"):
+            selected = [row for row in runs if (row["foundry"], row["document"]) == (foundry, document)]
+            cells[foundry + "/" + document] = {
+                "status": "OBSERVED" if selected else "NOT_RUN", "runs": selected,
+                "completion_rate": sum(row["outcome"] == "PASS" for row in selected) / len(selected) if selected else None,
+                "mean": {metric: sum(row[metric] for row in selected) / len(selected)
+                         if selected and all(row.get(metric) is not None for row in selected) else None for metric in metrics}}
+    differences = []
+    if runs:
+        # Different tasks have different inputs/contracts. Hold conditions fixed
+        # across treatments of each task, not across unrelated tasks.
+        for task_id in {row["task_id"] for row in runs}:
+            comparable = [row for row in runs if row["task_id"] == task_id]
+            for field in COMPARISON_FIELDS:
+                first = comparable[0].get("conditions", {}).get(field)
+                if not first or any(row.get("conditions", {}).get(field) != first for row in comparable):
+                    differences.append(task_id + ":" + field)
+        for row in runs:
+            executor = row.get("conditions", {}).get("executor", {})
+            if not isinstance(executor, dict) or not all(executor.get(key) for key in
+                    ("requested_model", "effective_model", "client_version")):
+                differences.append("effective_executor")
+        cohorts = [sorted(row["task_id"] for row in cell["runs"]) for cell in cells.values()]
+        if any(cohort != cohorts[0] for cohort in cohorts):
+            differences.append("task_cohort")
+    complete = all(cell["status"] == "OBSERVED" for cell in cells.values())
+    return {"status": "NOT_RUN" if not runs else "INCOMPLETE" if not complete else
+            "NOT_COMPARABLE" if differences else "MATCHED_OBSERVABLE_CONDITIONS",
+            "cells": cells, "differing_or_missing": sorted(set(differences)),
+            "improvement_demonstrated": False, "evidence_authenticity_verified": False,
+            "limitations": ["Descriptive only; independent obligation/effect checks and real held-out uses remain required."]
+                + (["SERVICE_REVISION_UNKNOWN"] if any(not isinstance(row.get("conditions", {}).get("executor"), dict)
+                    or not row["conditions"]["executor"].get("service_revision") for row in runs) else [])}
+
+
 def capture_harness(root, files):
     """Capture only the predeclared fixed Harness files, not business/runtime data.
 

@@ -115,9 +115,17 @@ class GenericDistributionTests(unittest.TestCase):
         self.assertEqual(json.loads(result.stdout)["status"], "PLAN_COMPILED_NOT_AUTHORIZED")
 
     def test_relocated_record_prepare_local_fixture_accept_and_resume(self):
+        self._relocated_runtime()
+
+    def test_relocated_plan_11_preflight_effects_and_resume(self):
+        self._relocated_runtime(with_quality_contract=True)
+
+    def _relocated_runtime(self, with_quality_contract=False):
         fixture = support.BuildRuntimeTests()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
+        if with_quality_contract:
+            fixture._quality_contract()
         fixture.scope["expires_at"] = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
         database = fixture.root / "portable.sqlite3"
         revision = 0
@@ -158,21 +166,25 @@ def fixture_runner(invocation, before_dispatch):
     return {"status": "PASS" if process.returncode == 0 else "VALIDATION_FAILED",
             "exit_code": process.returncode, "stdout": process.stdout, "stderr": process.stderr,
             "timed_out": False, "receiver": "TEST_ONLY_NOT_SANDBOX_QUALIFICATION"}
-database, program, prepared = json.load(sys.stdin)
+database, program, prepared, expected_calls = json.load(sys.stdin)
 controller = BuildController(RevisionControlEventStore(database), program, runner=fixture_runner)
 first = controller.advance(prepared)
 count = len(calls)
 second = controller.advance(prepared)
-assert len(calls) == count == 5, calls
+assert len(calls) == count == expected_calls, calls
 assert first["status"] == second["status"] == "PLAN_CHECKS_ACCEPTED", (first, second)
 assert not first["harness_e2e_verified"]
 print(json.dumps(first))
 ''')
-        result = self.run_python(["-c", program], data=json.dumps([str(database), fixture.program, prepared["event_id"]]))
+        result = self.run_python(["-c", program], data=json.dumps(
+            [str(database), fixture.program, prepared["event_id"], 6 if with_quality_contract else 5]))
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertEqual(json.loads((fixture.workspace / "outputs/summary.json").read_text()), {"rows": 3, "invalid": 2})
         view = self.cli("read-build", "--control-db", str(database), "--program-id", fixture.program)
         self.assertEqual([row["status"] for row in view["attempts"]], ["ACCEPTED", "ACCEPTED"])
+        if with_quality_contract:
+            self.assertEqual(view["attempts"][0]["effects"]["status"], "PASS")
+            self.assertEqual((fixture.workspace / "src/user.txt").read_text(), "preserve")
 
     def test_every_relative_document_and_skill_link_resolves_in_bundle(self):
         for path in self.bundle.rglob("*.md"):

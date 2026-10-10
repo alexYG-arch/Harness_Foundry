@@ -32,6 +32,7 @@ REQUIRED_MODULES = (
     "test_generic_distribution",
     "test_build_replan",
     "test_process_cancellation",
+    "test_process_observation",
     "test_committed_distribution",
     "test_route_retirement",
     "test_test_execution",

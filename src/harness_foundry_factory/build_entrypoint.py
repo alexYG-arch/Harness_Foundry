@@ -81,12 +81,23 @@ def _scope_readback(event, events):
              else "APPROVED" if approved else "APPROVAL_REQUIRED")
     source = next(row for row in events if row["event_id"] == payload["source_event_id"])
     proposal = next(row for row in events if row["event_id"] == payload["proposal_event_id"])
+    attempts = [row["payload"] for row in events if row["event_type"] == "BUILD_ATTEMPT_STARTED"
+                and row["payload"]["prepared_event_id"] == prepared_id]
+    task_usage = {}
+    for attempt in attempts:
+        for owner in attempt.get("budget_workpack_ids", [attempt["workpack_id"]]):
+            task_usage[owner] = task_usage.get(owner, 0) + 1
     return {"prepared_event_id": prepared_id, "proposal_event_id": payload["proposal_event_id"],
             "requirement_ir": proposal["payload"]["requirement_ir"], "plan": proposal["payload"]["plan"],
             "scope": payload["scope"], "source_binding": _source_summary(source),
             "verification_files": sorted(payload["verifier_files"]), "state": state,
             "coding_instruction_preflight": payload.get("coding_instruction_preflight"),
             "acceptance_contracts": payload.get("acceptance_contracts"),
+            "budget": {"attempts_consumed": len(attempts),
+                       "attempts_remaining": max(0, payload["scope"]["max_attempts"] - len(attempts)),
+                       "task_attempts_consumed": task_usage,
+                       "task_attempts_remaining": {key: max(0, payload["scope"]["max_task_attempts"] - count)
+                                                   for key, count in task_usage.items()}, "reset": False},
             "directory_creation": "ONLY_DURING_APPROVED_ADVANCE",
             "freshness_rechecked_at_dispatch": True, "execution_started_by_readback": False}
 
@@ -121,6 +132,10 @@ def read_build(control_db, program_id):
                   "INVALIDATED": "REBUILD_AFFECTED_BRANCH_WITHIN_BUDGET"}.get(row["status"], "INSPECT")
         row["recovery"] = {"next_action": action, "automatic_acceptance": False}
         command = row.get("last_command", {})
+        row["phase"] = command.get("phase", "NOT_DISPATCHED")
+        row["recovery"].update(owner="LOCAL_OPERATOR" if row["status"] in {"UNKNOWN_SIDE_EFFECT", "BLOCKED"}
+                               else "BUILD_CONTROLLER", evidence_attempt_id=row["attempt_id"],
+                               minimum_return_path=action)
         if row["status"] == "REJECTED" and BuildController._failure_status(command.get("result", {})) == "BLOCKED":
             row["recovery"].update(next_action="REPAIR_RUNTIME_ENVIRONMENT", historical_classification="REJECTED")
         if row["status"] in {"BLOCKED", "REJECTED"} and any(
@@ -129,6 +144,7 @@ def read_build(control_db, program_id):
             row["recovery"]["next_action"] = "ALIGN_PUBLIC_CONTRACT_AND_VERIFIER"
         if row["status"] in {"UNKNOWN_SIDE_EFFECT", "IN_FLIGHT"} and command.get("observation_root"):
             row["recovery"]["host_observation"] = CommandObservation.inspect(command["observation_root"])
+        row["recovery"]["minimum_return_path"] = row["recovery"]["next_action"]
     return {"status": "BUILD_READBACK", "program_id": program_id, "stream_revision": len(events),
             "proposal": proposal, "requirement_ir": latest_proposal["payload"]["requirement_ir"],
             "document_review": review_summary(latest_proposal["payload"].get("document_review")),

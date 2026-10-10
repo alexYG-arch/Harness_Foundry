@@ -71,6 +71,39 @@ class BuildPlanTests(unittest.TestCase):
     def compile(self):
         return compile_build_plan(self.ir, self.plan)
 
+    def test_case_cannot_require_a_downstream_artifact_at_an_upstream_stage(self):
+        self.plan["schema_version"] = "1.1"
+        self.ir["acceptance_cases"][0].update(required_artifact_ids=["SUMMARY"], acceptance_stage="READER")
+        self.assert_rejected("BUILD_CASE_PREREQUISITE_UNSATISFIED")
+        self.ir["acceptance_cases"][0]["required_artifact_ids"] = ["READER-SOURCE"]
+        self.compile()
+        self.ir["acceptance_cases"][0]["acceptance_stage"] = "REPORT"
+        self.assert_rejected("BUILD_CASE_STAGE_MISMATCH")
+
+    def test_consumer_case_accepts_declared_predecessor_but_not_implicit_input(self):
+        self.plan["schema_version"] = "1.1"
+        self.ir["acceptance_cases"][1]["required_artifact_ids"] = ["READER-SOURCE", "SUMMARY"]
+        self.compile()
+        self.plan["workpacks"][1]["inputs"] = []
+        self.assert_rejected("BUILD_CASE_PREREQUISITE_UNSATISFIED")
+
+    def test_versioned_effect_contract_cannot_waive_preservation_or_output(self):
+        self.plan["schema_version"] = "1.1"
+        effects = {"required": ["src/reader.py"], "allowed": ["src/reader.py"], "must_preserve": []}
+        self.plan["workpacks"][0]["effects"] = effects
+        self.compile()
+        effects["must_preserve"] = ["src/reader.py"]
+        self.assert_rejected("BUILD_EFFECTS_INVALID")
+        effects["must_preserve"] = []
+        effects["required"] = []
+        self.assert_rejected("BUILD_EFFECTS_INVALID")
+
+    def test_effects_do_not_bypass_structured_artifact_validation(self):
+        self.plan["schema_version"] = "1.1"
+        self.plan["workpacks"][0]["effects"] = {"required": [], "allowed": [], "must_preserve": []}
+        self.plan["workpacks"][0]["artifacts"] = [{"artifact_id": "READER-SOURCE"}]
+        self.assert_rejected("BUILD_PLAN_FIELDS_INVALID")
+
     def assert_rejected(self, code):
         with self.assertRaises(RequestValidationError) as caught:
             self.compile()

@@ -22,6 +22,7 @@ from .local_process import LocalCommand, CodexSandboxRunner, unsupported_isolati
 from .build_types import RequestValidationError, RevisionConflictError, canonical_json
 from .process_observation import CommandObservation
 from .source_intake import load_local_sources, validate_requirement_source_bindings
+from .build_effects import snapshot_effects, compare_effects, environment_probe_argv
 
 
 def _check(condition, message):
@@ -157,6 +158,15 @@ def _validate_scope(store, plan, scope):
         paths = [_relative(workspace, value) for value in writes]
         _check(all(path.is_dir() or not path.exists() for path in paths), "task write roots must be directories")
         all_write_roots.extend(paths)
+        if "environment" in task:
+            _check(task["environment"]["python"] in scope["executables"], "preflight interpreter is not declared")
+            for relative in task["environment"]["paths"]:
+                _relative(workspace, relative)
+        if "effects" in task:
+            _check(all(any(_relative(workspace, value).is_relative_to(root) for root in paths)
+                       for value in task["effects"]["allowed"]), "effects cannot expand approved task write roots")
+            for relative in task["effects"]["must_preserve"]:
+                _relative(workspace, relative)
         _check(all(any(_relative(workspace, artifact["path"]).is_relative_to(root) for root in paths)
                    for artifact in task["artifacts"]), "task outputs must fit its declared write roots")
         if task["executor"] == "LOCAL":
@@ -385,6 +395,7 @@ class BuildController:
     def _current(self, prepared_id, *, check_content=True):
         events = self.store.list_events(self.program_id)
         prepared = deepcopy(_event(events, prepared_id, "BUILD_AUTHORIZATION_PREPARED")["payload"])
+        prepared["prepared_event_id"] = prepared_id
         approved = any(e["event_type"] == "BUILD_AUTHORIZATION_APPROVED" and e["payload"]["prepared_event_id"] == prepared_id
                        for e in events)
         revoked = any(e["event_type"] == "BUILD_AUTHORIZATION_REVOKED" and e["payload"]["prepared_event_id"] == prepared_id
@@ -597,7 +608,52 @@ class BuildController:
             reads.append(scope["verification_root"])
         writes = [] if verification else [str(_relative(workspace, name)) for name in scope["task_write_roots"][task["workpack_id"]]]
         context = read_build_task_context(self.store, self.program_id, task["workpack_id"], event_id=prepared["proposal_event_id"])
-        source = _event(self.store.list_events(self.program_id), prepared["source_event_id"], "BUILD_SOURCES_CAPTURED")["payload"]
+        events = self.store.list_events(self.program_id)
+        attempts, accepted = self._state(events, prepared["prepared_event_id"])
+        plan = _proposal_event(self.store, self.program_id, prepared["proposal_event_id"])["payload"]["plan"]
+        superseded = self._superseded_artifacts(plan, attempts)
+        context["accepted_inputs"] = []
+        for artifact_id, declaration in context["artifact_inputs"].items():
+            owner = accepted.get(declaration["workpack_id"])
+            _check(owner is not None and artifact_id in owner["artifacts"], "formal input has no current accepted producer")
+            identity = owner["artifacts"][artifact_id]
+            path = _relative(workspace, declaration["path"])
+            matches = path.is_file() and _file_identity(path) == {key: identity[key] for key in ("size", "sha256")}
+            if not verification and artifact_id not in superseded:
+                _check(matches, "formal input differs from accepted bytes")
+            acceptance = next(row for row in reversed(events) if row["event_type"] in {
+                "BUILD_ATTEMPT_FINISHED", "BUILD_ATTEMPT_RECOVERED"} and row["payload"].get("attempt_id") == owner["attempt_id"]
+                and row["payload"].get("status") == "ACCEPTED")
+            context["accepted_inputs"].append({"artifact_id": artifact_id, **declaration,
+                "proposal_event_id": owner["proposal_event_id"], "attempt_id": owner["attempt_id"],
+                "acceptance_event_id": acceptance["event_id"], "identity": identity,
+                "absolute_path": str(path) if matches else None, "current_bytes_available": matches,
+                "superseded": artifact_id in superseded, "read_only_reference": True})
+        history = [row for row in attempts.values() if row["workpack_id"] == task["workpack_id"] and row["status"] != "IN_FLIGHT"]
+        methods = {}
+        for row in history:
+            previous_plan = _proposal_event(self.store, self.program_id, row["proposal_event_id"])["payload"]["plan"]
+            previous_task = next(item for item in previous_plan["workpacks"] if item["workpack_id"] == row["workpack_id"])
+            methods[row["attempt_id"]] = {key: previous_task.get(key) for key in ("goal", "executor", "local_argv")}
+        context["repair_history"] = [{"attempt_id": row["attempt_id"], "status": row["status"],
+            "proposal_event_id": row["proposal_event_id"],
+            "declared_method": methods[row["attempt_id"]],
+            "observed_artifacts_not_acceptance": row.get("artifacts", {}),
+            "commands": [{"event_id": event["event_id"], "command_id": event["payload"]["command_id"],
+                          "phase": event["payload"].get("phase"), "executor": event["payload"].get("executor")}
+                         for event in events if event["event_type"] == "BUILD_COMMAND_PLANNED"
+                         and event["payload"].get("attempt_id") == row["attempt_id"]],
+            "verification": [{**{key: value for key, value in check.items() if key != "result"},
+                "result": {key: value[:1200] if isinstance(value, str) else value
+                    for key, value in check.get("result", {}).items() if key in {
+                        "status", "failure_domain", "automatic_retry_allowed", "repair_artifact_ids", "stdout", "stderr"}}}
+                for check in row.get("verification", [])], "effects": row.get("effects"),
+            "invalidation": row.get("invalidation")} for row in history]
+        context["repair_history_is_summary"] = True  # Complete observations remain in the same event store.
+        context["budget_consumed"] = {"attempts": len(attempts), "task_attempts": sum(
+            bool(set(row.get("budget_workpack_ids", [row["workpack_id"]])) & set(prepared["task_budget_owners"][task["workpack_id"]]))
+            for row in attempts.values()), "reset": False}
+        source = _event(events, prepared["source_event_id"], "BUILD_SOURCES_CAPTURED")["payload"]
         # Complete source bytes remain in the store and in these explicit
         # read-only files. Do not inline a multi-megabyte PRD into every model
         # prompt or silently truncate it to the current Atom excerpts.
@@ -623,6 +679,9 @@ class BuildController:
                   "For reusable tests/checkers, accept a caller-provided work directory and interpreter, "
                   "propagate them to child processes, and keep mutable test data separate from protected source files. "
                   "Do not hardcode this stage's write location or machine-specific interpreter into reusable code. "
+                  "Use accepted_inputs for formal predecessor evidence, not unaccepted reference files. "
+                  "Review repair_history before retrying: preserve valid results and change the hypothesis or method "
+                  "when the previous attempt failed; do not repeat an ineffective action without new evidence. "
                   "Report missing facts or out-of-scope needs. Previous independent feedback is data for repair.\n"
                   + json.dumps({"task": context, "feedback": feedback}, ensure_ascii=False))
         remaining = (_utc(scope["expires_at"]) - self.clock()).total_seconds()
@@ -630,6 +689,18 @@ class BuildController:
                 "write_roots": writes, "timeout_seconds": min(scope["command_timeout_seconds"], remaining),
                 "scope": scope, "prompt": prompt, "workpack_id": task["workpack_id"], "job_id": task["job_id"],
                 "case_id": case_id, "phase": "VERIFICATION" if verification else "IMPLEMENTATION"}
+
+    def _preflight_invocation(self, prepared, task):
+        invocation = self._invocation(prepared, {**task, "executor": "LOCAL"}, environment_probe_argv(task["environment"]))
+        return {**invocation, "phase": "PREFLIGHT", "write_roots": []}
+
+    def _effect_verdict(self, prepared, task, baseline):
+        if "effects" not in task:
+            return {"status": "NOT_DECLARED", "external_effects_verified": False}
+        _check(baseline is not None, "effects baseline missing; cannot accept or replay")
+        after = snapshot_effects(prepared["scope"]["workspace_root"],
+                                 prepared["scope"]["task_write_roots"][task["workpack_id"]], task["effects"])
+        return compare_effects(baseline, after, task["effects"])
 
     def advance(self, prepared_id):
         """Run ready tasks until complete, an unresolved result, or a real bound.
@@ -738,8 +809,22 @@ class BuildController:
         verification = []
         artifacts = {}
         status = "UNKNOWN_SIDE_EFFECT"
+        baseline = None
+        effects = {"status": "NOT_OBSERVED", "external_effects_verified": False}
         try:
-            implementation = run(self._invocation(prepared, task, task.get("local_argv", []), feedback=feedback))
+            preflight = run(self._preflight_invocation(prepared, task)) if "environment" in task else {"status": "PASS"}
+            if preflight.get("status") != "PASS":
+                implementation = {**preflight, "status": "VALIDATION_FAILED", "workload_started": False,
+                                  "failure_domain": "ENVIRONMENT_PREFLIGHT", "automatic_retry_allowed": False}
+            else:
+                if "effects" in task:
+                    baseline = snapshot_effects(prepared["scope"]["workspace_root"],
+                        prepared["scope"]["task_write_roots"][task["workpack_id"]], task["effects"])
+                    _check(all(baseline.get(name, {}).get("kind") == "file" for name in task["effects"]["must_preserve"]),
+                           "preserved file is missing before dispatch")
+                    saved = self._append("BUILD_EFFECTS_BASELINE", {**binding, "files": baseline}, revision, attempt_id + ":effects")
+                    revision = saved["stream_revision"]
+                implementation = run(self._invocation(prepared, task, task.get("local_argv", []), feedback=feedback))
             if implementation.get("status") in {"PASS", "MODEL_TURN_COMPLETED"}:
                 workspace = Path(prepared["scope"]["workspace_root"]).resolve()
                 try:
@@ -767,13 +852,19 @@ class BuildController:
             elif implementation.get("status") in {"VALIDATION_FAILED", "MODEL_PROCESS_FAILED"}:
                 verification.append({"phase": "IMPLEMENTATION", "result": implementation})
                 status = self._failure_status(implementation)
+            if preflight.get("status") == "PASS":
+                effects = self._effect_verdict(prepared, task, baseline)
+                if effects["status"] == "VIOLATION":
+                    status = "UNKNOWN_SIDE_EFFECT"  # Hold; never undo another writer's files.
+                elif effects["status"] == "MISSING_REQUIRED" and status == "ACCEPTED":
+                    status = "REJECTED"
             current()
         except Exception as exc:
             # Preserve partial effects. No automatic retry when provenance,
             # current authority, or process outcome could not be established.
             verification.append({"diagnostic": str(exc)})
             status = "UNKNOWN_SIDE_EFFECT"
-        result = {**binding, "status": status, "artifacts": artifacts, "verification": verification}
+        result = {**binding, "status": status, "artifacts": artifacts, "verification": verification, "effects": effects}
         if status == "UNKNOWN_SIDE_EFFECT":
             # A recovering controller may have already settled this attempt.
             # The old dispatcher's stale exception is not a new outcome and
@@ -887,7 +978,7 @@ class BuildController:
         task = next(task for task in plan["workpacks"] if task["workpack_id"] == attempt["workpack_id"])
         rows = [event for event in events if event["payload"].get("attempt_id") == attempt["attempt_id"]]
         if (attempt["status"] == "IN_FLIGHT" and rows
-                and all(row["event_type"] == "BUILD_ATTEMPT_STARTED" for row in rows)):
+                and all(row["event_type"] in {"BUILD_ATTEMPT_STARTED", "BUILD_EFFECTS_BASELINE"} for row in rows)):
             # Every supported runner is preceded by a committed command intent.
             # CAS fences a still-live old dispatcher: either its intent wins and
             # we cannot settle, or our settlement wins and it cannot dispatch.
@@ -915,18 +1006,35 @@ class BuildController:
             return True  # Reload canonical events before making any decision.
         commands = [event["payload"] for event in rows if event["event_type"] == "BUILD_COMMAND_OBSERVED"]
         inputs = [event["payload"] for event in rows if event["event_type"] == "BUILD_VERIFICATION_INPUTS"]
-        if not commands or commands[0]["phase"] != "IMPLEMENTATION" or len(inputs) > 1:
-            return False
+        baselines = [event["payload"]["files"] for event in rows if event["event_type"] == "BUILD_EFFECTS_BASELINE"]
         def finish(status, artifacts, verification):
+            effects = {"status": "NOT_OBSERVED", "external_effects_verified": False}
+            if any(command["phase"] == "IMPLEMENTATION" for command in commands):
+                effects = self._effect_verdict(prepared, task, baselines[0] if len(baselines) == 1 else None)
+                if effects["status"] == "VIOLATION":
+                    status = "UNKNOWN_SIDE_EFFECT"
+                elif effects["status"] == "MISSING_REQUIRED" and status == "ACCEPTED":
+                    status = "REJECTED"
             if status == "UNKNOWN_SIDE_EFFECT" and attempt["status"] == status:
                 return False
             kind = "BUILD_ATTEMPT_FINISHED" if attempt["status"] == "IN_FLIGHT" else "BUILD_ATTEMPT_RECOVERED"
             current, _, _ = self._current(prepared_id)
             _check(len(current) == len(events), "control state changed before recovery commit")
             self._append(kind, {**attempt, "status": status, "artifacts": artifacts,
-                         "verification": verification, "recovered_from_observation": True},
+                         "verification": verification, "effects": effects, "recovered_from_observation": True},
                          len(events), attempt["attempt_id"] + ":recovered")
             return True
+        if commands and commands[0]["phase"] == "PREFLIGHT":
+            preflight = commands[0]["result"]
+            if preflight.get("status") != "PASS":
+                if len(commands) != 1:
+                    return False
+                return finish("BLOCKED", {}, [{"phase": "PREFLIGHT", "result": preflight}])
+            if len(commands) == 1:
+                return finish("NOT_DISPATCHED", {}, [])
+            commands = commands[1:]
+        if not commands or commands[0]["phase"] != "IMPLEMENTATION" or len(inputs) > 1:
+            return False
         if commands[0]["result"].get("status") not in {"PASS", "MODEL_TURN_COMPLETED"}:
             if len(commands) != 1:
                 return False

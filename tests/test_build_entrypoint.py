@@ -110,6 +110,16 @@ class BuildEntrypointTests(unittest.TestCase):
         self.assertEqual(json.loads((self.f.workspace / "outputs/summary.json").read_text()), {"rows": 3, "invalid": 2})
         view = self.cli("read-build")
         self.assertEqual([row["status"] for row in view["attempts"]], ["ACCEPTED", "ACCEPTED"])
+        budget = view["authorizations"][0]["budget"]
+        self.assertEqual(budget["attempts_consumed"], 2)
+        self.assertEqual(budget["attempts_remaining"], self.f.scope["max_attempts"] - 2)
+        self.assertFalse(budget["reset"])
+        revision = view["stream_revision"]
+        for row in view["attempts"]:
+            self.assertEqual(row["phase"], "VERIFICATION")
+            self.assertEqual(row["recovery"]["minimum_return_path"], "NO_REPLAY")
+            self.assertEqual(row["recovery"]["evidence_attempt_id"], row["attempt_id"])
+        self.assertEqual(self.cli("read-build")["stream_revision"], revision)
 
     def test_public_model_self_approval_and_legacy_actor_are_rejected(self):
         self.prepare()

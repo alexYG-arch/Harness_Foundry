@@ -126,7 +126,8 @@ def validate_build_plan(requirement_ir: Mapping[str, Any], plan: Mapping[str, An
     """
     atoms, cases, sources = _requirement_catalog(requirement_ir)
     _fields(plan, {"schema_version", "plan_id", "revision", "requirement_revision", "workpacks"}, "plan")
-    _require(plan["schema_version"] == "1.0", "BUILD_PLAN_VERSION_UNSUPPORTED", "unsupported build-plan schema")
+    _require(isinstance(plan["schema_version"], str) and plan["schema_version"] in {"1.0", "1.1"},
+             "BUILD_PLAN_VERSION_UNSUPPORTED", "unsupported build-plan schema")
     _id(plan["plan_id"], "plan.plan_id")
     _require(type(plan["revision"]) is int and plan["revision"] > 0,
              "BUILD_PLAN_REVISION_INVALID", "plan revision must be a positive integer")
@@ -140,7 +141,29 @@ def validate_build_plan(requirement_ir: Mapping[str, Any], plan: Mapping[str, An
     for workpack_id, workpack in workpacks.items():
         _fields(workpack, {"workpack_id", "job_id", "executor", "goal", "depends_on", "atom_ids",
                            "inputs", "artifacts", "verification"} | ({"local_argv"}
-                           if "local_argv" in workpack else set()), f"workpack {workpack_id}")
+                           if "local_argv" in workpack else set()) | (
+                           set(workpack) & {"environment", "effects"} if plan["schema_version"] == "1.1" else set()),
+                f"workpack {workpack_id}")
+        if "environment" in workpack:
+            env = workpack["environment"]
+            _fields(env, {"python", "modules", "paths"}, "environment")
+            _id(env["python"], "environment.python")
+            _require(isinstance(env["modules"], list) and all(isinstance(name, str) and name.isidentifier()
+                     for name in env["modules"]), "BUILD_ENVIRONMENT_INVALID", "declare top-level Python module names")
+            _require(isinstance(env["paths"], list), "BUILD_ENVIRONMENT_INVALID", "environment.paths must be a list")
+            for path in env["paths"]:
+                _artifact_path(path)
+        if "effects" in workpack:
+            effects = workpack["effects"]
+            _fields(effects, {"required", "allowed", "must_preserve"}, "effects")
+            for key, values in effects.items():
+                _require(isinstance(values, list), "BUILD_EFFECTS_INVALID", f"effects.{key} must be a list")
+                for value in values:
+                    _artifact_path(value)
+                _require(len(values) == len(set(values)), "BUILD_EFFECTS_INVALID", "duplicate effect path")
+            _require(set(effects["required"]) <= set(effects["allowed"])
+                     and not set(effects["allowed"]) & set(effects["must_preserve"]),
+                     "BUILD_EFFECTS_INVALID", "required files must be allowed; preserved files cannot be writable effects")
         _id(workpack["job_id"], "workpack.job_id")
         _require(workpack["executor"] in ("CODEX", "LOCAL"), "BUILD_PLAN_EXECUTOR_UNSUPPORTED", "executor must be CODEX or LOCAL")
         if "local_argv" in workpack:
@@ -171,6 +194,9 @@ def validate_build_plan(requirement_ir: Mapping[str, Any], plan: Mapping[str, An
             artifacts[artifact_id] = {"workpack_id": workpack_id, "job_id": workpack["job_id"], "path": artifact["path"]}
             if "replaces_artifact_id" in artifact:
                 artifacts[artifact_id]["replaces_artifact_id"] = artifact["replaces_artifact_id"]
+        if "effects" in workpack:
+            _require({row["path"] for row in outputs.values()} <= set(workpack["effects"]["required"]),
+                     "BUILD_EFFECTS_INVALID", "effects must require all declared output files")
         verification = workpack["verification"]
         _require(isinstance(verification, list) and bool(verification),
                  "BUILD_PLAN_VERIFICATION_MISSING", "every workpack needs independently runnable verification")
@@ -226,6 +252,20 @@ def validate_build_plan(requirement_ir: Mapping[str, Any], plan: Mapping[str, An
             if item["kind"] == "ARTIFACT":
                 _require(artifacts[item["id"]]["workpack_id"] in ancestors[workpack_id],
                          "BUILD_PLAN_INPUT_DEPENDENCY_MISSING", "artifact producer must be a predecessor")
+        for check in workpack["verification"]:
+            case = cases[check["case_id"]]
+            if "required_artifact_ids" in case or "acceptance_stage" in case:
+                _require(plan["schema_version"] == "1.1", "BUILD_PLAN_VERSION_UNSUPPORTED",
+                         "Case prerequisites and acceptance_stage require plan 1.1")
+                required = _ids(case.get("required_artifact_ids", []), "case.required_artifact_ids")
+                available = {row["artifact_id"] for row in workpack["artifacts"]} | {
+                    row["id"] for row in inputs if row["kind"] == "ARTIFACT"}
+                missing = {artifact_id: artifacts.get(artifact_id, {}).get("workpack_id", "UNKNOWN_PRODUCER")
+                           for artifact_id in sorted(set(required) - available)}
+                _require(not missing, "BUILD_CASE_PREREQUISITE_UNSATISFIED",
+                         f"Case {case['case_id']} at {workpack_id} requires unavailable artifacts/producers: {missing}")
+                _require(case.get("acceptance_stage", workpack["job_id"]) == workpack["job_id"],
+                         "BUILD_CASE_STAGE_MISMATCH", "Case acceptance_stage must match its verifying Job")
     _validate_artifact_revisions(workpacks, artifacts, paths, ancestors)
 
 

@@ -14,6 +14,24 @@ from test_coding_protocol import EVENTS, capture
 
 
 class ProcessObservationTests(unittest.TestCase):
+    def test_progress_is_visible_before_completion_and_never_acceptance(self):
+        with tempfile.TemporaryDirectory() as root:
+            journal = CommandObservation(Path(root) / "running", "TEST-COMMAND", "LOCAL")
+            try:
+                journal.started(os.getpid())
+                journal.write("stdout", b"working")
+                result = CommandObservation.inspect(journal.root)
+                self.assertEqual(result["stream_bytes"]["stdout"], 7)
+                self.assertIsNotNone(result["latest_output_at"])
+                self.assertGreaterEqual(result["elapsed_seconds"], 0)
+                self.assertFalse(result["acceptance_verified"])
+                self.assertIsNone(CommandObservation.recover(journal.root, "TEST-COMMAND", "LOCAL"))
+                journal.captured({"status": "PASS"})
+                completed = CommandObservation.inspect(journal.root)["elapsed_seconds"]
+                self.assertEqual(CommandObservation.inspect(journal.root)["elapsed_seconds"], completed)
+            finally:
+                journal.close()
+
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)

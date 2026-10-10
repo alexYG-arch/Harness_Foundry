@@ -24,6 +24,13 @@ producer/consumer call's data, paths, interpreter and permissions. Preserve acce
 to complete sources and global constraints; implementation choices remain free.
 
 After confirmation, read the [CLI contract](../../../docs/GENERIC_BUILD_CLI.md).
+Separate as-is facts, target behavior, persistent constraints and user decisions.
+Do not assign Case ownership by headings/keywords or require a contract stage to
+prove downstream operations. Preserve final behavior obligations at their actual
+evidence stage. Plan 1.1 can declare Case prerequisites and task environment/effects
+contracts; see the linked build policy. Use current accepted input references,
+preserve named existing files and inspect repair history before another attempt.
+Do not infer semantic completeness or external effects from file checks.
 Prepare the plan, complete source binding, public Case contracts and independent
 checkers. Show exact model/service, tools, read/write paths, attempt/time limits
 and expiry before a real runtime approval. The trusted host authenticates actual

@@ -41,6 +41,60 @@ class ReleaseAcceptanceAdapterTests(unittest.TestCase):
         spec.loader.exec_module(module)
         return module
 
+    def test_factorial_report_keeps_unrun_and_unknown_costs_unknown(self):
+        quality = self.quality_module()
+        self.assertEqual(quality.factorial_summary()["status"], "NOT_RUN")
+        conditions = {key: "fixed" for key in quality.COMPARISON_FIELDS}
+        conditions["executor"] = {"requested_model": "fixture", "effective_model": "fixture",
+                                  "client_version": "fixture", "service_revision": None}
+        runs = [{"run_id": f"{foundry}-{document}", "task_id": "TASK-CLI", "foundry": foundry,
+                 "document": document, "outcome": "PASS", "conditions": deepcopy(conditions),
+                 "evidence_refs": ["external-check.json"], "attempts": 2, "tokens": None}
+                for foundry in ("baseline", "upgraded") for document in ("original", "clarified")]
+        result = quality.factorial_summary(runs)
+        self.assertEqual(result["status"], "MATCHED_OBSERVABLE_CONDITIONS")
+        self.assertIsNone(result["cells"]["baseline/original"]["mean"]["tokens"])
+        self.assertFalse(result["improvement_demonstrated"])
+        self.assertIn("SERVICE_REVISION_UNKNOWN", result["limitations"])
+        second_task = deepcopy(runs)
+        for row in second_task:
+            row["run_id"] += "-csv"
+            row["task_id"] = "CSV"
+            row["conditions"]["inputs"] = "csv-input"
+            row["conditions"]["contract"] = "csv-obligations"
+        self.assertEqual(quality.factorial_summary(runs + second_task)["status"], "MATCHED_OBSERVABLE_CONDITIONS")
+        second_task[-1]["conditions"]["contract"] = "weaker-obligations"
+        mismatch = quality.factorial_summary(runs + second_task)
+        self.assertEqual(mismatch["status"], "NOT_COMPARABLE")
+        self.assertIn("CSV:contract", mismatch["differing_or_missing"])
+        invalid = deepcopy(runs)
+        invalid[-1]["conditions"]["executor"].pop("effective_model")
+        self.assertEqual(quality.factorial_summary(invalid)["status"], "NOT_COMPARABLE")
+        runs[-1]["conditions"]["budget"] = "larger"
+        self.assertEqual(quality.factorial_summary(runs)["status"], "NOT_COMPARABLE")
+        self.assertEqual(quality.factorial_summary(runs[:-1])["status"], "INCOMPLETE")
+
+    def test_event_window_subscribes_before_short_lived_action(self):
+        from devtools.release_acceptance.observation_window import observe_window
+        callbacks = []
+        def subscribe(callback):
+            callbacks.append(callback)
+            return lambda: callbacks.remove(callback)
+        result = observe_window(ready=lambda: True, subscribe=subscribe,
+            trigger=lambda: callbacks[0]({"state": "saved"}), matches=lambda event: event["state"] == "saved",
+            timeout_seconds=1)
+        self.assertEqual(result["status"], "OBSERVED")
+        self.assertFalse(result["accepted"])
+        self.assertEqual(callbacks, [])
+        result = observe_window(ready=lambda: False, subscribe=subscribe,
+            trigger=lambda: self.fail("not ready"), matches=lambda event: True, timeout_seconds=1)
+        self.assertFalse(result["triggered"])
+        result = observe_window(ready=lambda: True, subscribe=subscribe, trigger=lambda: None,
+                                matches=lambda event: True, timeout_seconds=0.001)
+        self.assertEqual(result["status"], "OBSERVATION_INCOMPLETE")
+        self.assertEqual(callbacks, [])
+        self.assertFalse(result["accepted"])
+
     def test_authored_plan_is_preserved_without_fixed_stages_or_authority(self):
         proposed = getattr(prepare, "authored_proposal", None)
         self.assertTrue(callable(proposed), "Run Test must accept the Agent's actual Plan")

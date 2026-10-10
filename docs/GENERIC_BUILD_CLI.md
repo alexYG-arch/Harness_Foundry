@@ -1,5 +1,8 @@
 # 通用 Build 公开宿主入口
 
+2026-10-10：无需新 CLI 或审批种类。现有 compile/record 接受 Plan 1.1 增量，advance
+消费同一批准；read-build 增加 phase、预算和只读观察。见[契约](FOUNDRY_UPGRADE_2026_10_10.md)。
+
 状态：`SCOPED_M1_AND_REENTRY_ACCEPTED_NOT_RELEASE_ACCEPTANCE`。源码与本地进程回归不是
 完整 PRD 接入或发行包验收。开发仓库与通用发行包的新建统一只提供本路由；旧流程已退役。
 本入口只响应用户显式选择的

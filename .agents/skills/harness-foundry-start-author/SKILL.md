@@ -52,6 +52,12 @@ source access and global constraints. Algorithms and module layout remain free.
 
 ## One bounded runtime approval, autonomous work within scope
 
+Separate as-is facts, target behavior, persistent constraints and user decisions.
+Never assign Case ownership by keywords or force upstream construction to prove
+downstream final execution. Plan 1.1 supports explicit prerequisites, environment
+and file effects; follow the build policy. Use current accepted inputs and repair
+history; no schema/file check proves full semantic correctness or external effects.
+
 Read [the public Build CLI](../../../docs/GENERIC_BUILD_CLI.md) completely before
 requests, and [runtime boundaries](../../../docs/GENERIC_BUILD_RUNTIME.md) when
 dispatching or recovering.

@@ -6,6 +6,7 @@ captures can supply a missing observation; partial bytes never authorize replay.
 
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -31,7 +32,7 @@ class CommandObservation:
             os.close(directory)
 
     def started(self, pid):
-        self._save("started.json", {"pid": pid})
+        self._save("started.json", {"pid": pid, "started_at": datetime.now(timezone.utc).isoformat()})
         if self.on_started:
             self.on_started(pid)
 
@@ -39,6 +40,7 @@ class CommandObservation:
         if name not in self.streams:
             self.streams[name] = (self.root / (name + ".bin")).open("xb")
         self.streams[name].write(chunk)
+        self.streams[name].flush()  # Visible progress, not durable completion/acceptance.
 
     def captured(self, result):
         for stream in self.streams.values():
@@ -61,10 +63,30 @@ class CommandObservation:
         likewise cannot prove what the original command did before it exited.
         """
         root = Path(root)
+        progress = {"stream_bytes": {}, "latest_output_at": None, "elapsed_seconds": None,
+                    "progress_is_diagnostic_only": True, "acceptance_verified": False}
+        outputs = [root / (name + ".bin") for name in ("stdout", "stderr")]
+        for output in outputs:
+            if output.exists():
+                stat = output.stat()
+                progress["stream_bytes"][output.stem] = stat.st_size
+                timestamp = datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat()
+                progress["latest_output_at"] = max(progress["latest_output_at"] or timestamp, timestamp)
+        started_file = root / "started.json"
+        if started_file.exists():
+            try:
+                started_at = json.loads(started_file.read_text()).get("started_at")
+                if started_at:
+                    completed = next((root / name for name in ("capture.json", "result.json")
+                                      if (root / name).exists()), None)
+                    end = datetime.fromtimestamp(completed.stat().st_mtime, timezone.utc) if completed else datetime.now(timezone.utc)
+                    progress["elapsed_seconds"] = max(0, (end - datetime.fromisoformat(started_at)).total_seconds())
+            except (OSError, ValueError, TypeError):
+                pass
         if (root / "capture.json").exists() or (root / "result.json").exists():
-            return {"observation_state": "DURABLE_RESULT_AVAILABLE", "next_action": "RECONCILE_OBSERVATION"}
+            return {**progress, "observation_state": "DURABLE_RESULT_AVAILABLE", "next_action": "RECONCILE_OBSERVATION"}
         if not (root / "started.json").exists():
-            return {"observation_state": "START_NOT_OBSERVED", "next_action": "RECONCILE_DISPATCH_WINDOW"}
+            return {**progress, "observation_state": "START_NOT_OBSERVED", "next_action": "RECONCILE_DISPATCH_WINDOW"}
         try:
             pid = json.loads((root / "started.json").read_text())["pid"]
             if type(pid) is not int or pid <= 0:
@@ -75,7 +97,7 @@ class CommandObservation:
             probe = "PID_ABSENT_EFFECTS_UNKNOWN"
         except (OSError, ValueError, KeyError, TypeError):
             probe = "PROCESS_PROBE_UNAVAILABLE"
-        return {"observation_state": "COMPLETION_NOT_OBSERVED", "process_probe": probe,
+        return {**progress, "observation_state": "COMPLETION_NOT_OBSERVED", "process_probe": probe,
                 "next_action": "OBSERVE_OR_RECONCILE_PROCESS", "replay_allowed": False}
 
     @staticmethod

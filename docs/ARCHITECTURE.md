@@ -1,6 +1,15 @@
 # Factory architecture
 
-## 默认 Foundry 核心产品路径
+## 当前架构：Generic Reviewed Build
+
+当前唯一新建路线为完整来源 → 已审阅搭建文档 → Requirement/Plan → 具体范围批准 →
+单一 BuildController 的实施、独立检查、修复与恢复。SQLite REVISION_V1 是唯一权威；
+新 Plan 1.1 的环境/输入/效果记录进入同一控制器，不新建 Hash 链或恢复引擎。
+见[2026-10-10 升级说明](FOUNDRY_UPGRADE_2026_10_10.md)和[通用计划](GENERIC_BUILD_PLAN.md)。
+
+## 历史架构存档：41 项核心路径（不再是当前新建路线）
+
+以下保留历史含义，不作为当前 CLI 路由或执行授权。
 
 ```text
 Requirement / Architecture inputs
@@ -18,9 +27,9 @@ Requirement / Architecture inputs
 
 Slices 09–14 的 8 项 Candidate/Runtime 能力保留为非默认兼容扩展，`default_route=false`、`core_release_blocking=false`。它们的存在不扩大 Foundry 核心完成条件。
 
-## 可选 Start Package 兼容架构
+## 历史 Start Package 兼容架构（公开新建入口已退役）
 
-以下架构只在用户明确选择 Candidate Authoring 兼容路线时适用：
+以下只描述历史实现，不允许绕过已退役公开入口：
 
 ```text
 User natural language

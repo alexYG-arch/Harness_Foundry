@@ -81,6 +81,7 @@ class PortableLocalCliTests(unittest.TestCase):
         self.assertFalse(any(path.startswith("tests/") for path in manifest["files"]))
         self.assertIn("docs/ARCHITECTURE.md", manifest["files"])
         self.assertIn("docs/CHAT_USAGE.md", manifest["files"])
+        self.assertIn("docs/FOUNDRY_UPGRADE_2026_10_10.md", manifest["files"])
         self.assertIn("LICENSE", manifest["files"])
         for name in ("GENERIC_BUILD_PLAN", "GENERIC_BUILD_CLI", "GENERIC_BUILD_RUNTIME", "GENERIC_SOURCE_INTAKE", "ACCEPTANCE_CONTRACT_ALIGNMENT", "RELEASE_READINESS"):
             self.assertIn(f"docs/{name}.md", manifest["files"])

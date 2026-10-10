@@ -228,6 +228,131 @@ class BuildRuntimeTests(unittest.TestCase):
         self.assertEqual(self.advance()["status"], "PLAN_CHECKS_ACCEPTED")
         self.assertEqual(len(self.runner.invocations), 5, "accepted work must not be repeated")
 
+    def test_downstream_gets_current_accepted_input_and_acceptance_event(self):
+        self.prepare()
+        self.assertEqual(self.advance()["status"], "PLAN_CHECKS_ACCEPTED")
+        invocation = next(row for row in self.runner.invocations if row["job_id"] == "REPORT")
+        context = json.loads(invocation["prompt"].split("\n", 1)[1])["task"]
+        packet = context["accepted_inputs"]
+        self.assertEqual(len(packet), 1)
+        self.assertEqual(packet[0]["artifact_id"], "READER-SOURCE")
+        self.assertEqual(packet[0]["acceptance_event_id"], self.events("BUILD_ATTEMPT_FINISHED")[0]["event_id"])
+        self.assertEqual(packet[0]["identity"]["sha256"], self.events("BUILD_ATTEMPT_FINISHED")[0]["payload"]["artifacts"]["READER-SOURCE"]["sha256"])
+        self.assertEqual(context["requirement_context"]["target"], self.ir["target"])
+
+    def test_effect_contract_keeps_protected_file_even_when_checkers_pass(self):
+        self.plan["schema_version"] = "1.1"
+        first = self.plan["workpacks"][0]
+        first["effects"] = {"required": ["src/reader.py"], "allowed": ["src/reader.py"],
+                            "must_preserve": ["src/existing.txt"]}
+        (self.workspace / "src/existing.txt").write_text("user content")
+        first["local_argv"][-1] += "; Path('src/existing.txt').unlink()"
+        self.prepare()
+        result = self.advance()
+        self.assertNotEqual(result["status"], "PLAN_CHECKS_ACCEPTED")
+        finished = self.events("BUILD_ATTEMPT_FINISHED")[-1]["payload"]
+        self.assertEqual(finished["status"], "UNKNOWN_SIDE_EFFECT")
+        self.assertEqual(finished["effects"]["violations"][0]["path"], "src/existing.txt")
+        self.assertFalse((self.workspace / "src/existing.txt").exists(), "rejection must not claim rollback")
+        count = len(self.runner.invocations)
+        self.advance()
+        self.assertEqual(len(self.runner.invocations), count)
+
+    def test_environment_preflight_missing_module_never_dispatches_implementation(self):
+        self.plan["schema_version"] = "1.1"
+        self.plan["workpacks"][0]["environment"] = {"python": "python", "modules": ["foundry_missing_test_dependency"],
+                                                   "paths": []}
+        self.prepare()
+        result = self.advance()
+        self.assertNotEqual(result["status"], "PLAN_CHECKS_ACCEPTED")
+        self.assertEqual([row["phase"] for row in self.runner.invocations], ["PREFLIGHT"])
+        self.assertEqual(self.events("BUILD_ATTEMPT_FINISHED")[-1]["payload"]["status"], "BLOCKED")
+        self.assertFalse((self.workspace / "src/reader.py").exists())
+        self.assertEqual(len(self.events("BUILD_ATTEMPT_STARTED")), 1, "no budget reset")
+
+    def _quality_contract(self):
+        self.plan["schema_version"] = "1.1"
+        task = self.plan["workpacks"][0]
+        task["effects"] = {"required": ["src/reader.py"], "allowed": ["src/reader.py"], "must_preserve": ["src/user.txt"]}
+        task["environment"] = {"python": "python", "modules": ["json"], "paths": ["src/user.txt"]}
+        (self.workspace / "src/user.txt").write_text("preserve")
+        return task
+
+    def test_quality_contract_normal_route_uses_readonly_preflight_and_host_effects(self):
+        self._quality_contract()
+        self.prepare()
+        self.assertEqual(self.advance()["status"], "PLAN_CHECKS_ACCEPTED")
+        probe = self.runner.invocations[0]
+        self.assertEqual(probe["phase"], "PREFLIGHT")
+        self.assertEqual(probe["argv"][0], self.scope["executables"]["python"])
+        self.assertEqual(probe["cwd"], str(self.workspace))
+        self.assertEqual(probe["write_roots"], [])
+        result = self.events("BUILD_ATTEMPT_FINISHED")[0]["payload"]
+        self.assertEqual(result["effects"]["status"], "PASS")
+        self.assertEqual(result["effects"]["changed_paths"], ["src/reader.py"])
+        self.assertFalse(result["effects"]["external_effects_verified"])
+
+    def test_unexpected_extra_file_inside_write_scope_is_not_effect_contract_pass(self):
+        task = self._quality_contract()
+        task["local_argv"][-1] += "; Path('src/unrequested.txt').write_text('extra')"
+        self.prepare()
+        self.assertEqual(self.advance()["status"], "HELD_UNRESOLVED_ATTEMPT")
+        result = self.events("BUILD_ATTEMPT_FINISHED")[0]["payload"]
+        self.assertEqual(result["effects"]["violations"], [{"path": "src/unrequested.txt", "reason": "UNDECLARED_FILE_EFFECT"}])
+        self.assertFalse((self.workspace / "outputs/summary.json").exists())
+
+    def test_effect_baseline_is_reused_after_controller_interruption(self):
+        self._quality_contract()
+        self.prepare()
+        controller = self.controller()
+        append = controller._append
+        def crash_before_acceptance(kind, *args):
+            if kind == "BUILD_ATTEMPT_FINISHED":
+                raise InjectedControllerCrash()
+            return append(kind, *args)
+        with patch.object(controller, "_append", side_effect=crash_before_acceptance), self.assertRaises(InjectedControllerCrash):
+            controller.advance(self.prepared_id)
+        old_count = len(self.runner.invocations)
+        result = self.advance()
+        self.assertEqual(result["status"], "PLAN_CHECKS_ACCEPTED", result)
+        self.assertEqual(len(self.runner.invocations) - old_count, 2, "only successor implementation/check may run")
+        recovered = self.events("BUILD_ATTEMPT_FINISHED")[0]["payload"]
+        self.assertTrue(recovered["recovered_from_observation"])
+        self.assertEqual(recovered["effects"]["status"], "PASS")
+
+    def test_recovery_cannot_accept_postcheck_preserved_file_drift(self):
+        self._quality_contract()
+        self.prepare()
+        controller = self.controller()
+        append = controller._append
+        def crash_before_acceptance(kind, *args):
+            if kind == "BUILD_ATTEMPT_FINISHED":
+                raise InjectedControllerCrash()
+            return append(kind, *args)
+        with patch.object(controller, "_append", side_effect=crash_before_acceptance), self.assertRaises(InjectedControllerCrash):
+            controller.advance(self.prepared_id)
+        (self.workspace / "src/user.txt").write_text("external change")
+        count = len(self.runner.invocations)
+        self.assertEqual(self.advance()["status"], "HELD_UNRESOLVED_ATTEMPT")
+        self.assertEqual(len(self.runner.invocations), count)
+        self.assertEqual((self.workspace / "src/user.txt").read_text(), "external change")
+
+    def test_pending_replan_cannot_remove_effect_or_environment_contract(self):
+        from harness_foundry_factory.build_replan import adapt_build_plan
+        self._quality_contract()
+        for field in ("effects", "environment"):
+            revised = deepcopy(self.plan)
+            revised["workpacks"][0].pop(field)
+            with self.assertRaisesRegex(RequestValidationError, "approved " + field):
+                adapt_build_plan(self.plan, revised, self.scope)
+
+    def test_effect_contract_outside_scope_fails_before_preparation(self):
+        task = self._quality_contract()
+        task["effects"]["allowed"].append("outputs/unapproved.json")
+        with self.assertRaisesRegex(RequestValidationError, "expand approved"):
+            self.prepare()
+        self.assertFalse(self.events("BUILD_AUTHORIZATION_PREPARED"))
+
     def _upstream_repair_fixture(self, target="READER-SOURCE"):
         # Reader's stage checks are deliberately partial; the consumer finds
         # the real bad value and returns its declared input, not a guessed path.
@@ -406,6 +531,9 @@ elif json.loads(Path("outputs/summary.json").read_text()) != {"rows":3,"invalid"
         self.assertIn("AssertionError", finishes[0]["verification"][0]["result"]["stderr"])
         repaired = self.runner.invocations[3]
         self.assertIn("VALIDATION_FAILED", repaired["prompt"])
+        self.assertIn(finishes[0]["attempt_id"], repaired["prompt"])
+        self.assertIn(self.events("BUILD_COMMAND_PLANNED")[0]["event_id"], repaired["prompt"])
+        self.assertIn("declared_method", repaired["prompt"])
 
     def test_model_turn_completion_is_not_independent_acceptance(self):
         self.plan["workpacks"][0].pop("local_argv")
