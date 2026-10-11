@@ -85,8 +85,10 @@ python3 tools/hffactory.py version --json
 python3 tools/hffactory.py --help
 ```
 
-预期版本信息包含 `implementation_version: 0.2.0` 与
+上述已发布下载包的预期版本信息包含 `implementation_version: 0.2.0` 与
 `product_route: GENERIC_REVIEWED_BUILD`。这两条命令不会创建业务工程或调用模型。
+当前 main 源码的版本输出为 `implementation_version: 0.3.0.dev1`，属于未发布开发版；
+协议仍为 `2.9`，不要将其与 v0.2.0 下载包混为一版。
 
 ### 3. 准备材料并发起需求
 

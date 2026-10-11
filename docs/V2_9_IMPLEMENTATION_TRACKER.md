@@ -1,5 +1,18 @@
 # Harness Foundry v2.9 Implementation Tracker
 
+## 2026-10-11 源码版本递增（0.3.0.dev1，未发布）
+
+源码身份常量、`pyproject.toml` 与 Factory Manifest 统一为 `0.3.0.dev1`；Manifest
+显式标记 `release_status=UNRELEASED`，协议仍为 `2.9`。README、使用指南和评测摘要
+区分未发布源码与已发布的 v0.2.0 下载包；原下载链接、tag、Release 和附件不变。
+仅同步版本元数据及受影响的既有版本一致性/分发回归，不改变运行逻辑或测试范围。
+不追加真实模型评测，不修改 AICut；下列评测与 CI 数字继续绑定各自原始提交。
+
+本次既有公开源码门禁 **279/279 PASS**，39.738 秒，零跳过、失败、错误；Skill 四个
+引用通过，CLI 只读版本输出为 `0.3.0.dev1`。复用已具备声明依赖的 Python 3.13 环境，
+未安装依赖；诊断报告保存在本地临时目录 `foundry-version-check.85ODR4`，未覆盖旧证据。
+没有增加门禁模块或真实模型样本；`release_accepted` 与 `harness_e2e_verified` 仍为 false。
+
 ## 2026-10-11 升级交付收口（已合并 main、合并后 CI 已通过，未发布）
 
 公开状态更新见 [升级评测与交付摘要](FOUNDRY_UPGRADE_EVALUATION_2026_10_10.md)。

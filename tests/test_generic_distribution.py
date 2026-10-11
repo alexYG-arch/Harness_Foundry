@@ -216,11 +216,11 @@ print(json.dumps(first))
     def test_metadata_is_read_from_selected_source_not_building_interpreter(self):
         root = self.source_copy()
         path = root / "src/harness_foundry_factory/identity.py"
-        path.write_text(path.read_text().replace('FACTORY_VERSION = "0.2.0"', 'FACTORY_VERSION = "9.8.7"'))
+        path.write_text(path.read_text().replace('FACTORY_VERSION = "0.3.0.dev1"', 'FACTORY_VERSION = "9.8.7"'))
         with self.assertRaisesRegex(ValueError, "product version differs"):
             packager.collect_files(root)
         project = root / "pyproject.toml"
-        project.write_text(project.read_text().replace('version = "0.2.0"', 'version = "9.8.7"'))
+        project.write_text(project.read_text().replace('version = "0.3.0.dev1"', 'version = "9.8.7"'))
         product = root / "FACTORY_MANIFEST.json"
         manifest = json.loads(product.read_text())
         manifest["version"] = "9.8.7"
