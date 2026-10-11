@@ -1,17 +1,25 @@
 # Harness Foundry v2.9 Implementation Tracker
 
-## 2026-10-10 升级交付收口（开发分支已推送、源码 CI 已通过，未合并或发布）
+## 2026-10-11 升级交付收口（已合并 main、合并后 CI 已通过，未发布）
 
 公开状态更新见 [升级评测与交付摘要](FOUNDRY_UPGRADE_EVALUATION_2026_10_10.md)。
 README 已补充真实结果；首次源码升级记录明确标记为历史快照，不覆写旧验证数字。
 本次只整理下方已授权源码修补和文档，不新增能力、检查器、人工 Gate 或运行范围。
 
+开发分支 `codex/foundry-upgrade-eval-20261010` 已快进合并并推送至 main，保留原提交。
+提交 [`b92ff2c18a12000ad912402050c7aacf72e28b3a`](https://github.com/alexYG-arch/Harness_Foundry/commit/b92ff2c18a12000ad912402050c7aacf72e28b3a)
+的 [main CI #38099522904](https://github.com/alexYG-arch/Harness_Foundry/actions/runs/38099522904)
+于北京时间 2026-10-11 08:46:41 完成：**279/279 PASS**，41.816 秒，零跳过、失败、
+错误；Skill 四个引用通过。源码及文档的 main 交付已完成，正式发行仍未完成。
+该 CI 结论绑定 `b92ff2c`；本次后续状态文档提交由既有 CI 独立检查，不预先记为通过。
+
+此前开发分支证据保留：
 源码提交 [`7d9a6c417d98372939aecc58ada8646432a4383c`](https://github.com/alexYG-arch/Harness_Foundry/commit/7d9a6c417d98372939aecc58ada8646432a4383c)
 已推送至 `codex/foundry-upgrade-eval-20261010`。
 [GitHub CI #38060810294](https://github.com/alexYG-arch/Harness_Foundry/actions/runs/38060810294)
 于北京时间 2026-10-10 22:45:44 完成：公开源码门禁 **279/279 PASS**，60.922 秒，
-零跳过、失败、错误；Skill 四个引用通过。CI 未运行下述单独的 14 项协议回归和 101 文件
-规范检查，这些仍是此前本地证据。CI 绑定上述源码提交，不预先代表后续文档提交的检查结果。
+零跳过、失败、错误；Skill 四个引用通过。两次 CI 均未运行下述单独的 14 项协议回归和
+101 文件规范检查，这些仍是此前本地证据；重复运行不累计为新增覆盖。
 本次仅同步 README、Tracker 和评测摘要的交付状态，不追加真实模型评测或扩大校验范围。
 
 最新接口/准备模板修补包在新隔离 Task 样本中五阶段接受：三次模型会话、零控制器重派、
@@ -36,7 +44,7 @@ Tracker 不随运行包分发；受测实现、测试及包内文档未再改变
 
 已推送的源码提交只纳入现有定向修补、相关回归与上述说明；不导入私有评测、授权、控制状态或
 本机路径。产品/协议版本与已发布附件不变。AICut 未修改；正式发行仍未闭合，当前
-源码/样本通过不是全项目行为、全平台稳定性或独立认证。尚未合并 main，未创建 tag 或
+源码/样本通过不是全项目行为、全平台稳定性或独立认证。已合并 main，未创建新 tag 或
 Release；`release_accepted` 与 `harness_e2e_verified` 仍为 false。以下各节保留当时状态。
 
 ## 2026-10-10 失败接口与准备模板修复（仅相关源码回归）
