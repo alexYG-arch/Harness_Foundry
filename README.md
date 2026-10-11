@@ -6,13 +6,15 @@
 也不是固定行业流水线：Codex 负责理解、推理和实现，Foundry 负责输入输出约定、任务依赖、
 权限、独立检查和进度保存。确定性步骤可以交给本地 Python 等程序。
 
-[下载 v0.2.0](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.2.0) ·
+[下载 v0.3.0](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.3.0) ·
 [完整使用指南](docs/USER_GUIDE.md) ·
 [案例说明](docs/USER_GUIDE.md#案例说明) ·
 [问题反馈](https://github.com/alexYG-arch/Harness_Foundry/issues)
 
-当前源码版本 **0.3.0.dev1（未发布）**，协议版本 **2.9**，采用 [MIT](LICENSE) 许可。
-已发布下载包仍为 **v0.2.0**；上方下载链接保留原包，不包含本轮源码升级。
+产品版本 **0.3.0**，协议版本 **2.9**，采用 [MIT](LICENSE) 许可。
+[历史 v0.2.0 下载包](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.2.0)、
+tag 和 Release 保留不变。v0.3.0 按源码门禁、既有评测及新包加载检查的限定证据范围发布；
+**新版固定 ZIP 未重跑同包双案例，不宣称完整发行验收。** 详见 [v0.3.0 发布说明](docs/releases/v0.3.0.md)。
 
 ## 已合并 main 的源码升级 · 2026-10-11
 
@@ -24,7 +26,8 @@
 结果、源码验证及限制见[升级评测与交付摘要](docs/FOUNDRY_UPGRADE_EVALUATION_2026_10_10.md)。
 本轮升级已从 `codex/foundry-upgrade-eval-20261010` 快进合并并推送至 [main](https://github.com/alexYG-arch/Harness_Foundry/tree/main)。
 提交 `b92ff2c` 的 [main 合并后 CI 已通过](https://github.com/alexYG-arch/Harness_Foundry/actions/runs/38099522904)，公开源码门禁 279/279 PASS。
-尚未创建新 tag 或 Release，未应用到 AICut，也未进入下面已发布的 v0.2.0 下载包；CI 通过不等于正式发行验收。
+这些源码升级进入 v0.3.0 运行包，未应用到 AICut，也未替换 v0.2.0 下载包；
+上述历史 CI 和评测继续绑定原提交，不转记为新版固定 ZIP 的同包验收。
 
 ## 已公开源码更新 · 2026-09-26
 
@@ -32,7 +35,7 @@
 新项目与既有项目增量已完成真实双案例验证，包括同版 Harness 跨会话使用、实际缺陷修复、
 中断恢复和完成后停止。已有运行控制器保持不变，不增加逐任务批准或人工 Hash 操作。
 
-这些是 **main 源码更新，尚未进入已发布的 v0.2.0 下载包**；该次更新未升级版本或替换 Release 附件。
+这些更新已纳入 v0.3.0，但不在原 v0.2.0 下载包中；该次历史更新未升级版本或替换 Release 附件。
 改动、使用影响与验证边界见[本轮更新说明](docs/FOUNDRY_UPDATE_2026_09_26.md)。
 
 ## 适合什么场景
@@ -50,7 +53,7 @@
 
 ### 1. 下载并打开
 
-在 Release 的 Assets 中下载 `Harness-Foundry-0.2.0-generic-3c52c30.zip`，
+在 v0.3.0 Release 的 Assets 中下载 `Harness-Foundry-0.3.0-generic.zip`，
 解压到普通独立项目目录，并用 Codex 打开该目录。
 
 请使用这个通用运行包，而不是 GitHub 自动生成的 `Source code.zip`。
@@ -68,7 +71,8 @@ python3 tools/hffactory.py --help
 
 - **Python 3.11+**；通用运行包仅依赖 Python 标准库。
 - **可用且已登录的 Codex**，以及能够调用的模型；真实执行需可用的 Codex 可执行程序和原生沙箱。
-- 当前实际使用环境为 macOS、Python 3.13.3、Codex 0.155.0-alpha.9.2、GPT-6 Astra。
+- 历史原生验收环境为 macOS、Python 3.13.3、Codex 0.155.0-alpha.9.2、GPT-6 Astra；
+  后续升级的限定评测另见评测摘要，不能据此推定所有客户端/模型兼容。
   其他客户端版本需要先核对接口和权限；Linux/Windows 暂不承诺同等运行支持。
 - macOS 下不要把运行包、输入或目标放在共享 `/tmp` 或 `/private/tmp`。
 - 项目自己的工具链按项目需要准备，并不是 Foundry 的默认依赖。
@@ -112,7 +116,8 @@ python3 tools/hffactory.py --help
 ## 说明与支持
 
 - [使用指南](docs/USER_GUIDE.md)：接入、依赖、案例、继续工作和常见问题。
-- [v0.2.0 更新说明](docs/releases/v0.2.0.md)：本版能力、下载和兼容性。
+- [v0.3.0 发布说明](docs/releases/v0.3.0.md)：本版增量、下载和证据限制。
+- [v0.2.0 历史说明](docs/releases/v0.2.0.md)：保留旧版本的能力、下载和兼容性记录。
 - [Build CLI](docs/GENERIC_BUILD_CLI.md)：为接入工具或维护者提供的底层接口，不是初次使用的必读材料。
 - [安全报告](SECURITY.md)：漏洞请使用私密报告，不在公开 Issue 上传凭据、私有 PRD 或原始运行记录。
 

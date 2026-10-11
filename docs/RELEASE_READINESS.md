@@ -2,7 +2,8 @@
 
 > 维护者历史快照：下文保留 2026-09-21 发布前的准备记录。
 > v0.2.0 随后已正式发布；普通使用者请阅读[在线使用指南](https://github.com/alexYG-arch/Harness_Foundry/blob/main/docs/USER_GUIDE.md)，
-> 当前发行状态见 [GitHub Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.2.0)。
+> 当前 v0.3.0 的限定证据发布范围见 [在线新版发布说明](https://github.com/alexYG-arch/Harness_Foundry/blob/v0.3.0/docs/releases/v0.3.0.md)；
+> 下方 v0.2.0 的验收结果和旧发布前置要求仍作为历史记录保留，不移植为新包通过。
 
 更新：2026-09-21。当前产品版本 **0.2.0**，协议目标 **2.9**。
 状态：**已批准的同包双案例最小端到端验收通过，发布收尾待远端执行**。

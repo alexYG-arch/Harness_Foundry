@@ -49,8 +49,9 @@ Foundry 不携带账号、API Key 或模型。使用已有 Codex 登录时，不
 
 ### 系统与客户端兼容性
 
-当前实际运行环境为 **macOS / Python 3.13.3 / Codex 0.155.0-alpha.9.2 / GPT-6 Astra**。
-这不是要求人人固定安装某个 alpha 版本，而是说明当前兼容性依据。
+v0.2.0 历史原生验收环境为 **macOS / Python 3.13.3 / Codex 0.155.0-alpha.9.2 / GPT-6 Astra**。
+后续升级的限定评测见[评测摘要](FOUNDRY_UPGRADE_EVALUATION_2026_10_10.md)；
+v0.3.0 固定 ZIP 未重跑同包双案例。这不是要求人人固定安装某个 alpha 版本。
 其他版本需先检查实际 CLI、权限配置与沙箱是否兼容；版本更高不自动表示接口兼容。
 
 原生模型接入目前使用 POSIX 主机能力。Linux 的源码 CI 通过不代表完整原生运行已经支持；
@@ -67,8 +68,10 @@ Windows 也不是本版已支持的同等执行环境。不要为了启动而关
 
 ### 1. 获取运行包
 
-打开 [v0.2.0 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.2.0)，
-下载 Assets 中的 `Harness-Foundry-0.2.0-generic-3c52c30.zip`，保留隐藏的 `.agents/` 目录完整解压。
+打开 [v0.3.0 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.3.0)，
+下载 Assets 中的 `Harness-Foundry-0.3.0-generic.zip`，保留隐藏的 `.agents/` 目录完整解压。
+旧 [v0.2.0 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.2.0)
+及 `Harness-Foundry-0.2.0-generic-3c52c30.zip` 继续保留，不覆盖替换。
 
 不要把 GitHub 自动生成的 Source code ZIP/TAR 当成运行包：
 它们包含开发源码、历史模块和工程资料，面向维护者。
@@ -85,10 +88,11 @@ python3 tools/hffactory.py version --json
 python3 tools/hffactory.py --help
 ```
 
-上述已发布下载包的预期版本信息包含 `implementation_version: 0.2.0` 与
+v0.3.0 下载包的预期版本信息包含 `implementation_version: 0.3.0` 与
 `product_route: GENERIC_REVIEWED_BUILD`。这两条命令不会创建业务工程或调用模型。
-当前 main 源码的版本输出为 `implementation_version: 0.3.0.dev1`，属于未发布开发版；
-协议仍为 `2.9`，不要将其与 v0.2.0 下载包混为一版。
+协议仍为 `2.9`；旧 v0.2.0 包仍输出 `implementation_version: 0.2.0`。
+源码回归及入口加载检查不等于完整业务或同包双案例验收，证据边界见
+[v0.3.0 发布说明](releases/v0.3.0.md)。
 
 ### 3. 准备材料并发起需求
 
