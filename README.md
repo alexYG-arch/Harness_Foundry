@@ -20,13 +20,13 @@ tag 和 Release 保留不变。v0.3.0 按源码门禁、既有评测及新包加
 
 新增前置验收检查、只读环境预检、正式输入交接、文件效果验收和修复/进度上下文。
 沿用同一控制器与范围内自动推进，不增设逐任务人工 Review；详见
-[升级说明与 AICut 采用路径](docs/FOUNDRY_UPGRADE_2026_10_10.md)。
+[升级说明](docs/FOUNDRY_UPGRADE_2026_10_10.md)。
 已完成限定真实模型评测及定向修复：Ledger 小样本内中位耗时降低 19.0%，Config 为 1.2%；
 原 Task 失败保留，后续两个隔离 Task 样本业务通过，不据此宣称普遍提速或完整稳定性。
 结果、源码验证及限制见[升级评测与交付摘要](docs/FOUNDRY_UPGRADE_EVALUATION_2026_10_10.md)。
 本轮升级已从 `codex/foundry-upgrade-eval-20261010` 快进合并并推送至 [main](https://github.com/alexYG-arch/Harness_Foundry/tree/main)。
 提交 `b92ff2c` 的 [main 合并后 CI 已通过](https://github.com/alexYG-arch/Harness_Foundry/actions/runs/38099522904)，公开源码门禁 279/279 PASS。
-这些源码升级进入 v0.3.0 运行包，未应用到 AICut，也未替换 v0.2.0 下载包；
+这些源码升级进入 v0.3.0 运行包，未替换 v0.2.0 下载包；
 上述历史 CI 和评测继续绑定原提交，不转记为新版固定 ZIP 的同包验收。
 
 ## 已公开源码更新 · 2026-09-26
