@@ -1,5 +1,27 @@
 # Harness Foundry v2.9 Implementation Tracker
 
+## 2026-10-13 清晰表达第 1–3 步交付状态（已进入 main，发行包未更新）
+
+第 1–3 步源码已提交并推送至 main，提交为
+[`0f8d99ab0755da2f883ebd2d14f6301d09a5e0e9`](https://github.com/alexYG-arch/Harness_Foundry/commit/0f8d99ab0755da2f883ebd2d14f6301d09a5e0e9)：
+
+- 第 1 步：统一对话、文档的清晰表达规范。
+- 第 2 步：同步发行模板，增加可选的 `read-build --human` 只读摘要；默认 JSON、
+  `--json` 和退出码保持不变。
+- 第 3 步：规范同步到运行提示词，并要求写入已声明的生成 Harness 指导产物；
+  不扩大读写范围，不新增任务、模型调用或审批门禁。
+
+该提交的 [main CI #38352266791](https://github.com/alexYG-arch/Harness_Foundry/actions/runs/38352266791)
+于北京时间 2026-10-13 13:37:48 完成，结论为 **success**。既有公开源码门禁
+**289/289 PASS**，58.738 秒，零跳过、失败、错误；Skill 引用检查 **5/5 PASS**。
+沿用既有检查范围，没有追加真实模型评测。CI 中 `release_accepted=false`、
+`harness_e2e_verified=false`；提示传播和接口回归不证明真实模型表达效果已改善。
+
+**本增量尚未发布到发行包**。源码进入 main 与发行包更新是不同状态；v0.3.0、v0.2.0
+已发布下载包及其 tag、Release 保持不变。下方实现、提交前检查和失败记录均作为历史
+证据保留，不再代表当前 Git 交付状态。本节只同步 README 与 Tracker；上述 CI 结论
+绑定 `0f8d99a`，本次后续文档提交由既有 CI 独立检查，不预记为通过。
+
 ## 2026-10-13 清晰表达第 1–3 步源码提交检查（未发布）
 
 本次按用户授权将下方三步改动整理为 main 源码提交。README 使用“源码增量”说明，

@@ -16,12 +16,16 @@
 tag 和 Release 保留不变。v0.3.0 按源码门禁、既有评测及新包加载检查的限定证据范围发布；
 **新版固定 ZIP 未重跑同包双案例，不宣称完整发行验收。** 详见 [v0.3.0 发布说明](docs/releases/v0.3.0.md)。
 
-## 源码增量 · 清晰表达与只读摘要（未发布）
+## 源码增量 · 清晰表达与只读摘要（已进入 main，发行包未更新）
 
 对话、搭建文档及发行模板统一采用[清晰表达规范](docs/CLEAR_COMMUNICATION.md)。
 新增 `read-build --human` 中文只读摘要；默认 JSON、`--json`、退出码和既有审批流程保持不变。
 运行提示内嵌同一规范，并要求生成任务将其带入已声明的 Harness 指导产物；不新增文件权限或审批。
-本增量未进入上方已发布下载包，不追溯修改现有项目，也不宣称真实模型表达效果已验证。
+第 1–3 步已随提交 [`0f8d99a`](https://github.com/alexYG-arch/Harness_Foundry/commit/0f8d99ab0755da2f883ebd2d14f6301d09a5e0e9)
+进入 main，[对应 GitHub CI 已通过](https://github.com/alexYG-arch/Harness_Foundry/actions/runs/38352266791)：
+既有公开源码门禁 **289/289 PASS**，无跳过、失败或错误，Skill 引用检查 **5/5 PASS**。
+**本增量尚未发布到发行包**，上方 v0.3.0 和历史 v0.2.0 下载包、tag、Release 保持不变。
+不追溯修改现有项目，也不宣称真实模型表达效果或完整发行验收已通过；上述 CI 结论仅绑定 `0f8d99a`。
 
 ## 已合并 main 的源码升级 · 2026-10-11
 
