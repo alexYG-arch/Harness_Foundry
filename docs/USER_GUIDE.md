@@ -3,8 +3,8 @@
 这份指南面向希望用 Codex 为自己的项目搭建 Harness 的使用者。
 运行包、案例需求和本文说明不自动启动任务；先确认要做什么，再批准具体执行范围。
 
-main 源码版本为 **0.4.0.dev1（未发布）**，协议仍为 **2.9**。
-以下下载与首次使用步骤面向已发布的 v0.3.0 包；其 tag、Release 和附件保持不变。
+产品版本为 **0.4.0**，协议仍为 **2.9**。
+以下下载与首次使用步骤面向 v0.4.0 包；v0.3.0、v0.2.0 的 tag、Release 和附件保持不变。
 
 ## Foundry 与 Harness 的关系
 
@@ -54,7 +54,7 @@ Foundry 不携带账号、API Key 或模型。使用已有 Codex 登录时，不
 
 v0.2.0 历史原生验收环境为 **macOS / Python 3.13.3 / Codex 0.155.0-alpha.9.2 / GPT-6 Astra**。
 后续升级的限定评测见[评测摘要](FOUNDRY_UPGRADE_EVALUATION_2026_10_10.md)；
-v0.3.0 固定 ZIP 未重跑同包双案例。这不是要求人人固定安装某个 alpha 版本。
+v0.3.0、v0.4.0 固定 ZIP 均未重跑同包真实模型双案例。这不是要求人人固定安装某个 alpha 版本。
 其他版本需先检查实际 CLI、权限配置与沙箱是否兼容；版本更高不自动表示接口兼容。
 
 原生模型接入目前使用 POSIX 主机能力。Linux 的源码 CI 通过不代表完整原生运行已经支持；
@@ -71,10 +71,11 @@ Windows 也不是本版已支持的同等执行环境。不要为了启动而关
 
 ### 1. 获取运行包
 
-打开 [v0.3.0 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.3.0)，
-下载 Assets 中的 `Harness-Foundry-0.3.0-generic.zip`，保留隐藏的 `.agents/` 目录完整解压。
-旧 [v0.2.0 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.2.0)
-及 `Harness-Foundry-0.2.0-generic-3c52c30.zip` 继续保留，不覆盖替换。
+打开 [v0.4.0 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.4.0)，
+下载 Assets 中的 `Harness-Foundry-0.4.0-generic.zip`，保留隐藏的 `.agents/` 目录完整解压。
+旧 [v0.3.0 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.3.0) 和
+[v0.2.0 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.2.0)
+及各自的 ZIP、SHA256SUMS 继续保留，不覆盖替换。
 
 不要把 GitHub 自动生成的 Source code ZIP/TAR 当成运行包：
 它们包含开发源码、历史模块和工程资料，面向维护者。
@@ -91,13 +92,11 @@ python3 tools/hffactory.py version --json
 python3 tools/hffactory.py --help
 ```
 
-v0.3.0 下载包的预期版本信息包含 `implementation_version: 0.3.0` 与
+v0.4.0 下载包的预期版本信息包含 `implementation_version: 0.4.0` 与
 `product_route: GENERIC_REVIEWED_BUILD`。这两条命令不会创建业务工程或调用模型。
-协议仍为 `2.9`；旧 v0.2.0 包仍输出 `implementation_version: 0.2.0`。
-若从当前 main 开发源码运行，预期为 `implementation_version: 0.4.0.dev1`；
-这是未发布开发版本，不表示 v0.3.0 下载包已升级。
+协议仍为 `2.9`；旧 v0.3.0、v0.2.0 包仍分别输出 `0.3.0`、`0.2.0`。
 源码回归及入口加载检查不等于完整业务或同包双案例验收，证据边界见
-[v0.3.0 发布说明](releases/v0.3.0.md)。
+[v0.4.0 发布说明](releases/v0.4.0.md)。
 
 ### 3. 准备材料并发起需求
 

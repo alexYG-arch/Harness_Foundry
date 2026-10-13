@@ -26,7 +26,7 @@ class ProductIdentityTests(unittest.TestCase):
     def test_public_package_identity_is_v29(self) -> None:
         self.assertEqual(FACTORY_ID, "HARNESS_FOUNDRY_V2_9_CHAT_FACTORY_V0_1")
         self.assertEqual(TARGET_PROTOCOL_VERSION, "2.9")
-        self.assertEqual(FACTORY_VERSION, "0.4.0.dev1")
+        self.assertEqual(FACTORY_VERSION, "0.4.0")
         self.assertEqual(harness_foundry_factory.__version__, FACTORY_VERSION)
 
     def test_product_metadata_matches_canonical_constants(self) -> None:
@@ -43,7 +43,7 @@ class ProductIdentityTests(unittest.TestCase):
             manifest["target_protocol_version"], TARGET_PROTOCOL_VERSION
         )
         self.assertEqual(manifest["version"], FACTORY_VERSION)
-        self.assertEqual(manifest["release_status"], "UNRELEASED")
+        self.assertEqual(manifest["release_status"], "RELEASED")
         self.assertEqual(
             manifest["assurance_profile"], "SELF_USE_LOCAL_TRUSTED_OPERATOR"
         )

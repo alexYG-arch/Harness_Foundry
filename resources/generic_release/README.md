@@ -1,7 +1,7 @@
 # Harness Foundry — generic Codex runtime
 
-Source version **0.4.0.dev1 — UNRELEASED**; protocol **2.9**. This development
-template does not replace the published v0.3.0 tag, Release or download archive.
+Product version **0.4.0**; protocol **2.9**. This release adds clear communication
+guidance and an optional read-only summary. Prior v0.3.0 and v0.2.0 releases remain unchanged.
 
 Open this directory as a Codex project. Its local `harness-foundry-build` Skill
 guides a build from clarified requirements and a human-reviewed build document.
@@ -75,12 +75,13 @@ Validate and use the exact archive intended for delivery. A package inventory,
 archive checksum or successful CLI command is not evidence that a target Harness
 meets its requirements. Complete release acceptance needs the declared same-package
 new-project and existing-project evidence, plus closure of known in-scope defects.
-v0.3.0 is published with explicitly approved evidence limits: existing source
-checks, prior bounded evaluations and an archive loading smoke. The final v0.3.0
-ZIP has not rerun the two real-model cases; publication does not claim complete
+v0.4.0 is published with declared evidence limits: existing source checks,
+fixed-commit packaging and archive loading checks. The final v0.4.0 ZIP has not
+rerun the two real-model cases; prior evaluations do not establish writing quality
+or complete acceptance for this archive. Publication does not claim complete
 release acceptance. See the online
-[v0.3.0 release notes](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.3.0).
-The original v0.2.0 release and archive remain available unchanged.
+[v0.4.0 release notes](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.4.0).
+The original v0.3.0 and v0.2.0 tags, releases and archives remain available unchanged.
 Use a separate directory for an upgrade; code rollback does not undo effects,
 revive authorizations or permit silent database downgrades.
 

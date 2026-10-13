@@ -6,18 +6,20 @@
 也不是固定行业流水线：Codex 负责理解、推理和实现，Foundry 负责输入输出约定、任务依赖、
 权限、独立检查和进度保存。确定性步骤可以交给本地 Python 等程序。
 
-[下载 v0.3.0](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.3.0) ·
+[下载 v0.4.0](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.4.0) ·
 [完整使用指南](docs/USER_GUIDE.md) ·
 [案例说明](docs/USER_GUIDE.md#案例说明) ·
 [问题反馈](https://github.com/alexYG-arch/Harness_Foundry/issues)
 
-main 源码版本 **0.4.0.dev1（未发布）**，协议版本 **2.9**，采用 [MIT](LICENSE) 许可。
-当前已发布下载包仍为 **v0.3.0**；其 tag、Release 和附件原样保留，未被 main 源码更新替换。
-[历史 v0.2.0 下载包](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.2.0)、
-tag 和 Release 保留不变。v0.3.0 按源码门禁、既有评测及新包加载检查的限定证据范围发布；
-**新版固定 ZIP 未重跑同包双案例，不宣称完整发行验收。** 详见 [v0.3.0 发布说明](docs/releases/v0.3.0.md)。
+产品版本 **0.4.0**，协议版本 **2.9**，采用 [MIT](LICENSE) 许可。
+本版发布清晰表达与只读摘要增量；
+[v0.3.0](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.3.0) 和
+[v0.2.0](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.2.0)
+的 tag、Release 和下载附件原样保留。
+**本版固定 ZIP 未重跑同包真实模型双案例，不宣称完整发行验收。**
+源码、打包和加载检查的范围见 [v0.4.0 发布说明](docs/releases/v0.4.0.md)。
 
-## 0.4.0.dev1 源码增量 · 清晰表达与只读摘要（未发布）
+## v0.4.0 · 清晰表达与只读摘要
 
 对话、搭建文档及发行模板统一采用[清晰表达规范](docs/CLEAR_COMMUNICATION.md)。
 新增 `read-build --human` 中文只读摘要；默认 JSON、`--json`、退出码和既有审批流程保持不变。
@@ -25,8 +27,9 @@ tag 和 Release 保留不变。v0.3.0 按源码门禁、既有评测及新包加
 第 1–3 步已随提交 [`0f8d99a`](https://github.com/alexYG-arch/Harness_Foundry/commit/0f8d99ab0755da2f883ebd2d14f6301d09a5e0e9)
 进入 main，[对应 GitHub CI 已通过](https://github.com/alexYG-arch/Harness_Foundry/actions/runs/38352266791)：
 既有公开源码门禁 **289/289 PASS**，无跳过、失败或错误，Skill 引用检查 **5/5 PASS**。
-**本增量尚未发布到发行包**，上方 v0.3.0 和历史 v0.2.0 下载包、tag、Release 保持不变。
-不追溯修改现有项目，也不宣称真实模型表达效果或完整发行验收已通过；上述 CI 结论仅绑定 `0f8d99a`。
+第 1–3 步进入 v0.4.0 运行包，不追溯修改现有项目，也不宣称真实模型表达效果已改善。
+上述 CI 结论仅绑定 `0f8d99a`；正式版的固定来源、同提交 CI 和附件校验见
+[v0.4.0 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.4.0)。
 
 ## 已合并 main 的源码升级 · 2026-10-11
 
@@ -65,7 +68,7 @@ tag 和 Release 保留不变。v0.3.0 按源码门禁、既有评测及新包加
 
 ### 1. 下载并打开
 
-在 v0.3.0 Release 的 Assets 中下载 `Harness-Foundry-0.3.0-generic.zip`，
+在 v0.4.0 Release 的 Assets 中下载 `Harness-Foundry-0.4.0-generic.zip`，
 解压到普通独立项目目录，并用 Codex 打开该目录。
 
 请使用这个通用运行包，而不是 GitHub 自动生成的 `Source code.zip`。
@@ -128,7 +131,8 @@ python3 tools/hffactory.py --help
 ## 说明与支持
 
 - [使用指南](docs/USER_GUIDE.md)：接入、依赖、案例、继续工作和常见问题。
-- [v0.3.0 发布说明](docs/releases/v0.3.0.md)：本版增量、下载和证据限制。
+- [v0.4.0 发布说明](docs/releases/v0.4.0.md)：本版增量、下载和证据限制。
+- [v0.3.0 历史说明](docs/releases/v0.3.0.md)：保留上一版及其下载包。
 - [v0.2.0 历史说明](docs/releases/v0.2.0.md)：保留旧版本的能力、下载和兼容性记录。
 - [Build CLI](docs/GENERIC_BUILD_CLI.md)：为接入工具或维护者提供的底层接口，不是初次使用的必读材料。
 - [安全报告](SECURITY.md)：漏洞请使用私密报告，不在公开 Issue 上传凭据、私有 PRD 或原始运行记录。
