@@ -1,65 +1,42 @@
 # Harness Foundry
 
-用 Codex 搭建适合你的项目的 Harness，让 Agent 按明确需求持续实施、检查、修复和继续工作。
+**Harness Foundry 帮你用 Codex 搭建项目专属的 Harness。** Harness 是项目的开发规则、
+任务计划、检查入口和进度记录，让 Codex 按明确需求实施、检查、修复和继续工作。
 
-**Foundry 搭建 Harness；生成的 Harness 再指导 Codex 完成项目工作。** 它不是另一套模型，
-也不是固定行业流水线：Codex 负责理解、推理和实现，Foundry 负责输入输出约定、任务依赖、
-权限、独立检查和进度保存。确定性步骤可以交给本地 Python 等程序。
+Foundry 是搭建工具，不是另一套模型，也不是固定行业流水线。Codex 负责理解需求和编写代码；
+Foundry 管理输入输出约定、任务依赖、运行权限、独立检查和进度记录。确定性步骤可由本地 Python 等程序执行。
+搭建 Harness 与完成业务应用是两件事；如果希望一并开发应用，需要在搭建文档和运行范围中写明。
 
 [下载 v0.4.0](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.4.0) ·
 [完整使用指南](docs/USER_GUIDE.md) ·
 [案例说明](docs/USER_GUIDE.md#案例说明) ·
 [问题反馈](https://github.com/alexYG-arch/Harness_Foundry/issues)
 
-产品版本 **0.4.0**，协议版本 **2.9**，采用 [MIT](LICENSE) 许可。
-本版发布清晰表达与只读摘要增量；
+**v0.4.0 已发布，发布提交的 GitHub 自动检查（CI）已通过。** 产品版本 **0.4.0**，协议版本 **2.9**，
+采用 [MIT](LICENSE) 许可。
 [v0.3.0](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.3.0) 和
 [v0.2.0](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.2.0)
-的 tag、Release 和下载附件原样保留。
-**本版固定 ZIP 未重跑同包真实模型双案例，不宣称完整发行验收。**
-源码、打包和加载检查的范围见 [v0.4.0 发布说明](docs/releases/v0.4.0.md)。
+的 tag、Release 和下载包原样保留。检查依据与未验证事项见下方[验证范围](#验证范围)。
 
 ## v0.4.0 · 清晰表达与只读摘要
 
-对话、搭建文档及发行模板统一采用[清晰表达规范](docs/CLEAR_COMMUNICATION.md)。
-新增 `read-build --human` 中文只读摘要；默认 JSON、`--json`、退出码和既有审批流程保持不变。
-运行提示内嵌同一规范，并要求生成任务将其带入已声明的 Harness 指导产物；不新增文件权限或审批。
-第 1–3 步已随提交 [`0f8d99a`](https://github.com/alexYG-arch/Harness_Foundry/commit/0f8d99ab0755da2f883ebd2d14f6301d09a5e0e9)
-进入 main，[对应 GitHub CI 已通过](https://github.com/alexYG-arch/Harness_Foundry/actions/runs/38352266791)：
-既有公开源码门禁 **289/289 PASS**，无跳过、失败或错误，Skill 引用检查 **5/5 PASS**。
-第 1–3 步进入 v0.4.0 运行包，不追溯修改现有项目，也不宣称真实模型表达效果已改善。
-上述 CI 结论仅绑定 `0f8d99a`；正式版的固定来源、同提交 CI 和附件校验见
-[v0.4.0 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.4.0)。
+- **统一表达。** 对话、搭建文档和发行模板采用同一[清晰表达规范](docs/CLEAR_COMMUNICATION.md)：
+  先说结果和影响，保持术语一致，区分事实、推断和未验证事项。
+- **按需查看中文状态。** `read-build --human` 提供只读摘要；默认 JSON、`--json` 和退出码保持不变。
+  摘要不修改进度、不授予权限，也不启动任务。
+- **把规范带入后续生成。** 正常实施和返修的运行提示包含同一规范，并要求写入任务已声明的
+  Harness 指导文档。不新增文件权限或审批，不追溯修改已有项目。
 
-## 已合并 main 的源码升级 · 2026-10-11
-
-新增前置验收检查、只读环境预检、正式输入交接、文件效果验收和修复/进度上下文。
-沿用同一控制器与范围内自动推进，不增设逐任务人工 Review；详见
-[升级说明](docs/FOUNDRY_UPGRADE_2026_10_10.md)。
-已完成限定真实模型评测及定向修复：Ledger 小样本内中位耗时降低 19.0%，Config 为 1.2%；
-原 Task 失败保留，后续两个隔离 Task 样本业务通过，不据此宣称普遍提速或完整稳定性。
-结果、源码验证及限制见[升级评测与交付摘要](docs/FOUNDRY_UPGRADE_EVALUATION_2026_10_10.md)。
-本轮升级已从 `codex/foundry-upgrade-eval-20261010` 快进合并并推送至 [main](https://github.com/alexYG-arch/Harness_Foundry/tree/main)。
-提交 `b92ff2c` 的 [main 合并后 CI 已通过](https://github.com/alexYG-arch/Harness_Foundry/actions/runs/38099522904)，公开源码门禁 279/279 PASS。
-这些源码升级进入 v0.3.0 运行包，未替换 v0.2.0 下载包；
-上述历史 CI 和评测继续绑定原提交，不转记为新版固定 ZIP 的同包验收。
-
-## 已公开源码更新 · 2026-09-26
-
-本轮增强搭建方案推导、能力复用、接口衔接和局部修复指引，并补充独立的搭建质量测试工具。
-新项目与既有项目增量已完成真实双案例验证，包括同版 Harness 跨会话使用、实际缺陷修复、
-中断恢复和完成后停止。已有运行控制器保持不变，不增加逐任务批准或人工 Hash 操作。
-
-这些更新已纳入 v0.3.0，但不在原 v0.2.0 下载包中；该次历史更新未升级版本或替换 Release 附件。
-改动、使用影响与验证边界见[本轮更新说明](docs/FOUNDRY_UPDATE_2026_09_26.md)。
+这些功能已包含在 v0.4.0 运行包中。它们约束表达方式，但不保证每个模型的输出都符合规范。
+详细变化见 [v0.4.0 发布说明](docs/releases/v0.4.0.md)。
 
 ## 适合什么场景
 
 | 场景 | 你提供什么 | Foundry 帮你建立什么 |
 |---|---|---|
-| 根据 PRD 开发新项目 | 完整 PRD、技术要求、交付目标 | 开发规则、任务计划、检查入口和恢复说明 |
+| 根据产品需求开发新项目 | 完整产品需求文档（PRD）、技术要求、交付目标 | 开发规则、任务计划、检查入口和恢复说明 |
 | 为已有项目增加功能 | 现有代码、变更说明、必须保留的行为 | 适配既有工程的开发流程，保护原功能和无关改动 |
-| 组织多阶段本地工作 | 各阶段输入输出、依赖、判断成功的方法 | Codex 与本地程序协作的任务链、独立检查和持久进度 |
+| 组织多阶段本地工作 | 各阶段输入输出、依赖、判断成功的方法 | Codex 与本地程序协作的任务链、独立检查和进度记录 |
 
 仓库附带两个可上手的示例：**Task CLI 任务管理工具**与 **CSV 工具增量开发**。
 更多领域可以按需求设计，但本版不内置浏览器自动化、云部署或媒体生成流水线。
@@ -69,7 +46,7 @@
 ### 1. 下载并打开
 
 在 v0.4.0 Release 的 Assets 中下载 `Harness-Foundry-0.4.0-generic.zip`，
-解压到普通独立项目目录，并用 Codex 打开该目录。
+保留隐藏的 `.agents/` 目录，解压到普通独立项目目录，并用 Codex 打开该目录。
 
 请使用这个通用运行包，而不是 GitHub 自动生成的 `Source code.zip`。
 不用安装为全局 Skill，也不需要把整个开发仓库复制到你的业务项目。
@@ -86,10 +63,10 @@ python3 tools/hffactory.py --help
 
 - **Python 3.11+**；通用运行包仅依赖 Python 标准库。
 - **可用且已登录的 Codex**，以及能够调用的模型；真实执行需可用的 Codex 可执行程序和原生沙箱。
-- 历史原生验收环境为 macOS、Python 3.13.3、Codex 0.155.0-alpha.9.2、GPT-6 Astra；
-  后续升级的限定评测另见评测摘要，不能据此推定所有客户端/模型兼容。
-  其他客户端版本需要先核对接口和权限；Linux/Windows 暂不承诺同等运行支持。
-- macOS 下不要把运行包、输入或目标放在共享 `/tmp` 或 `/private/tmp`。
+- 历史原生验收在 macOS 上完成，具体 Python、Codex 和模型版本见
+  [兼容性说明](docs/USER_GUIDE.md#系统与客户端兼容性)。其他版本需要先核对接口和权限；
+  Linux/Windows 暂不承诺同等运行支持，源码 CI 通过不代表原生执行已验证。
+- macOS 下不要把运行包、输入、独立检查器、控制库或目标放在共享 `/tmp` 或 `/private/tmp`。
 - 项目自己的工具链按项目需要准备，并不是 Foundry 的默认依赖。
 
 安装方式、账号、网络和开发依赖的区别见[环境与依赖](docs/USER_GUIDE.md#环境与依赖)。
@@ -100,27 +77,27 @@ python3 tools/hffactory.py --help
 
 ```text
 请使用本目录的 harness-foundry-build Skill，
-基于我提供的 PRD 和开发要求，为项目搭建 Coding Harness。
+基于我提供的 PRD 和开发要求，为项目搭建 Harness。
 
 先完整阅读材料、澄清缺口，输出带版本的搭建文档给我确认。
 文档应说明目标、交付物、工作流程、工具与目录，以及怎样判断结果正确。
 我确认文档后，再展示具体运行范围；不要直接开始搭建。
 ```
 
-不需要手写内部 JSON、复制冻结令牌或手工管理 Hash。
+不需要手写内部 JSON、复制冻结令牌或手工管理校验值。
 
 ### 4. 确认后自动推进
 
 你先确认搭建文档，再批准展示的模型、工具、读写目录、次数预算和期限。
 随后 Codex 在该范围内自动实施、独立检查、修复和继续，不逐任务请求批准。
-需求改变、预算耗尽、权限不足或结果不明时会停下说明原因。
+需求改变、预算耗尽、授权到期或撤销、权限不足或执行结果不明时会停下说明原因。
 
 完成后，按生成工程的入口说明使用 Harness；需要在其中继续开发业务程序时，
 明确相应任务和运行范围。详细步骤见[完整使用指南](docs/USER_GUIDE.md)。
 
 ## 内置案例
 
-- **新项目：Task CLI。** 根据完整小型 PRD 搭建 Coding Harness，再用它开发本地任务工具：
+- **新项目：Task CLI。** 根据完整小型 PRD 搭建 Harness，再用它开发本地任务工具：
   新增、列出、完成、删除任务，并保存 JSON 数据。[查看 PRD](examples/task-cli/PRD.md)。
 - **已有项目：CSV 增量。** 为已有 CSV 汇总工具增加必填列检查，保留原命令、API、测试和用户笔记。
   [查看项目说明](examples/csv-increment/PROJECT_BRIEF.md)。
@@ -128,12 +105,31 @@ python3 tools/hffactory.py --help
 `examples/` 提供的是需求和起始代码，不是已搭建好的业务程序；案例中的具体用法和预期产物见
 [案例说明](docs/USER_GUIDE.md#案例说明)。
 
-## 说明与支持
+## 验证范围
+
+v0.4.0 于 **2026-10-13** 发布，tag 和运行包均来自提交
+[`c7c8b8e`](https://github.com/alexYG-arch/Harness_Foundry/commit/c7c8b8ed0a81e904f5baa42538f1f4b4b6829eaa)。
+该提交的 [main CI](https://github.com/alexYG-arch/Harness_Foundry/actions/runs/38354310099)
+和 [tag CI](https://github.com/alexYG-arch/Harness_Foundry/actions/runs/38354663250) 均已通过。
+
+- **已检查：** 既有公开源码检查 **289/289 通过**，无跳过、失败或错误，Skill 引用检查
+  **5/5 通过**；固定提交打包、ZIP 完整性和下载后的只读入口加载检查通过。
+- **未验证：** 本版 ZIP 未重跑新项目和已有项目增量这两个真实模型案例；未新增真实模型
+  表达效果评测。因此不宣称完整发行验收、普遍提速或全面稳定性提升。
+
+既有评测中，Ledger 小样本的中位耗时降低 19.0%，Config 降低 1.2%；原 Task 失败保留，
+后续两个隔离 Task 样本业务通过。这些结果仍绑定原提交和样本，不是本版 ZIP 的新增实测。
+详见[评测摘要](docs/FOUNDRY_UPGRADE_EVALUATION_2026_10_10.md)和
+[工程记录](docs/V2_9_IMPLEMENTATION_TRACKER.md)。CI、软件发布和项目实际验收是不同结论。
+
+## 更新记录与支持
 
 - [使用指南](docs/USER_GUIDE.md)：接入、依赖、案例、继续工作和常见问题。
 - [v0.4.0 发布说明](docs/releases/v0.4.0.md)：本版增量、下载和证据限制。
 - [v0.3.0 历史说明](docs/releases/v0.3.0.md)：保留上一版及其下载包。
 - [v0.2.0 历史说明](docs/releases/v0.2.0.md)：保留旧版本的能力、下载和兼容性记录。
+- [2026-10-10 升级说明](docs/FOUNDRY_UPGRADE_2026_10_10.md)：验收前置、环境预检、输入交接和失败处理；已纳入 v0.3.0。
+- [2026-09-26 更新说明](docs/FOUNDRY_UPDATE_2026_09_26.md)：能力复用、接口衔接、局部修复与历史双案例验证；已纳入 v0.3.0。
 - [Build CLI](docs/GENERIC_BUILD_CLI.md)：为接入工具或维护者提供的底层接口，不是初次使用的必读材料。
 - [安全报告](SECURITY.md)：漏洞请使用私密报告，不在公开 Issue 上传凭据、私有 PRD 或原始运行记录。
 

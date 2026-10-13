@@ -1,5 +1,55 @@
 # Harness Foundry v2.9 Implementation Tracker
 
+## 当前交付状态：v0.4.0 已发布，发布提交 CI 已通过
+
+截至 2026-10-13，清晰表达第 1–3 步已进入正式 **v0.4.0** 运行包，协议版本仍为 **2.9**。
+[Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.4.0)
+于北京时间 **2026-10-13 14:05:34** 发布；不是草稿或预发布版本。
+
+### 发布来源与检查
+
+- main 的发布提交、v0.4.0 tag 和 ZIP 来源均为
+  [`c7c8b8ed0a81e904f5baa42538f1f4b4b6829eaa`](https://github.com/alexYG-arch/Harness_Foundry/commit/c7c8b8ed0a81e904f5baa42538f1f4b4b6829eaa)。
+- [main CI #38354310099](https://github.com/alexYG-arch/Harness_Foundry/actions/runs/38354310099)
+  已通过：既有公开源码检查 **289/289 PASS**，68.465 秒，无跳过、失败或错误；
+  Skill 引用检查 **5/5 PASS**。
+- [tag CI #38354663250](https://github.com/alexYG-arch/Harness_Foundry/actions/runs/38354663250)
+  已完成，结论为 `success`，绑定同一发布提交。本地发布前同门禁 **289/289 PASS**、
+  52.584 秒的记录保留在下方发行准备条目。
+- 下载包为 `Harness-Foundry-0.4.0-generic.zip`，39 个文件、130,421 字节。
+  SHA-256 为 `3e5fd9733613d6c34a8211dcf78446f8529423934bb8652c01c6d18df745c5b5`。
+  固定提交打包、ZIP 完整性、GitHub 附件回下载字节一致性，以及隔离标准库环境下
+  `version --json`、`--help`、`read-build --help` 的只读加载检查均通过。
+
+v0.3.0 和 v0.2.0 的 tag、Release 正文、ZIP 和 SHA256SUMS 原样保留。
+这些是已核实的发布事实，不是用旧提交的 CI 替代新版检查。
+
+### 证据限制
+
+本版未追加真实模型评测，固定 ZIP 未重跑新项目和已有项目增量两个真实模型案例。
+提示传播和接口回归证明表达规范被送达、接口保持兼容，不证明任意模型都会遵守规范，
+也不证明读者理解效率提升。`acceptance_claimed=false`、`release_accepted=false`、
+`harness_e2e_verified=false` 的原有边界保留，不宣称完整发行验收。
+
+### 本轮文档同步范围
+
+本轮只更新 README 与本 Tracker。沿用 [清晰表达规范](CLEAR_COMMUNICATION.md)：先说当前
+结果和使用影响，同一概念使用同一名称，再列证据与限制。README 的历史提交进度改为
+原更新说明和评测记录的链接；历史收益数字保留样本限定，不与本版验收混用。
+
+不修改运行代码、版本、Manifest、JSON 接口、权限、提示词或发行模板，不新增审批门禁。
+不修改任何已发布 tag、Release 或附件，不重新打包，不追加真实模型评测，不修改 AICut。
+本轮文档提交不属于已冻结的 v0.4.0 ZIP；上面的 CI 结论绑定发布提交，本轮文档提交的
+CI 另由 GitHub 记录，不预记为通过。
+
+本轮提交前沿用既有 20 个模块检查：**289/289 PASS**，39.638 秒，零跳过、失败、错误；
+Skill 引用检查 **5/5 PASS**，`git diff --check` 通过。沿用现有 Python 3.13 测试环境，
+没有安装依赖或追加测试范围。报告保留在本地临时目录
+`foundry-v040-doc-status.ucMWwZ/source-checks.json`；检查后只补记本段结果。
+
+以下按轮次保留历史记录；其中“发行准备”“未发布”和“本地源码”等表述描述当时状态，
+当前交付状态以上述记录为准，不覆盖原失败证据或改写历史验收结论。
+
 ## 2026-10-13 v0.4.0 发行准备
 
 用户授权创建新版 tag、Release 和下载包。本次将 `0.4.0.dev1` 转为正式产品版本
