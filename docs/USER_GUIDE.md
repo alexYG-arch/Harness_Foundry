@@ -3,6 +3,9 @@
 这份指南面向希望用 Codex 为自己的项目搭建 Harness 的使用者。
 运行包、案例需求和本文说明不自动启动任务；先确认要做什么，再批准具体执行范围。
 
+main 源码版本为 **0.4.0.dev1（未发布）**，协议仍为 **2.9**。
+以下下载与首次使用步骤面向已发布的 v0.3.0 包；其 tag、Release 和附件保持不变。
+
 ## Foundry 与 Harness 的关系
 
 Foundry 是搭建工具，Harness 是为某个项目生成的工作环境与规则。
@@ -91,6 +94,8 @@ python3 tools/hffactory.py --help
 v0.3.0 下载包的预期版本信息包含 `implementation_version: 0.3.0` 与
 `product_route: GENERIC_REVIEWED_BUILD`。这两条命令不会创建业务工程或调用模型。
 协议仍为 `2.9`；旧 v0.2.0 包仍输出 `implementation_version: 0.2.0`。
+若从当前 main 开发源码运行，预期为 `implementation_version: 0.4.0.dev1`；
+这是未发布开发版本，不表示 v0.3.0 下载包已升级。
 源码回归及入口加载检查不等于完整业务或同包双案例验收，证据边界见
 [v0.3.0 发布说明](releases/v0.3.0.md)。
 

@@ -1,5 +1,27 @@
 # Harness Foundry v2.9 Implementation Tracker
 
+## 2026-10-13 main 源码版本递增（0.4.0.dev1，未发布）
+
+源码身份常量、`pyproject.toml` 与 `FACTORY_MANIFEST.json` 统一为 **0.4.0.dev1**，
+协议保留 **2.9**。Manifest 标记 `release_status=UNRELEASED`、
+`generic_build_update.status=IMPLEMENTED_UNRELEASED_SOURCE`；既有
+`release_ready=false` 及历史评测的适用边界不变。
+
+README、使用指南、发行 README 模板和评测摘要区分开发源码与已发布的 v0.3.0。
+仅调整版本元数据、直接受影响的既有版本断言及状态说明；不改变运行逻辑、JSON 接口、
+权限或测试模块范围。旧 Driver 版本、历史发布页和原验证记录不随产品版本改写。
+
+v0.3.0 的 tag、Release 和下载附件原样保留；本次不创建新 tag 或 Release，
+不追加真实模型评测，不修改 AICut 或历史运行状态。第 1–3 步的 `0f8d99a` CI
+继续绑定原提交，不预记为本次版本提交的 CI 结果。
+
+本次既有公开源码门禁 **289/289 PASS**，51.197 秒，零跳过、失败、错误，Skill
+引用检查 **5/5 PASS**。沿用原 20 个必需测试模块及已有 Python 3.13 测试环境，
+未安装依赖、增加测试模块或扩大校验范围。CLI 只读版本检查输出 `0.4.0.dev1`、
+协议 `2.9`，`git diff --check` 通过。报告保留在本地临时目录
+`foundry-version-dev041.QZvH1l/source-checks.json`；仅追加本节验证事实，未改变受测实现。
+`release_accepted` 与 `harness_e2e_verified` 仍为 false，源码检查不等于发行验收。
+
 ## 2026-10-13 清晰表达第 1–3 步交付状态（已进入 main，发行包未更新）
 
 第 1–3 步源码已提交并推送至 main，提交为

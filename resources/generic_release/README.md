@@ -1,5 +1,8 @@
 # Harness Foundry — generic Codex runtime
 
+Source version **0.4.0.dev1 — UNRELEASED**; protocol **2.9**. This development
+template does not replace the published v0.3.0 tag, Release or download archive.
+
 Open this directory as a Codex project. Its local `harness-foundry-build` Skill
 guides a build from clarified requirements and a human-reviewed build document.
 Codex performs reasoning and coding; local deterministic stages and independent

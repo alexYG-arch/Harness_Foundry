@@ -11,12 +11,13 @@
 [案例说明](docs/USER_GUIDE.md#案例说明) ·
 [问题反馈](https://github.com/alexYG-arch/Harness_Foundry/issues)
 
-产品版本 **0.3.0**，协议版本 **2.9**，采用 [MIT](LICENSE) 许可。
+main 源码版本 **0.4.0.dev1（未发布）**，协议版本 **2.9**，采用 [MIT](LICENSE) 许可。
+当前已发布下载包仍为 **v0.3.0**；其 tag、Release 和附件原样保留，未被 main 源码更新替换。
 [历史 v0.2.0 下载包](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.2.0)、
 tag 和 Release 保留不变。v0.3.0 按源码门禁、既有评测及新包加载检查的限定证据范围发布；
 **新版固定 ZIP 未重跑同包双案例，不宣称完整发行验收。** 详见 [v0.3.0 发布说明](docs/releases/v0.3.0.md)。
 
-## 源码增量 · 清晰表达与只读摘要（已进入 main，发行包未更新）
+## 0.4.0.dev1 源码增量 · 清晰表达与只读摘要（未发布）
 
 对话、搭建文档及发行模板统一采用[清晰表达规范](docs/CLEAR_COMMUNICATION.md)。
 新增 `read-build --human` 中文只读摘要；默认 JSON、`--json`、退出码和既有审批流程保持不变。
