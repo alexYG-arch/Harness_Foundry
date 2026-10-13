@@ -43,6 +43,7 @@ ALLOWED_TOP_LEVEL_FILES = (
     "docs/GENERIC_SOURCE_INTAKE.md",
     "docs/ACCEPTANCE_CONTRACT_ALIGNMENT.md",
     "docs/FOUNDRY_UPGRADE_2026_10_10.md",
+    "docs/CLEAR_COMMUNICATION.md",
     "pyproject.toml",
 )
 ALLOWED_TREES = (

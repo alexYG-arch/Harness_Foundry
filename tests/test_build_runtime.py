@@ -20,6 +20,7 @@ from harness_foundry_factory.build_runtime import (
     prepare_build_authorization, record_source_snapshot, revoke_build_authorization,
     classify_verification_result,
     resolve_build_attempt,
+    _COMMUNICATION_POLICY,
 )
 from harness_foundry_factory.local_process import CodexSandboxRunner
 from harness_foundry_factory.models import RequestValidationError
@@ -262,6 +263,70 @@ class BuildRuntimeTests(unittest.TestCase):
         for key in ("executables", "task_write_roots", "max_attempts", "max_task_attempts"):
             self.assertEqual(invocation["scope"][key], self.scope[key])
         self.assertEqual(self.runner.invocations, [], "prompt assembly must not execute")
+
+    def test_communication_projection_changes_only_prompt_text_not_scope_or_json(self):
+        self.prepare()
+        controller = self.controller()
+        _, prepared, plan = controller._current(self.prepared_id)
+        task = plan["workpacks"][0]
+        before = self.store.database_path.read_bytes()
+        files = {str(path.relative_to(self.workspace)): path.read_bytes()
+                 for path in self.workspace.rglob("*") if path.is_file()}
+        feedback = {"reason": "原错误：必须保留范围，不能追加权限", "failure_kind": "ASSERTION"}
+        for options in ({}, {"feedback": feedback}, {"case_id": "READ-ROWS"}):
+            with self.subTest(options=options):
+                # A text-only baseline proves that no authority/context fields
+                # depend on the policy. No altered CLI or workload is executed.
+                with patch("harness_foundry_factory.build_runtime._COMMUNICATION_POLICY", ""):
+                    baseline = controller._invocation(prepared, task, task["local_argv"], **options)
+                invocation = controller._invocation(prepared, task, task["local_argv"], **options)
+                self.assertEqual(invocation["prompt"].count(_COMMUNICATION_POLICY), 1)
+                self.assertEqual({**invocation, "prompt": invocation["prompt"].replace(_COMMUNICATION_POLICY, "", 1)},
+                                 baseline)
+                message, data = invocation["prompt"].split("\n", 1)
+                payload = json.loads(data)
+                self.assertEqual(set(payload), {"task", "feedback"})
+                self.assertEqual(payload["feedback"], options.get("feedback"))
+                self.assertEqual(payload["task"]["workpack"], task)
+                for preserved in ("user's language", "evidence limits", "negations", "budgets",
+                                  "Machine-output contracts take precedence", "foundry_blocker",
+                                  "single JSON object without prose", "as declared artifacts",
+                                  "self-contained instructions", "do not add files, tasks or permissions",
+                                  "adds no approval gate", "Do not block a task solely for wording"):
+                    self.assertIn(preserved, message)
+                self.assertNotIn(str(Path(__file__).resolve().parents[1]), _COMMUNICATION_POLICY)
+                self.assertEqual(invocation["write_roots"], [] if "case_id" in options else [str(self.workspace / "src")])
+        self.assertEqual(before, self.store.database_path.read_bytes())
+        self.assertEqual(files, {str(path.relative_to(self.workspace)): path.read_bytes()
+                                 for path in self.workspace.rglob("*") if path.is_file()})
+        self.assertEqual(self.runner.invocations, [])
+
+    def test_codex_receiver_gets_inline_communication_without_extra_authority(self):
+        task = self.plan["workpacks"][0]
+        task["executor"] = "CODEX"
+        task.pop("local_argv")
+        self.scope.update(model="TEST-MODEL-NOT-CALLED", allow_model_service=True)
+        self.prepare()
+        controller = self.controller()
+        _, prepared, plan = controller._current(self.prepared_id)
+        invocation = controller._invocation(prepared, plan["workpacks"][0], [])
+        before = self.store.database_path.read_bytes()
+        # Intercept the native receiver boundary; never start a model/process.
+        with patch("harness_foundry_factory.coding_process.CodexCodingRunner.run",
+                   return_value={"status": "MODEL_TURN_COMPLETED", "exit_code": 0}) as receiver, \
+                patch("subprocess.Popen", side_effect=AssertionError("no real model in regression")):
+            NativeBuildRunner()(invocation, lambda: None)
+        command = receiver.call_args.args[0]
+        self.assertEqual(command.prompt, invocation["prompt"])
+        self.assertIn(_COMMUNICATION_POLICY, command.prompt)
+        self.assertEqual(command.model, self.scope["model"])
+        self.assertEqual(invocation["scope"], prepared["scope"])
+        self.assertEqual(invocation["argv"], [prepared["scope"]["codex_executable"]])
+        for key in ("allow_model_service", "max_attempts", "max_task_attempts", "command_timeout_seconds"):
+            self.assertEqual(invocation["scope"][key], self.scope[key])
+        self.assertEqual(before, self.store.database_path.read_bytes())
+        self.assertEqual(self.events("BUILD_ATTEMPT_STARTED"), [])
+        self.assertFalse((self.workspace / "src/reader.py").exists())
 
     def test_downstream_gets_current_accepted_input_and_acceptance_event(self):
         self.prepare()
@@ -621,6 +686,9 @@ elif json.loads(Path("outputs/summary.json").read_text()) != {"rows":3,"invalid"
         self.assertIn(finishes[0]["attempt_id"], repaired["prompt"])
         self.assertIn(self.events("BUILD_COMMAND_PLANNED")[0]["event_id"], repaired["prompt"])
         self.assertIn("declared_method", repaired["prompt"])
+        self.assertIn(_COMMUNICATION_POLICY, self.runner.invocations[0]["prompt"])
+        self.assertIn(_COMMUNICATION_POLICY, repaired["prompt"])
+        self.assertEqual(len(self.events("BUILD_AUTHORIZATION_APPROVED")), 1)
 
     def test_model_turn_completion_is_not_independent_acceptance(self):
         self.plan["workpacks"][0].pop("local_argv")

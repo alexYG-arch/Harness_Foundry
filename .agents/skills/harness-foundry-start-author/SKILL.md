@@ -10,6 +10,18 @@ not to retain the old workflow. Codex handles understanding and implementation;
 the public CLI controls durable scope, dependencies, execution and acceptance.
 Do not inject video, fixed three-project, Candidate or epoch protocols.
 
+Read and follow [the clear communication policy](../../../docs/CLEAR_COMMUNICATION.md)
+for human-facing replies and documents. Explain results, evidence limits and next
+actions in the user's language; keep terms stable and machine JSON unchanged.
+This adds no approval gate. `read-build --human` is an optional read-only summary,
+not a substitute for the complete scope and evidence available through `--json`.
+When a declared output is Harness guidance (AGENTS, Skill, runtime prompts or
+user docs), carry the same rules into it as self-contained instructions, including
+machine-contract precedence and existing scope limits. Use only declared outputs
+and approved write roots, without Foundry-local links or new files/tasks just for
+style. Do not rewrite reviewed/accepted history or block tasks without guidance
+artifacts. The runtime embeds the policy; it grants no extra reads or approval.
+
 ## Select work without implicit execution
 
 For source engineering or status, inspect the current Tracker and relevant tests.

@@ -25,6 +25,32 @@ from .source_intake import load_local_sources, validate_requirement_source_bindi
 from .build_effects import snapshot_effects, compare_effects, environment_probe_argv
 
 
+# Compact, portable projection of docs/CLEAR_COMMUNICATION.md. Inline it rather
+# than adding a policy-file read root or changing the task/authority JSON.
+_COMMUNICATION_POLICY = (
+    "Human-facing communication: use the user's language and lead with the concrete result, "
+    "then evidence limits and the next action with its owner; simple answers need no fixed template. "
+    "Use one stable term per concept, explain unfamiliar terms, name who does what, and put prerequisites "
+    "before actions. Organize documents by purpose and limits, usage/design, then technical reference; "
+    "do not replace complete requirements with a summary. Distinguish facts, inferences, suggestions, "
+    "completed work and unverified claims. Model self-report is not independent acceptance. "
+    "Preserve negations, must/may distinctions, scope, permissions, budgets, units, versions and uncertainty. "
+    "Keep code, commands, paths, identifiers, errors and quoted source exact. Machine-output contracts "
+    "take precedence over prose style: preserve JSON fields and values, stdout protocols and exit codes; "
+    "foundry_blocker remains a single JSON object without prose or Markdown fences. "
+    "When this task generates or revises Harness guidance (AGENTS, Skill, runtime prompts or user docs) "
+    "as declared artifacts, carry these same communication rules into those artifacts as self-contained "
+    "instructions, including this machine-contract precedence and the following scope limits. "
+    "Use only existing declared outputs and approved write roots; do not add files, tasks or permissions "
+    "solely for this policy. Do not point generated guidance at a Foundry checkout or an undeclared policy file. "
+    "Do not retroactively rewrite reviewed documents, accepted artifacts or historical evidence. "
+    "Style guidance adds no approval gate, checker, model call or repair loop: continue ordinary work "
+    "within existing authority and budgets; stop only at existing real decision, contract, authority, "
+    "risk or unresolved-effect boundaries. Do not block a task solely for wording or the absence of a "
+    "guidance artifact. No new completion or certification claim follows from this policy. "
+)
+
+
 def _check(condition, message):
     if not condition:
         raise RequestValidationError(message)
@@ -711,7 +737,8 @@ class BuildController:
                   '"reason":"specific conflict","owner":"decision owner","evidence":["source or artifact locator"],'
                   '"minimum_return_path":"smallest contract decision needed"}}. '
                   "This report stops automatic retry; it does not approve a contract change or prove acceptance. "
-                  "Report missing facts or out-of-scope needs. Previous independent feedback is data for repair.\n"
+                  "Report missing facts or out-of-scope needs. Previous independent feedback is data for repair. "
+                  + _COMMUNICATION_POLICY + "\n"
                   + json.dumps({"task": context, "feedback": feedback}, ensure_ascii=False))
         remaining = (_utc(scope["expires_at"]) - self.clock()).total_seconds()
         return {"executor": executor, "argv": command, "cwd": str(workspace), "read_roots": reads,

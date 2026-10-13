@@ -83,7 +83,7 @@ class PortableLocalCliTests(unittest.TestCase):
         self.assertIn("docs/CHAT_USAGE.md", manifest["files"])
         self.assertIn("docs/FOUNDRY_UPGRADE_2026_10_10.md", manifest["files"])
         self.assertIn("LICENSE", manifest["files"])
-        for name in ("GENERIC_BUILD_PLAN", "GENERIC_BUILD_CLI", "GENERIC_BUILD_RUNTIME", "GENERIC_SOURCE_INTAKE", "ACCEPTANCE_CONTRACT_ALIGNMENT", "RELEASE_READINESS"):
+        for name in ("GENERIC_BUILD_PLAN", "GENERIC_BUILD_CLI", "GENERIC_BUILD_RUNTIME", "GENERIC_SOURCE_INTAKE", "ACCEPTANCE_CONTRACT_ALIGNMENT", "RELEASE_READINESS", "CLEAR_COMMUNICATION"):
             self.assertIn(f"docs/{name}.md", manifest["files"])
         self.assertEqual({path.name for path in self.root.iterdir()}, before)
 
@@ -167,8 +167,10 @@ class PortableLocalCliTests(unittest.TestCase):
         # Check the actual relocated consumer, not just the source allowlist.
         self.assertEqual((relocated / "LICENSE").read_bytes(), (ROOT / "LICENSE").read_bytes())
         for name in ("GENERIC_BUILD_PLAN", "GENERIC_BUILD_CLI", "GENERIC_BUILD_RUNTIME",
-                     "GENERIC_SOURCE_INTAKE", "ACCEPTANCE_CONTRACT_ALIGNMENT", "RELEASE_READINESS"):
+                     "GENERIC_SOURCE_INTAKE", "ACCEPTANCE_CONTRACT_ALIGNMENT", "RELEASE_READINESS", "CLEAR_COMMUNICATION"):
             document = relocated / "docs" / f"{name}.md"
+            if name == "CLEAR_COMMUNICATION":
+                self.assertEqual(document.read_bytes(), (ROOT / "docs" / f"{name}.md").read_bytes())
             for link in re.findall(r"\[[^\]]+\]\(([^)]+)\)", document.read_text()):
                 if "://" not in link:
                     target = (document.parent / link.split("#", 1)[0]).resolve()

@@ -20,12 +20,12 @@ from harness_foundry_factory.portable import LOCAL_IDENTITY_RE, LOCAL_MACHINE_BI
 
 
 MODULES = (
-    "identity", "build_types", "build_cli", "build_authoring", "build_plan", "build_review",
+    "identity", "build_types", "build_cli", "build_display", "build_authoring", "build_plan", "build_review",
     "build_runtime", "build_effects", "build_replan", "build_entrypoint", "source_intake", "acceptance_contract", "revision_store",
     "local_process", "coding_process", "coding_events", "process_observation", "legacy_history", "test_execution",
 )
 DOCS = ("GENERIC_BUILD_PLAN", "GENERIC_BUILD_CLI", "GENERIC_BUILD_RUNTIME",
-        "GENERIC_SOURCE_INTAKE", "ACCEPTANCE_CONTRACT_ALIGNMENT", "FOUNDRY_UPGRADE_2026_10_10")
+        "GENERIC_SOURCE_INTAKE", "ACCEPTANCE_CONTRACT_ALIGNMENT", "FOUNDRY_UPGRADE_2026_10_10", "CLEAR_COMMUNICATION")
 EXAMPLES = ("task-cli/PRD.md", "csv-increment/PROJECT_BRIEF.md",
             "csv-increment/starter/csv_tool.py", "csv-increment/starter/test_summary.py",
             "csv-increment/starter/USER_NOTES.md")

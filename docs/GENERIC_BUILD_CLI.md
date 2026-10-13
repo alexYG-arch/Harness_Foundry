@@ -73,6 +73,24 @@ Requirement/Plan 见 [Plan 合同](GENERIC_BUILD_PLAN.md)，manifest 见
 [来源合同](GENERIC_SOURCE_INTAKE.md)。控制库必须使用 `REVISION_V1`；旧
 `LEGACY_HASH_V1` 数据库在只读探测时拒绝，不自动迁移或继承旧授权。
 
+## 可选的人读状态摘要
+
+对已有通用 Program，可只读查看中文摘要：
+
+```bash
+python3 tools/hffactory.py read-build --control-db DB --program-id ID --human
+```
+
+DB 替换为已有控制库的绝对路径，ID 替换为真实 Program ID。此命令不创建控制库、
+不派发任务、不改变授权或预算。摘要显示当前计划版本、各范围状态/预算/到期时间、
+历史尝试及已有恢复建议；失败详情保留原始错误码、原因和检查证据。
+历史 ACCEPTED 只说明对应尝试的检查记录，不代表当前完整计划或整个 Harness 完成。
+
+不加选项时仍输出原有缩进 JSON；`--json` 仍输出原有规范化 JSON，字段和退出码不变。
+`--human` 仅支持 `read-build`，不能与 `--json` 同用；错误也用人读格式展示并保留原始返回。
+摘要不是完整授权 Readback，作权限决定前仍须查看完整 JSON。普通措辞问题不新增门禁。
+遵循[清晰表达规范](CLEAR_COMMUNICATION.md)，不调用额外模型润色或裁定状态。
+
 ## Scope
 
 scope 必须完整列出以下字段，不接受额外字段：

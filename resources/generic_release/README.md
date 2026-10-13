@@ -46,6 +46,15 @@ business logic. Every real use still requires document review and runtime approv
 
 ## Compatibility and acceptance
 
+Human-facing dialogue and documents follow the [clear communication policy](docs/CLEAR_COMMUNICATION.md).
+For an existing generic Program, `python3 tools/hffactory.py read-build --control-db DB --program-id ID --human`
+shows a Chinese, read-only status summary. Substitute your existing absolute database path and Program ID.
+The default JSON output and `--json` interface are unchanged; `--human` and `--json` cannot be combined.
+The summary does not grant authority, start tasks or replace full scope/evidence review.
+Runtime prompts embed the same policy and carry it into declared Harness guidance
+outputs, without Foundry-local links, extra read/write permissions or approval gates.
+This does not retroactively update existing projects or prove model writing quality.
+
 This generic distribution intentionally omits historical Candidate/epoch commands,
 fixed three-project protocols and domain-specific workflows. It does not migrate
 or reopen old authoring databases. Existing REVISION_V1 generic control data keeps

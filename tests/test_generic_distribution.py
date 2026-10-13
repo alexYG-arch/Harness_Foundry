@@ -80,6 +80,25 @@ class GenericDistributionTests(unittest.TestCase):
             packager.package(self.archive)
         self.assertEqual(before, self.archive.read_bytes())
 
+    def test_relocated_human_output_and_shared_policy_are_shipped(self):
+        policy = "docs/CLEAR_COMMUNICATION.md"
+        self.assertEqual((self.bundle / policy).read_bytes(), (ROOT / policy).read_bytes())
+        for relative in ("AGENTS.md", ".agents/skills/harness-foundry-build/SKILL.md"):
+            self.assertIn("CLEAR_COMMUNICATION.md", (self.bundle / relative).read_text())
+        fixture = support.BuildRuntimeTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        database = self.root / "human.sqlite3"
+        self.cli("record-build-plan", "--control-db", str(database), "--request", "-",
+                 request={**fixture.request, "expected_revision": 0, "idempotency_key": "TEST-HUMAN"})
+        before = database.read_bytes()
+        result = self.run_python([str(self.bundle / "tools/hffactory.py"), "read-build", "--control-db",
+                                  str(database), "--program-id", fixture.program, "--human"])
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertIn("尚无任务执行记录", result.stdout)
+        self.assertIn("不是新的授权或验收决定", result.stdout)
+        self.assertEqual(before, database.read_bytes())
+
     def test_isolated_public_version_compile_and_review_gate(self):
         version = self.cli("version")
         self.assertEqual(version["product_route"], "GENERIC_REVIEWED_BUILD")
@@ -154,11 +173,16 @@ class GenericDistributionTests(unittest.TestCase):
         program = (f"import sys; sys.path.insert(0, {str(self.bundle / 'src')!r}); "
                    f"ALLOWED = {set(packager.MODULES)!r}\n" + IMPORT_GUARD + '''
 import json, subprocess
-from harness_foundry_factory.build_runtime import BuildController
+from harness_foundry_factory.build_runtime import BuildController, _COMMUNICATION_POLICY
 from harness_foundry_factory.revision_store import RevisionControlEventStore
 calls = []
 def fixture_runner(invocation, before_dispatch):
     assert invocation["executor"] == "LOCAL"
+    assert invocation["prompt"].count(_COMMUNICATION_POLICY) == 1
+    assert "self-contained instructions" in _COMMUNICATION_POLICY
+    assert "Machine-output contracts take precedence" in _COMMUNICATION_POLICY
+    assert "adds no approval gate" in _COMMUNICATION_POLICY
+    assert set(json.loads(invocation["prompt"].split("\\n", 1)[1])) == {"task", "feedback"}
     before_dispatch()
     calls.append(invocation["argv"])
     process = subprocess.run(invocation["argv"], cwd=invocation["cwd"], capture_output=True,

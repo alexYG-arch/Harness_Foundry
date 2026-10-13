@@ -28,7 +28,10 @@ def main(argv=None):
     commands = parser.add_subparsers(dest="command", required=True)
     for name in ("version", *sorted(BUILD_COMMANDS)):
         command = commands.add_parser(name)
-        command.add_argument("--json", action="store_true")
+        output = command.add_mutually_exclusive_group()
+        output.add_argument("--json", action="store_true")
+        if name == "read-build":
+            output.add_argument("--human", action="store_true", help="Show a read-only Chinese status summary")
         if name in {"read-build", "read-history"}:
             command.add_argument("--program-id", required=True)
         elif name != "version":
@@ -72,7 +75,11 @@ def main(argv=None):
     except Exception as exc:
         result, code = {"schema_version": "1.0", "status": "ERROR",
                         "error": {"code": "INTERNAL_FACTORY_ERROR", "message": str(exc)}}, 1
-    print(canonical_json(result) if args.json else json.dumps(result, ensure_ascii=False, indent=2))
+    if getattr(args, "human", False):
+        from .build_display import render_build_readback
+        print(render_build_readback(result))
+    else:
+        print(canonical_json(result) if args.json else json.dumps(result, ensure_ascii=False, indent=2))
     return code
 
 

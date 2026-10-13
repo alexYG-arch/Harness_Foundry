@@ -13,6 +13,26 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class SkillContractTests(unittest.TestCase):
+    def test_source_and_distribution_reference_one_communication_policy(self):
+        for relative in ("AGENTS.md", "resources/generic_release/AGENTS.md",
+                         "resources/generic_release/SKILL.md",
+                         ".agents/skills/harness-foundry-start-author/SKILL.md"):
+            with self.subTest(relative=relative):
+                content = (ROOT / relative).read_text(encoding="utf-8")
+                self.assertIn("docs/CLEAR_COMMUNICATION.md", content)
+                self.assertIn("read-build --human", content)
+        policy = (ROOT / "docs/CLEAR_COMMUNICATION.md").read_text(encoding="utf-8")
+        for preserved in ("不新增审批门禁", "机器 JSON", "不保证", "不调用额外模型", "已确认文档"):
+            self.assertIn(preserved, policy)
+        self.assertIn("生成 Harness 与运行提示词", policy)
+        self.assertIn("没有指导文档产物也不构成阻断", policy)
+        for relative in (".agents/skills/harness-foundry-start-author/SKILL.md",
+                         "resources/generic_release/SKILL.md"):
+            content = (ROOT / relative).read_text(encoding="utf-8")
+            for preserved in ("self-contained instructions", "machine-contract precedence",
+                              "only declared outputs", "no extra reads or approval"):
+                self.assertIn(preserved, content)
+
     def test_repo_skill_is_valid(self) -> None:
         completed = subprocess.run(
             [sys.executable, str(ROOT / "tools" / "validate_skill.py")],

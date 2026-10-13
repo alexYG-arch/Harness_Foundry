@@ -4,6 +4,11 @@ Use the repo-local `harness-foundry-build` Skill for Harness construction.
 The Agent reasons, designs and implements; Foundry binds inputs, scope, dependencies,
 independent checks and durable progress. Local Python stages are allowed when declared.
 
+Read and follow [the clear communication policy](docs/CLEAR_COMMUNICATION.md) for
+human-facing dialogue and documents. Explain results, limits and next actions in
+the user's language; preserve exact machine protocols and evidence. This adds no
+approval gate. `read-build --human` summarizes state; `--json` retains full facts.
+
 Every build starts with clarification and a saved, displayed, versioned build document.
 Wait for the user's actual confirmation of that document and scope before creating a
 Program or target. Background validation and the source documents themselves are not

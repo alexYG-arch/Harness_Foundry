@@ -1,6 +1,6 @@
 """Public CLI and host decisions, all with temporary fixtures and no model calls."""
 
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from io import StringIO
@@ -12,7 +12,9 @@ import sys
 import unittest
 from unittest.mock import patch
 
-from harness_foundry_factory.build_entrypoint import apply_build_request
+from harness_foundry_factory.build_entrypoint import apply_build_request, read_build
+from harness_foundry_factory.build_display import render_build_readback
+from harness_foundry_factory.build_types import canonical_json
 from harness_foundry_factory.cli import main
 from harness_foundry_factory.models import RequestValidationError
 import test_build_runtime as support
@@ -219,6 +221,111 @@ class BuildEntrypointTests(unittest.TestCase):
         self.assertEqual(json.loads(result.stdout)["status"], "BUILD_PLAN_RECORDED_NOT_AUTHORIZED")
         view = self.cli("read-build")
         self.assertEqual(view["stream_revision"], 1)
+
+    def read_output(self, *options):
+        output = StringIO()
+        with redirect_stdout(output):
+            code = main(["read-build", "--control-db", str(self.database),
+                         "--program-id", self.f.program, *options])
+        return code, output.getvalue()
+
+    def test_human_readback_is_readonly_and_json_formats_are_unchanged(self):
+        self.prepare()
+        before = self.database.read_bytes()
+        original = read_build(self.database, self.f.program)
+        with patch("subprocess.Popen", side_effect=AssertionError("readback must not dispatch")):
+            code, canonical = self.read_output("--json")
+            result = json.loads(canonical)
+            self.assertEqual(code, 0)
+            self.assertEqual(result, original)
+            self.assertEqual(canonical, canonical_json(original) + "\n")
+            self.assertEqual(self.read_output(), (0, json.dumps(original, ensure_ascii=False, indent=2) + "\n"))
+            code, human = self.read_output("--human")
+        self.assertEqual(code, 0)
+        self.assertIn("尚无任务执行记录", human)
+        self.assertIn("APPROVAL_REQUIRED", human)
+        self.assertIn("本次未重新核对文档文件", human)
+        self.assertIn("未验证", human)
+        self.assertIn("不会自动推进任务", human)
+        self.assertEqual(before, self.database.read_bytes())
+
+    def test_human_missing_database_preserves_error_and_does_not_create_it(self):
+        json_code, raw = self.read_output("--json")
+        human_code, human = self.read_output("--human")
+        self.assertNotEqual(json_code, 0)
+        self.assertEqual(human_code, json_code)
+        self.assertIn(json.loads(raw)["error"]["code"], human)
+        self.assertEqual(json.loads(human[human.index("{"):]), json.loads(raw))
+        self.assertNotIn("已读取建设记录", human)
+        self.assertFalse(self.database.exists())
+
+    def test_human_option_is_read_build_only_and_mutually_exclusive(self):
+        for argv in (["read-build", "--control-db", str(self.database), "--program-id", self.f.program,
+                      "--json", "--human"], ["version", "--human"],
+                     ["advance-build", "--control-db", str(self.database), "--request", "-", "--human"]):
+            with self.subTest(argv=argv), redirect_stderr(StringIO()), self.assertRaises(SystemExit) as stopped:
+                main(argv)
+            self.assertEqual(stopped.exception.code, 2)
+        self.assertFalse(self.database.exists())
+
+    def test_human_render_keeps_history_recovery_and_failure_evidence(self):
+        self.prepare()
+        result = self.cli("read-build")
+        grant = result["authorizations"][0]
+        for index, state in enumerate(("APPROVED", "EXPIRED", "REVOKED")):
+            historical = deepcopy(grant)
+            historical.update(prepared_event_id=f"OLD-{index}", proposal_event_id="OLD-PLAN", state=state)
+            result["authorizations"].append(historical)
+        for status, action, phrase in (
+                ("ACCEPTED", "NO_REPLAY", "不代表整个项目完成"),
+                ("REJECTED", "REPAIR_WITHIN_BUDGET", "未通过检查"),
+                ("BLOCKED", "ALIGN_PUBLIC_CONTRACT_AND_VERIFIER", "不自动重试"),
+                ("UNKNOWN_SIDE_EFFECT", "RECONCILE_EFFECTS", "不能视为成功或未执行"),
+                ("IN_FLIGHT", "RECONCILE_COMMAND_OBSERVATIONS", "不证明进程仍在运行"),
+                ("INVALIDATED", "REBUILD_AFFECTED_BRANCH_WITHIN_BUDGET", "此前接受结果已失效"),
+                ("RETRY_ALLOWED", "ADVANCE_WITH_CURRENT_SCOPE_AND_BUDGET", "尚未因此重新执行"),
+                ("NOT_DISPATCHED", "ADVANCE_WITH_CURRENT_SCOPE_AND_BUDGET", "已用预算仍保留"),
+                ("FUTURE_STATUS", "FUTURE_ACTION", "未识别状态")):
+            with self.subTest(status=status):
+                result["attempts"] = [{"attempt_id": "ATTEMPT-1", "workpack_id": "WORK-1", "status": status,
+                    "prepared_event_id": "OLD-0", "phase": "VERIFICATION", "reason": "条件未满足，不可扩大权限",
+                    "last_command": {"result": {"error_code": "EXAMPLE_ERROR", "stderr": "details"}},
+                    "verification": [{"case_id": "CASE-1", "result": {"failure_kind": "CONTRACT_GAP"}}],
+                    "recovery": {"next_action": action, "owner": "LOCAL_OPERATOR",
+                                 "evidence_attempt_id": "ATTEMPT-1", "minimum_return_path": action}}]
+                before = deepcopy(result)
+                human = render_build_readback(result)
+                self.assertEqual(result, before)
+                for token in (status, action, phrase, "ATTEMPT-1", "WORK-1", "LOCAL_OPERATOR",
+                              "历史计划", "APPROVAL_REQUIRED", "APPROVED", "EXPIRED", "REVOKED",
+                              grant["scope"]["expires_at"], "不是新的授权或验收决定"):
+                    self.assertIn(token, human)
+                if status != "ACCEPTED":
+                    for token in ("条件未满足，不可扩大权限", "EXAMPLE_ERROR", "CONTRACT_GAP", "CASE-1"):
+                        self.assertIn(token, human)
+
+    def test_real_accepted_attempts_render_without_replaying_or_claiming_e2e(self):
+        self.prepare()
+        self.approve()
+        with patch("harness_foundry_factory.build_runtime.NativeBuildRunner", return_value=self.f.runner):
+            self.advance()
+        before = self.database.read_bytes()
+        count = len(self.f.runner.invocations)
+        with patch("subprocess.Popen", side_effect=AssertionError("readback must not dispatch")):
+            code, human = self.read_output("--human")
+        self.assertEqual(code, 0)
+        self.assertIn("该次任务的声明检查已通过并记录", human)
+        self.assertIn("不代表整个项目完成", human)
+        self.assertIn("本返回未确认 Harness 端到端可用", human)
+        self.assertEqual(len(self.f.runner.invocations), count)
+        self.assertEqual(before, self.database.read_bytes())
+
+    def test_human_unprepared_readback_reports_no_authority(self):
+        self.mutation("record-build-plan", self.f.request)
+        code, human = self.read_output("--human")
+        self.assertEqual(code, 0)
+        self.assertIn("尚无准备好的运行范围", human)
+        self.assertIn("尚无任务执行记录", human)
 
 
 if __name__ == "__main__":

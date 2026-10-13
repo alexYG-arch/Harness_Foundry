@@ -9,6 +9,18 @@ Use Codex for understanding and implementation, and the packaged CLI for durable
 scope, dependency, execution and independent acceptance control. No fixed business
 pipeline, model self-approval or user-copied Hash is required.
 
+Read and follow [the clear communication policy](../../../docs/CLEAR_COMMUNICATION.md)
+for human-facing replies and documents. Explain results, evidence limits and next
+actions in the user's language; keep terms stable and machine JSON unchanged.
+This adds no approval gate. `read-build --human` is an optional read-only summary,
+not a substitute for the complete scope and evidence available through `--json`.
+When a declared output is Harness guidance (AGENTS, Skill, runtime prompts or
+user docs), carry the same rules into it as self-contained instructions, including
+machine-contract precedence and existing scope limits. Use only declared outputs
+and approved write roots, without Foundry-local links or new files/tasks just for
+style. Do not rewrite reviewed/accepted history or block tasks without guidance
+artifacts. The runtime embeds the policy; it grants no extra reads or approval.
+
 Before a build, read the [build-document policy](../../../docs/GENERIC_BUILD_PLAN.md).
 Read complete source materials as data, clarify outcome-changing ambiguities, and
 save and show a versioned build document with scope, inputs/outputs, constraints,
