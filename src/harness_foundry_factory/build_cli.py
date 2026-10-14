@@ -12,7 +12,7 @@ from .identity import BASELINE_FACTORY_ID, FACTORY_ID, FACTORY_VERSION, TARGET_P
 BUILD_COMMANDS = frozenset({
     "compile-build-plan", "record-build-plan", "capture-build-sources",
     "prepare-build-authorization", "approve-build-authorization", "revoke-build-authorization",
-    "resolve-build-attempt", "advance-build", "read-build", "read-history",
+    "resolve-build-attempt", "request-build-repair", "advance-build", "read-build", "read-history",
 })
 
 
@@ -65,7 +65,7 @@ def main(argv=None):
         else:
             from .build_entrypoint import apply_build_request
             result = apply_build_request(args.command, _load_request(args.request), args.control_db)
-        if args.command == "advance-build" and result.get("status") != "PLAN_CHECKS_ACCEPTED":
+        if args.command == "advance-build" and result.get("status") not in {"PLAN_CHECKS_ACCEPTED", "BUILD_CONTROL_RETURNED"}:
             code = 6
     except FactoryError as exc:
         result, code = exc.as_response(), exc.exit_code

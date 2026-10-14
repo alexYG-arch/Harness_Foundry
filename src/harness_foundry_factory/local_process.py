@@ -12,6 +12,7 @@ import codecs
 import json
 import os
 from pathlib import Path
+import re
 import selectors
 import signal
 import subprocess
@@ -20,6 +21,8 @@ import tempfile
 import time
 from typing import Any, Callable, Sequence
 from uuid import uuid4
+
+from .resource_network import effective_network_policy, native_network_profile, normalize_network
 
 
 class LocalProcessError(ValueError):
@@ -72,11 +75,14 @@ class LocalCommand:
     read_roots: tuple[Path, ...]
     write_roots: tuple[Path, ...]
     timeout_seconds: float = 60
+    environment: tuple[tuple[str, str], ...] = ()
+    network: dict[str, Any] | None = None
 
     @classmethod
     def prepare(cls, *, argv: Sequence[str], cwd: str | Path,
                 read_roots: Sequence[str | Path], write_roots: Sequence[str | Path],
-                timeout_seconds: float = 60) -> LocalCommand:
+                timeout_seconds: float = 60, environment: dict[str, str] | None = None,
+                network: dict[str, Any] | None = None) -> LocalCommand:
         if (not isinstance(argv, (list, tuple)) or not argv
                 or any(not isinstance(arg, str) or "\x00" in arg for arg in argv)):
             raise LocalProcessError("argv must contain strings, without NUL bytes")
@@ -93,9 +99,27 @@ class LocalCommand:
             raise LocalProcessError("SHARED_TEMP_ISOLATION_UNSUPPORTED: on macOS use a verified non-shared directory, not /tmp")
         if not _within(workdir, reads + writes) or not _within(executable, reads + writes):
             raise LocalProcessError("cwd and executable must be covered by explicit local reads")
+        if environment is None:
+            environment = {}
+        if not isinstance(environment, dict) or any(
+                not isinstance(key, str) or not isinstance(value, str) or "\x00" in value
+                or not (key in {"TMPDIR", "TMP", "TEMP", "XDG_CACHE_HOME"}
+                        or re.fullmatch(r"FOUNDRY_[A-Z0-9_]+", key))
+                for key, value in environment.items()):
+            raise LocalProcessError("only generated verification paths and FOUNDRY context may be injected")
+        for key in ("TMPDIR", "TMP", "TEMP", "XDG_CACHE_HOME"):
+            if key in environment:
+                directory = _path(environment[key], directory=True)
+                if not _within(directory, writes):
+                    raise LocalProcessError("temporary/cache environment must name a writable resource")
+        try:
+            network = normalize_network(network, write_roots=writes)
+        except ValueError as exc:
+            raise LocalProcessError(str(exc)) from exc
         # Preserve argv[0]: resolving a venv's Python symlink here would change
         # interpreter environment selection even though the binary is the same.
-        return cls(tuple(argv), workdir, reads, writes, float(timeout_seconds))
+        return cls(tuple(argv), workdir, reads, writes, float(timeout_seconds),
+                   tuple(sorted(environment.items())), network)
 
     def permission_profile(self) -> dict[str, Any]:
         filesystem = {":minimal": "read"}
@@ -107,7 +131,7 @@ class LocalCommand:
             if root.is_dir():
                 for name in (".git", ".codex", ".agents"):
                     filesystem[str(root / name)] = "read"
-        return {"filesystem": filesystem, "network": {"enabled": False}}
+        return {"filesystem": filesystem, "network": native_network_profile(self.network)}
 
 
 def _toml_inline(value: Any) -> str:
@@ -148,11 +172,24 @@ class CodexSandboxRunner:
 
     def _capture(self, argv: list[str], cwd: Path, timeout: float, *, output_limit: int | None = None,
                  stdin_bytes: bytes | None = None, on_stdout=None, on_started=None,
-                 stream_sink=None, on_capture=None, cancellation_reason=None) -> dict[str, Any]:
+                 stream_sink=None, on_capture=None, cancellation_reason=None,
+                 environment=None, network_policy=None, redactor=None) -> dict[str, Any]:
         limit = self.output_limit_bytes if output_limit is None else output_limit
         previews = {name: bytearray() for name in ("stdout", "stderr")}
         counts = dict.fromkeys(previews, 0)
+        raw_counts = dict.fromkeys(previews, 0)
+        filters = {name: redactor.stream() for name in previews} if redactor is not None else {}
+        safe_text = redactor.text if redactor is not None else str
         capture_error = None
+
+        def emit(name, chunk):
+            counts[name] += len(chunk)
+            previews[name].extend(chunk[:max(0, limit - len(previews[name]))])
+            if capture_error is None and chunk:
+                if stream_sink is not None:
+                    stream_sink(name, chunk)
+                if name == "stdout" and on_stdout is not None:
+                    on_stdout(chunk)
         with tempfile.TemporaryFile() as source, selectors.DefaultSelector() as selector:
             if stdin_bytes is not None:
                 source.write(stdin_bytes)
@@ -160,10 +197,11 @@ class CodexSandboxRunner:
             try:
                 process = subprocess.Popen(argv, cwd=cwd, stdin=source if stdin_bytes is not None else subprocess.DEVNULL,
                                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False,
-                                           start_new_session=True, env=self._environment())
+                                           start_new_session=True,
+                                           env={**self._environment(), **(environment or {})})
             except OSError as exc:
                 return {"exit_code": None, "timed_out": False, "stdout": "",
-                        "stderr": str(exc), "output_truncated": False, "process_started": False}
+                        "stderr": safe_text(str(exc)), "output_truncated": False, "process_started": False}
             timed_out = False
             cancelled = None
             next_authority_check = 0
@@ -200,7 +238,7 @@ class CodexSandboxRunner:
                             cancelled = cancellation_reason()
                         except Exception as exc:
                             cancelled = "AUTHORIZATION_MONITOR_FAILED"
-                            capture_error = cancelled + ": " + str(exc)[:1000]
+                            capture_error = cancelled + ": " + safe_text(str(exc))[:1000]
                         if cancelled:
                             # Only this live Popen's owned group, never a PID
                             # reconstructed from a previous host's records.
@@ -214,18 +252,13 @@ class CodexSandboxRunner:
                             selector.unregister(key.fileobj)
                             continue
                         name = key.data
-                        counts[name] += len(chunk)
-                        previews[name].extend(chunk[:max(0, limit - len(previews[name]))])
-                        if sum(counts.values()) > self.stream_limit_bytes:
+                        raw_counts[name] += len(chunk)
+                        if sum(raw_counts.values()) > self.stream_limit_bytes:
                             capture_error = "PROCESS_STREAM_LIMIT_EXCEEDED"
                             kill_group()
-                        if capture_error is None:
-                            if stream_sink is not None:
-                                stream_sink(name, chunk)
-                            if name == "stdout" and on_stdout is not None:
-                                on_stdout(chunk)
+                        emit(name, filters[name].feed(chunk) if filters else chunk)
             except Exception as exc:
-                capture_error = "PROCESS_CAPTURE_FAILED: " + str(exc)[:1000]
+                capture_error = "PROCESS_CAPTURE_FAILED: " + safe_text(str(exc))[:1000]
             finally:
                 # Clean up this command's process group, including on normal
                 # exit. Detached daemons/new sessions are not supported by this
@@ -234,10 +267,15 @@ class CodexSandboxRunner:
                 process.wait()
                 process.stdout.close()
                 process.stderr.close()
+            for name, stream_filter in filters.items():
+                try:
+                    emit(name, stream_filter.finish())
+                except Exception as exc:
+                    capture_error = "PROCESS_CAPTURE_FAILED: " + safe_text(str(exc))[:1000]
             captured = {}
             encoding_error = False
             for name, data in previews.items():
-                clipped = counts[name] > limit
+                clipped = raw_counts[name] > limit or counts[name] > limit
                 captured[name + "_truncated"] = clipped
                 try:
                     captured[name] = codecs.getincrementaldecoder("utf-8")().decode(bytes(data), final=not clipped)
@@ -245,28 +283,48 @@ class CodexSandboxRunner:
                     encoding_error = True
                     captured[name] = bytes(data).decode("utf-8", errors="replace")
             result = {"exit_code": process.returncode, "timed_out": timed_out,
-                    "output_truncated": any(counts[name] > limit for name in counts),
+                    "output_truncated": any(raw_counts[name] > limit or counts[name] > limit for name in counts),
                     "stream_bytes": counts, "capture_error": capture_error,
-                    **({"cancellation_reason": cancelled} if cancelled else {}),
+                    **({"cancellation_reason": safe_text(cancelled)} if cancelled else {}),
                     **({"encoding_error": True} if encoding_error else {}), **captured}
+            if network_policy is not None:
+                # Persist before the controller can disappear. Recovery must
+                # not mislabel a completed proxy/Unix command as offline.
+                result["effective_network_policy"] = network_policy
             if on_capture is not None:
                 try:
                     on_capture(result)
                 except Exception as exc:
-                    result["capture_error"] = "CAPTURE_PERSISTENCE_FAILED: " + str(exc)[:1000]
+                    result["capture_error"] = "CAPTURE_PERSISTENCE_FAILED: " + safe_text(str(exc))[:1000]
             return result
 
     def run(self, command: LocalCommand, *, before_dispatch: Callable[[], None] | None = None,
-            observation=None, cancellation_reason=None) -> dict[str, Any]:
+            observation=None, cancellation_reason=None, credential_provider=None) -> dict[str, Any]:
+        # Resource preparation and native capability probes spend this same
+        # command budget. Legacy commands keep their existing timeout meaning.
+        deadline = time.monotonic() + command.timeout_seconds if command.network is not None else None
+
+        def remaining(maximum):
+            return maximum if deadline is None else max(0, min(maximum, deadline - time.monotonic()))
+
+        def budget_exhausted():
+            return self._result({"exit_code": None, "timed_out": True, "stdout": "", "stderr": "",
+                                 "output_truncated": False, "process_started": False},
+                                "RESOURCE_COMMAND_TIMEOUT_BEFORE_DISPATCH", workload_started=False)
+
         if os.name != "posix":
             raise LocalProcessError("this receiver currently supports POSIX process groups only")
         # Revalidate paths at dispatch, even when preparation occurred earlier.
         prepared = LocalCommand.prepare(argv=command.argv, cwd=command.cwd,
                                         read_roots=command.read_roots, write_roots=command.write_roots,
-                                        timeout_seconds=command.timeout_seconds)
+                                        timeout_seconds=command.timeout_seconds,
+                                        environment=dict(command.environment), network=command.network)
         if prepared != command:
             raise LocalProcessError("local command paths changed since preparation")
-        help_result = self._capture([str(self.executable), "sandbox", "--help"], command.cwd, 15,
+        help_timeout = remaining(15)
+        if help_timeout <= 0:
+            return budget_exhausted()
+        help_result = self._capture([str(self.executable), "sandbox", "--help"], command.cwd, help_timeout,
                                     output_limit=65536)
         help_text = help_result["stdout"] + help_result["stderr"]
         if (help_result["exit_code"] != 0 or help_result["timed_out"]
@@ -280,19 +338,63 @@ class CodexSandboxRunner:
         name = "foundry_" + uuid4().hex
         prefix = [str(self.executable), "sandbox", "--permission-profile", name,
                   "--include-managed-config", "-c", "permissions." + name + "=" +
-                  _toml_inline(command.permission_profile()), "--cd", str(command.cwd), "--"]
+                  _toml_inline(command.permission_profile())]
+        local_tcp = command.network is not None and command.network.get("tcp") == "LOOPBACK"
+        proxied = command.network is not None and (command.network["mode"] == "REMOTE_SERVICE" or local_tcp)
+        if proxied:
+            prefix += ["-c", "features.network_proxy=true"]
+        if command.network is not None and "unix_sockets" in command.network:
+            if "--allow-unix-socket" not in help_text:
+                return self._result(help_result, "SANDBOX_UNIX_SOCKET_INTERFACE_UNAVAILABLE", workload_started=False)
+            for path in command.network["unix_sockets"]:
+                prefix += ["--allow-unix-socket", path]
+        prefix += ["--cd", str(command.cwd), "--"]
         # Check the exact receiver policy before dispatching a side effect. This
         # is capability evidence only; the workload's exit status is separate.
-        probe = self._capture(prefix + ["/usr/bin/true"], command.cwd, 15)
-        if probe["exit_code"] != 0 or probe["timed_out"]:
-            return self._result(probe, "SANDBOX_UNAVAILABLE", workload_started=False)
+        markers = ["CODEX_NETWORK_PROXY_ACTIVE"] if proxied else [None]
+        if local_tcp:
+            markers.append("CODEX_NETWORK_ALLOW_LOCAL_BINDING")
+        # macOS printenv reads one name per invocation. Probe no other env data.
+        for marker in markers:
+            probe_command = ["/usr/bin/printenv", marker] if marker else ["/usr/bin/true"]
+            probe_timeout = remaining(15)
+            if probe_timeout <= 0:
+                return budget_exhausted()
+            probe = self._capture(prefix + probe_command, command.cwd, probe_timeout)
+            if (probe["exit_code"] != 0 or probe["timed_out"]
+                    or command.network is not None and probe.get("capture_error")):
+                return self._result(probe, "SANDBOX_UNAVAILABLE", workload_started=False)
+            if marker and probe["stdout"].strip() != "1":
+                reason = "SANDBOX_LOCAL_TCP_NOT_ACTIVE" if local_tcp and marker == markers[-1] else "SANDBOX_PROXY_NOT_ACTIVE"
+                return self._result(probe, reason, workload_started=False)
+        secret_environment = {}
+        redactor = None
+        if credential_provider is not None:
+            try:
+                secret_environment, redactor, observation = credential_provider(observation)
+            except ValueError:
+                return self._result({"exit_code": None, "timed_out": False, "stdout": "", "stderr": "",
+                                     "output_truncated": False, "process_started": False,
+                                     "automatic_retry_allowed": False,
+                                     "failure_domain": "VERIFIER_INFRASTRUCTURE_OR_UNCLASSIFIED"},
+                                    "VERIFICATION_CREDENTIAL_UNAVAILABLE", workload_started=False)
         if before_dispatch is not None:
             before_dispatch()
         hooks = ({"on_started": observation.started, "stream_sink": observation.write,
                   "on_capture": observation.captured} if observation is not None else {})
         if cancellation_reason is not None:
             hooks["cancellation_reason"] = cancellation_reason
-        completed = self._capture(prefix + list(command.argv), command.cwd, command.timeout_seconds, **hooks)
+        if command.environment:
+            hooks["environment"] = dict(command.environment)
+        if secret_environment:
+            hooks["environment"] = {**dict(command.environment), **secret_environment}
+            hooks["redactor"] = redactor
+        if command.network is not None:
+            hooks["network_policy"] = effective_network_policy(command.network)
+        workload_timeout = remaining(command.timeout_seconds)
+        if workload_timeout <= 0:
+            return budget_exhausted()
+        completed = self._capture(prefix + list(command.argv), command.cwd, workload_timeout, **hooks)
         return classify_local_capture(completed)
 
     @staticmethod
@@ -303,7 +405,9 @@ class CodexSandboxRunner:
                 or result.get("cancellation_reason")) and workload_started is not False
                 else "PASS" if reason == "LOCAL_PROCESS_EXIT_ZERO" else "VALIDATION_FAILED",
                 "reason_code": reason, "workload_started": workload_started,
-                "receiver": "CODEX_SANDBOX_PERMISSION_PROFILE", "network": "DENY"}
+                "receiver": "CODEX_SANDBOX_PERMISSION_PROFILE",
+                "network": result.get("effective_network_policy", {}).get("mode", "NONE")
+                if result.get("effective_network_policy", {}).get("mode", "NONE") != "NONE" else "DENY"}
 
 
 def classify_local_capture(capture):

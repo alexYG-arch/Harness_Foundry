@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .build_authoring import read_build_plan_proposal, record_build_plan_proposal
 from .build_plan import compile_build_plan, validate_compiled_build_plan
+from .build_repair import request_build_repair
 from .build_review import validate_build_review, validate_review_sources, review_summary
 from .build_runtime import (
     BuildController, _utc, approve_build_authorization, prepare_build_authorization,
@@ -28,6 +29,7 @@ MUTATIONS = {
     "approve-build-authorization": {"program_id", "prepared_event_id", "decision"},
     "revoke-build-authorization": {"program_id", "prepared_event_id", "decision", "reason"},
     "resolve-build-attempt": {"program_id", "prepared_event_id", "attempt_id", "decision", "reason"},
+    "request-build-repair": {"program_id", "prepared_event_id", "targets", "finding"},
 }
 
 
@@ -91,6 +93,7 @@ def _scope_readback(event, events):
             "requirement_ir": proposal["payload"]["requirement_ir"], "plan": proposal["payload"]["plan"],
             "scope": payload["scope"], "source_binding": _source_summary(source),
             "verification_files": sorted(payload["verifier_files"]), "state": state,
+            **({"verifier_source": payload["verifier_source"]} if "verifier_source" in payload else {}),
             "coding_instruction_preflight": payload.get("coding_instruction_preflight"),
             "acceptance_contracts": payload.get("acceptance_contracts"),
             "budget": {"attempts_consumed": len(attempts),
@@ -98,7 +101,8 @@ def _scope_readback(event, events):
                        "task_attempts_consumed": task_usage,
                        "task_attempts_remaining": {key: max(0, payload["scope"]["max_task_attempts"] - count)
                                                    for key, count in task_usage.items()}, "reset": False},
-            "directory_creation": "ONLY_DURING_APPROVED_ADVANCE",
+            "directory_creation": ("CHECKER_SNAPSHOT_DURING_PREPARE_RESOURCES_DURING_APPROVED_ADVANCE"
+                                   if "verifier_source" in payload else "ONLY_DURING_APPROVED_ADVANCE"),
             "freshness_rechecked_at_dispatch": True, "execution_started_by_readback": False}
 
 
@@ -110,21 +114,46 @@ def read_build(control_db, program_id):
     events = store.list_events(program_id)
     latest_proposal = next(row for row in events if row["event_id"] == proposal["proposal_binding"]["proposal_event_id"])
     attempts = {}
+    implementation_plans = {}
     for event in events:
         payload = event["payload"]
         if event["event_type"] == "BUILD_ATTEMPT_STARTED":
-            attempts[payload["attempt_id"]] = {**payload, "status": "IN_FLIGHT"}
+            attempts[payload["attempt_id"]] = {**payload, "status": "IN_FLIGHT", "implementation_commands": [], "resource_commands": []}
+            implementation_plans[payload["attempt_id"]] = set()
         elif event["event_type"] in {"BUILD_ATTEMPT_FINISHED", "BUILD_ATTEMPT_RECOVERED", "BUILD_ATTEMPT_RESOLVED"}:
             attempts[payload["attempt_id"]].update(payload)
         elif event["event_type"] in {"BUILD_COMMAND_PLANNED", "BUILD_COMMAND_STARTED", "BUILD_COMMAND_OBSERVED"}:
             attempts[payload["attempt_id"]]["last_command"] = {
                 "event_id": event["event_id"], "event_type": event["event_type"], **payload}
+            if event["event_type"] == "BUILD_COMMAND_OBSERVED" and "resource_binding" in payload:
+                attempts[payload["attempt_id"]]["resource_commands"].append({
+                    "event_id": event["event_id"], "command_id": payload["command_id"],
+                    "case_id": payload["case_id"], "binding": payload["resource_binding"],
+                    "observation_root": payload["observation_root"],
+                    "effective_network_policy": payload["result"].get("effective_network_policy"),
+                    "reports": payload["result"].get("resource_reports", []),
+                    "cleanup": payload["result"].get("resource_cleanup")})
+            if payload["phase"] == "IMPLEMENTATION":
+                if event["event_type"] == "BUILD_COMMAND_PLANNED":
+                    implementation_plans[payload["attempt_id"]].add(payload["command_id"])
+                elif event["event_type"] == "BUILD_COMMAND_OBSERVED":
+                    attempts[payload["attempt_id"]]["implementation_commands"].append({
+                        "event_id": event["event_id"], "command_id": payload["command_id"],
+                        "phase": payload["phase"], "executor": payload["executor"],
+                        "final_message": payload.get("result", {}).get("final_message"),
+                        "observation_root": payload.get("observation_root"),
+                    })
         elif event["event_type"] == "BUILD_ACCEPTANCE_INVALIDATED":
             for attempt in attempts.values():
                 if (attempt["prepared_event_id"] == payload["prepared_event_id"]
                         and attempt["workpack_id"] in payload["workpack_ids"] and attempt["status"] == "ACCEPTED"):
                     attempt.update(status="INVALIDATED", invalidation=payload)
     for row in attempts.values():
+        observed = {command["command_id"] for command in row["implementation_commands"]}
+        missing = implementation_plans[row["attempt_id"]] - observed
+        row["implementation_observation_status"] = (
+            "MISSING_OBSERVATION" if missing else "OBSERVED" if observed else "NO_IMPLEMENTATION_COMMAND")
+        row["missing_implementation_command_ids"] = sorted(missing)
         action = {"UNKNOWN_SIDE_EFFECT": "RECONCILE_EFFECTS", "IN_FLIGHT": "RECONCILE_COMMAND_OBSERVATIONS",
                   "BLOCKED": "REPAIR_RUNTIME_ENVIRONMENT", "REJECTED": "REPAIR_WITHIN_BUDGET",
                   "ACCEPTED": "NO_REPLAY", "RETRY_ALLOWED": "ADVANCE_WITH_CURRENT_SCOPE_AND_BUDGET",
@@ -150,7 +179,11 @@ def read_build(control_db, program_id):
             "document_review": review_summary(latest_proposal["payload"].get("document_review")),
             "sources": [_source_summary(row) for row in events if row["event_type"] == "BUILD_SOURCES_CAPTURED"],
             "authorizations": [_scope_readback(row, events) for row in events if row["event_type"] == "BUILD_AUTHORIZATION_PREPARED"],
-            "attempts": list(attempts.values()), "writes_performed": False,
+            "attempts": list(attempts.values()),
+            "repair_requests": [{"event_id": row["event_id"], **row["payload"]} for row in events
+                                if row["event_type"] == "BUILD_ACCEPTANCE_INVALIDATED"
+                                and row["payload"].get("reason") == "CODEX_CONFIRMED_REPAIR_REQUEST"],
+            "writes_performed": False,
             "harness_e2e_verified": False}
 
 
@@ -163,9 +196,25 @@ def apply_build_request(command, request, control_db):
     """
     _require(isinstance(request, dict), "build request must be an object")
     if command == "advance-build":
-        _require(set(request) == {"program_id", "prepared_event_id", "expected_revision"}, "invalid advance-build fields")
+        required = {"program_id", "prepared_event_id", "expected_revision"}
+        _require(required <= set(request) <= required | {"advance_mode", "codex_handoff"},
+                 "invalid advance-build fields")
+        mode = request.get("advance_mode", "CONTINUOUS")
+        _require(mode in ("CONTINUOUS", "ONE_ATTEMPT"), "invalid advance_mode")
+        if "codex_handoff" in request:
+            handoff = request["codex_handoff"]
+            _require(mode == "ONE_ATTEMPT", "codex_handoff requires ONE_ATTEMPT")
+            _require(isinstance(handoff, dict) and set(handoff) == {"workpack_id", "basis_attempt_ids", "summary"},
+                     "invalid codex_handoff fields")
+            _require(all(isinstance(handoff[key], str) and handoff[key].strip()
+                         for key in ("workpack_id", "summary")), "codex_handoff needs workpack_id and summary")
+            basis = handoff["basis_attempt_ids"]
+            _require(isinstance(basis, list) and all(isinstance(item, str) and item.strip() for item in basis)
+                     and len(set(basis)) == len(basis), "invalid codex_handoff basis_attempt_ids")
     else:
-        _require(command in MUTATIONS and set(request) == MUTATIONS[command] | {"expected_revision", "idempotency_key"},
+        required = MUTATIONS.get(command, set()) | {"expected_revision", "idempotency_key"}
+        optional = {"continuation_of"} if command == "request-build-repair" else set()
+        _require(command in MUTATIONS and required <= set(request) <= required | optional,
                  "build request has missing or unsupported fields")
         _require(isinstance(request["idempotency_key"], str) and request["idempotency_key"].strip(), "idempotency_key is required")
     _require(type(request["expected_revision"]) is int and request["expected_revision"] >= 0,
@@ -198,7 +247,9 @@ def apply_build_request(command, request, control_db):
             raise RevisionConflictError("re-read current build progress before dispatch")
     store = ControlEventStore(database, storage_format="REVISION_V1")
     if command == "advance-build":
-        return {**BuildController(store, program).advance(request["prepared_event_id"]),
+        return {**BuildController(store, program).advance(
+                    request["prepared_event_id"], advance_mode=request.get("advance_mode", "CONTINUOUS"),
+                    codex_handoff=request.get("codex_handoff")),
                 "program_id": program, "stream_revision": len(store.list_events(program)), "harness_e2e_verified": False}
     kwargs = {"expected_revision": request["expected_revision"], "idempotency_key": request["idempotency_key"],
               "created_at": datetime.now(timezone.utc).isoformat()}
@@ -215,6 +266,14 @@ def apply_build_request(command, request, control_db):
     elif command == "approve-build-authorization":
         event = approve_build_authorization(store, program, request["prepared_event_id"], human_message_ref=human_ref, **kwargs)
         status = "BUILD_APPROVED_EXECUTION_NOT_STARTED"
+    elif command == "request-build-repair":
+        event = request_build_repair(BuildController(store, program), request)
+        return {"status": "BUILD_REPAIR_REQUESTED", "program_id": program, "event_id": event["event_id"],
+                "stream_revision": event["stream_revision"], "prepared_event_id": event["payload"]["prepared_event_id"],
+                "workpack_ids": event["payload"]["workpack_ids"], "targets": event["payload"]["targets"],
+                "finding": event["payload"]["finding"], "budget_reset": False, "files_deleted": False,
+                "control_state_write": True, "target_write": False, "execution_started": False,
+                "harness_e2e_verified": False}
     elif command == "resolve-build-attempt":
         event = resolve_build_attempt(store, program, request["prepared_event_id"], request["attempt_id"],
                                       reason=request["reason"], human_message_ref=human_ref, **kwargs)

@@ -1,5 +1,9 @@
 # 通用 Build 公开宿主入口
 
+2026-10-14 源码增量：增加全绿后的 `request-build-repair` 与可选 `ONE_ATTEMPT` 交回、
+实施报告投影和 `codex_handoff`。默认连续推进不变；这些控制能力不替代外层 Codex
+核实问题、判断进展和开发复验，也不证明真实模型已遵守运行约束。
+
 2026-10-10：无需新 CLI 或审批种类。现有 compile/record 接受 Plan 1.1 增量，advance
 消费同一批准；read-build 增加 phase、预算和只读观察。见[契约](FOUNDRY_UPGRADE_2026_10_10.md)。
 
@@ -43,7 +47,8 @@ Review，再使用本入口；原始材料保留追溯角色。后台检查全�
 | `approve-build-authorization` | 同上 | `program_id`, `prepared_event_id`, `decision` |
 | `revoke-build-authorization` | 同上 | `program_id`, `prepared_event_id`, `decision`, `reason` |
 | `resolve-build-attempt` | 同上 | `program_id`, `prepared_event_id`, `attempt_id`, `decision`, `reason` |
-| `advance-build` | 同上 | `program_id`, `prepared_event_id`, `expected_revision` |
+| `request-build-repair` | 同上 | `program_id`, `prepared_event_id`, `targets`, `finding`；可选 `continuation_of` |
+| `advance-build` | 同上 | `program_id`, `prepared_event_id`, `expected_revision`；可选 `advance_mode`, `codex_handoff` |
 | `read-build` | `--control-db DB --program-id ID` | 无 request 文件 |
 | `read-history` | `--database DB --program-id ID` | 只读旧 authoring 数据库，无 request 文件 |
 
@@ -59,6 +64,12 @@ Review，再使用本入口；原始材料保留追溯角色。后台检查全�
 
 `read-build` 不创建缺失控制库、不写 SQLite。它给出完整 Requirement、编译 Plan、
 来源信息、文档确认摘要、各准备范围及状态、任务进度、最后命令的原始结果与下一动作；来源正文不在 Readback 中重复打印。
+每个 attempt 另有 `implementation_commands`，从已观测实施事件返回 `event_id`、`command_id`、
+`phase`、`executor`、`final_message`、`observation_root`，避免验收命令覆盖 `last_command` 后丢失
+实施报告。`implementation_observation_status` 为 OBSERVED / MISSING_OBSERVATION /
+NO_IMPLEMENTATION_COMMAND，并列出 `missing_implementation_command_ids`；顶层
+`repair_requests` 保留返修事件依据。缺观测明确保留缺口，
+`final_message` 不代表完整交接。只读取回不触发推进或命令恢复；见[报告恢复与计数](GENERIC_BUILD_RUNTIME.md#codex-报告恢复与计数交接)。
 Review 摘要标明只读历史未重新检查文件，不将历史确认当成当前可执行判定。
 在途/未知尝试还提供宿主附件诊断；PID 存在不证明仍是原进程，PID 消失不证明没有副作用。
 `prepare` 的 Readback 绑定该次完整 Requirement/Plan、明确源文件读取、验收文件、
@@ -72,6 +83,99 @@ Review 摘要标明只读历史未重新检查文件，不将历史确认当成�
 Requirement/Plan 见 [Plan 合同](GENERIC_BUILD_PLAN.md)，manifest 见
 [来源合同](GENERIC_SOURCE_INTAKE.md)。控制库必须使用 `REVISION_V1`；旧
 `LEGACY_HASH_V1` 数据库在只读探测时拒绝，不自动迁移或继承旧授权。
+
+## 已接受产物的额外缺陷返修
+
+外层 Codex 先核实当前版本确实违反原要求，再调用 `request-build-repair`。精确请求形状为：
+
+```json
+{
+  "program_id": "current-program-id",
+  "prepared_event_id": "current-prepared-event-id",
+  "expected_revision": 12,
+  "idempotency_key": "repair-current-finding-1",
+  "targets": [{"artifact_id": "producer-output-id", "accepted_attempt_id": "current-accepted-attempt-id"}],
+  "finding": {
+    "requirement_refs": ["original-requirement-reference"],
+    "reason": "当前版本的可达行为与原要求的具体差异",
+    "evidence_refs": ["existing-counterexample-or-report-reference"],
+    "repair_goal": "最小修复目标及针对性复验意图"
+  }
+}
+```
+
+`requirement_refs`、`evidence_refs` 是非空引用数组，`reason`、`repair_goal` 是非空文本；
+`targets` 绑定当前接受的 artifact/attempt。只有同一链续修才另加 `continuation_of`，值为
+原 G1 返修事件 ID。请求不接受新写域、检查器、执行器、预算或调用者自选依赖闭包。
+
+首次请求要求该范围全部任务已接受；责任生产者必须为 CODEX。宿主检查有效批准、
+原来源/检查器绑定、版本与字节身份、未决运行和完整重建预算，再原子追加
+`BUILD_ACCEPTANCE_INVALIDATED`，原因是 `CODEX_CONFIRMED_REPAIR_REQUEST`。
+返回 `BUILD_REPAIR_REQUESTED` 仅说明返修已登记：未执行产品命令、不新增 attempt，
+`budget_reset=false`、`files_deleted=false`。原 PASS 保留，受影响当前投影为 INVALIDATED；
+原生产者和依赖任务随后按原顺序实施并独立复验。原检查没有覆盖的额外缺陷还须有针对性开发复验。
+
+同一 Program、幂等 key 和完整原请求（包括原 expected_revision）精确回放返回原事件，
+即使已修复或批准后来到期也不再次失效。同 key 不同内容冲突；首次请求校验/CAS 失败不先失效。
+
+续修绑定同一 Program/prepared 的原返修事件及当前接受版本，可在后继待重建时再次修复
+尚未修好的生产者，不必先推进依赖缺陷的后继。完整待重建集合包含原影响链中尚未重建的
+原生产者、当前最新失败 attempt 已被同一 Program/prepared 原生路由登记处理的消费者，
+以及最新 attempt 已由原生恢复实际结算为 `NOT_DISPATCHED` 且仍关联本链既有失效事件的任务。
+旧失败处理记录不覆盖新失败，未处理失败仍走原流程；缺少观测或未知副作用不推定未派发。
+预算按本次失效集合与完整待重建集合的并集计入，同一任务不重复，未派发已消耗的 attempt
+和实际时间不返还；旧版本已覆盖时不承诺恢复旧字节。
+
+当前可写未接受候选、原 Plan 已声明的合法版本替换、原生独立断言修复保留原入口。
+不可先改已接受字节制造漂移、伪造失败或改 SQLite；`resolve-build-attempt` 不用于全绿返修。
+固定 LOCAL 责任生成器没有消费修复目标的能力时明确缺口，依赖 LOCAL 任务仍可重建。
+权限、合同、预算或可用版本不足时走原变更流程，不靠新 Program 清零或继承旧批准。
+
+## 可选单次交回与子任务交接
+
+`advance-build` 省略 `advance_mode` 或设为 `CONTINUOUS`，保持原连续行为。
+外层需在修复链每次尝试后接管判断时显式用 `ONE_ATTEMPT`：
+
+```json
+{
+  "program_id": "current-program-id",
+  "prepared_event_id": "current-prepared-event-id",
+  "expected_revision": 13,
+  "advance_mode": "ONE_ATTEMPT",
+  "codex_handoff": {
+    "workpack_id": "next-codex-workpack-id",
+    "basis_attempt_ids": ["relevant-prior-attempt-id"],
+    "summary": "已核实问题与证据；实际累计和待结算轮次；采用的原额度及剩余量；下一方法"
+  }
+}
+```
+
+`codex_handoff` 可省略，只可用于 ONE_ATTEMPT；只接受示例中的三个字段，摘要和 workpack ID
+为非空文本，`basis_attempt_ids` 为不重复字符串数组（可以为空）。引用 attempt 属于当前
+Program/prepared，接收者必须为本次实际选中的 CODEX 任务。来源可以是失败消费者，接收者
+可以是原生路由选中的生产者；不要求同 workpack。归属不匹配不派发新 attempt，返回实际状态
+及原因；此前依法记录的原生失效仍保留。摘要存于该 `BUILD_ATTEMPT_STARTED`，只用于该次
+CODEX 实施 prompt，不复制到检查器 binding，不改变任务、权限或验收。LOCAL 不接收摘要。
+
+一次调用只处理一个新 attempt，或结算/原生挂起一个已开始 attempt；恢复可以补同一 attempt
+尚未派发的检查，不重跑已完成实施，不再开新 attempt。正在恢复时新摘要不覆盖旧上下文，
+返回明确本次未用于新实施；先完成恢复取回结果，再为下一 attempt 交接，不隐式排队。
+模式不跨调用继承，每次继续仍核对 revision、撤销/到期、绑定、版本和预算。
+
+正常交回为 `BUILD_CONTROL_RETURNED`、`control_returned=true`，附原生 `attempt_status`、
+attempt/workpack、revision 和预算，CLI 退出 0 只表示这次步进成功，REJECTED 仍是业务拒绝。
+交回发生在当前 attempt 之后、下一轮原生修复路由或派发之前；原 HELD/STOPPED 保留非零语义。
+最后 attempt 交回也不声明 Plan 完成；下一次 advance 只有经过原完成分支才返回
+`PLAN_CHECKS_ACCEPTED`，如果发生漂移等变化仍按原流程处理。始终 `harness_e2e_verified=false`。
+
+外层取回证据后，只有没有有效修改且没有新的诊断进展，才把实际开展过的修复判为无效链；
+新假设被排除或获得新复现条件可继续，空 diff 本身不意味着空转。只有原生恢复实际结算为
+`NOT_DISPATCHED` 才按未派发处理，不计产品失败、不判方法无效；已经使用的 attempt 和时间保留。
+缺少观测或未知副作用不推断为未派发。外层按原权限、预算及中断原因决定下一次是否派发。
+
+外层不再主动派发依赖已知未解决问题的后续工作；正常核实、修复和无关授权工作可通过已有
+适用入口继续。ONE_ATTEMPT 不新增任意任务选择器，不撤销批准、不停止在跑命令，也不控制
+其他调用者或连续模式。提示或报告不是机器停止协议，不能制造假合同冲突求停。
 
 ## 可选的人读状态摘要
 
@@ -93,14 +197,14 @@ DB 替换为已有控制库的绝对路径，ID 替换为真实 Program ID。此
 
 ## Scope
 
-scope 必须完整列出以下字段，不接受额外字段：
+scope 必须完整列出以下基础字段；Plan 1.2 可另外提供下述 `verification_resources`，其他字段仍不接受：
 
 - `workspace_root`：绝对目标目录，可尚不存在；不使用 Foundry 自身源码目录。
 - `task_write_roots`：每个 Workpack 的规范相对目录数组，覆盖其声明输出。
   可尚不存在，只有批准后的 `advance-build` 才创建，绝不覆盖既有文件。
 - `source_read_roots`：额外只读运行依赖目录或精确文件。已绑定 manifest 中的完整源文件、
   目标工作区及声明程序还会作为明确只读输入，须一起展示给用户。
-- `verification_root`：已存在、位于实施工作区外的独立验证代码目录。
+- `verification_root`：已存在的检查器源码目录。旧 scope 要求位于实施区外；资源模式准备时复制声明文件到宿主保护区，源码可在同仓库维护，Readback 展示源码与运行副本两个位置。
 - `executables`：逻辑程序名到绝对程序文件的映射；LOCAL 与检查的 argv 首项引用它。
 - `codex_executable`：原生 Codex receiver 的绝对程序路径。
 - `model`, `allow_model_service`：CODEX 任务必须显式绑定模型并允许模型服务；
@@ -136,6 +240,185 @@ CODEX 范围准备结果包含 `coding_instruction_preflight`：列出当前默�
 实际导入的扩展/动态库、零写检查以及场景写域；先确认正常样例能运行、错误样例仍被拒绝。
 这不是授权前运行真实任务或模型；未获准的工具/依赖不能自动补入范围。缺依赖属于明确的
 准备缺口，展示依赖差异后才能取得相应范围批准。普通环境单测和沙箱 true 探测不替代此项。
+
+### 可选验收资源（Plan 1.2）
+
+2026-10-14 工作区源码已实现，未发布；源码、原生及真实业务验收证据分别记录，不能将此更新当作固定发行包已升级。旧 Plan 1.0/1.1 和没有资源引用的检查保持原有离线、零写及退出码语义；不自动迁移历史批准。
+
+完整接入示例位于当前源码与通用包内的 `examples/resource-check/README.md`：含合成产品、受保护 unittest 检查器、Plan/scope 模板及离线/本机 HTTP 两种用法。模板不包含人工批准，不增加框架安装要求；按本页既有 review/prepare/approve/advance/read 流程接入。历史诊断包不提供这套新示例。
+
+将 Plan 的 `schema_version` 设为 `1.2`，在需要资源的 verification 条目增加
+`"resource_profile_ref": "files"`。在原完整 scope 中增加：
+
+```json
+{
+  "verification_resources": {
+    "schema_version": "1.0",
+    "root": "/absolute/project-verification-runs",
+    "checker_files": ["helper.py"],
+    "profiles": {
+      "files": {
+        "writable_areas": ["scratch", "report-staging"],
+        "network": {"mode": "NONE"},
+        "services": [],
+        "result_protocol": "STRUCTURED_V1",
+        "required_checks": ["transaction", "migration"],
+        "report_files": ["summary.json"],
+        "retention": {"success": "REPORTS_ONLY", "failure_days": 7}
+      }
+    }
+  }
+}
+```
+
+这是 scope 片段，须替换实际路径与检查义务。`checker_files` 可省略；存在时列出影响判定的辅助文件，相对原 `verification_root`。准备阶段将它们及全部 `verifier://` 文件复制并绑定到宿主 `.verifiers` 目录。`checker_files` 只声明复制；检查器须通过绝对 `verifier://` 参数、`FOUNDRY_VERIFIER_ROOT` 或受保护入口的 `__file__` 实际读取判定依赖，修改产品侧源文件才不会改变本次判定。替换判定仍走原合同/范围流程。文件只读与独立进程提供普通功能验收保证，共享解释器导入被测代码不构成对抗隔离。
+
+默认运行 cwd 仍为产品工作区，验收时产品只读。宿主为每 command 分配新的短名称目录，默认只有其 `scratch` 和 `report-staging` 叶子可写；需要项目内生成目录时可选用下述 `product_copy`。实际身份在 command 绑定中保留。资源根与产品、检查器、控制记录及声明依赖分开，不放在共享 `/tmp`。argv 独立元素可用 `resource://scratch/test.sqlite3` 或 `resource://report-staging/summary.json`；不插值 shell。实施命令尚不消费该引用，其原有合法可写区保持不变。
+
+默认环境补入 `TMPDIR`、`TMP`、`TEMP`、`XDG_CACHE_HOME` 和 `FOUNDRY_SCRATCH_DIR`、`FOUNDRY_REPORT_DIR`、`FOUNDRY_VERIFIER_ROOT`、`FOUNDRY_PROGRAM_ID`、`FOUNDRY_PREPARED_EVENT_ID`、`FOUNDRY_ATTEMPT_ID`、`FOUNDRY_CASE_ID`、`FOUNDRY_COMMAND_ID`；子进程继承这些路径，不继承整套宿主环境或重定向 Codex HOME。仅声明下述 credentials 的检查另获对应凭据变量。SQLite 在 scratch 中正常创建库、journal/WAL/SHM；活动真实数据库必须先由其所有者生成一致性输入。
+
+`FOUNDRY_VERIFIER_ROOT` 由宿主取自 `prepared.scope.verification_root`，指向受保护副本，并随 `resource_binding` 持久化。例如 argv 为 `['python', '-B', 'verifier://check.py', 'verifier://fixtures/expected.json']` 时，检查器中的判定与受检输入可以明确分开：
+
+```python
+expected = json.loads(Path(sys.argv[1]).read_text())  # 副本内的绝对判定参数
+actual = json.loads(Path("outputs/result.json").read_text())  # 产品 cwd 内的受检输出
+```
+
+不使用参数时，把 `fixtures/expected.json` 列入 `checker_files` 并从 `Path(os.environ["FOUNDRY_VERIFIER_ROOT"], "fixtures/expected.json")` 读取；辅助模块同样按受保护位置加载。上述读取片段需在检查器中导入 json、os、sys 与 pathlib.Path，再按下述协议输出实际比较结果。裸 `Path("fixtures/expected.json")` 仍从产品 cwd 读取，当前接口不会为任意语言透明重映射，也不禁止产品 cwd 的正常输入读取。旧无资源检查不注入新环境。
+
+必须在项目内生成缓存或构建文件时，可在该 verification 引用的 profile 增加以下可选片段；其他 profile 不需要改变：
+
+```json
+{
+  "product_copy": {
+    "files": ["src/tool.py", "fixtures/input.txt"],
+    "writable_paths": [".cache", "build"]
+  }
+}
+```
+
+`files` 显式列出相对产品工作区的普通输入文件及所需依赖，包括当前未提交文件；`writable_paths` 列出副本内的生成目录。两份清单均非空、无重复且为规范相对路径，输入与生成目录不得重叠。宿主在派发前复制当时文件到本 command 的 `product`，cwd 和仅此模式提供的 `FOUNDRY_PRODUCT_ROOT` 指向该副本；副本根和输入只读，声明生成目录可写，正式产品只读。不是从 Git HEAD 导出，也不递归复制目录或跟随符号链接。此次没有 `resource://product` 引用。
+
+输入缺失、不可读等复制准备失败会记录已分配资源及 `workload_started=false` 的设施失败，保留部分副本和实际已用 attempt；验收进程不派发、不触发产品返修。恢复已记录失败不重新复制或新增目录；尚未持久化失败记录的中断仍按既有未知窗口处理。
+
+检查器仍经 `verifier://check.py` 的保护区绝对路径运行，判定依赖仍从 `FOUNDRY_VERIFIER_ROOT` 等保护路径读取。工具使用相对路径或 `FOUNDRY_PRODUCT_ROOT` 才会实际读取副本；工具内部绝对路径、argv 中的绝对产品路径和任意 import 搜索不会自动改写，原产品仍可读。检查器若要执行复制的 Python 工具，可使用：
+
+```python
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+product = Path(os.environ["FOUNDRY_PRODUCT_ROOT"])
+subprocess.run([sys.executable, "src/tool.py", "fixtures/input.txt"], cwd=product, check=True)
+actual = (product / "build/result.txt").read_text()
+```
+
+该片段假定工具按自己的接口写入 `build/result.txt`；接入时列全所需输入，随后由受保护检查器比较独立预期并输出下述 STRUCTURED_V1 报告。片段自身不替代业务断言，生成文件不会自动作为正式附件归档。
+
+`resource_binding.product_copy` 保存副本/来源根、文件身份清单、生成目录和实际写区；资源结果的 `product_copy_validation.status` 为 `UNCHANGED`、`CHANGED` 或 `UNAVAILABLE`。输入改变或不可核对时不依据 PASS/ASSERTION 接受或触发产品返修，原超时和未知效果保留。正常接受或产品拒绝前、恢复继续前，还按原 command 中的已声明复制清单核对当前源字节和执行位，覆盖非 artifact 的已声明依赖；不扫描未声明文件。源版本变化或不可读时沿用漂移中止，保留旧报告和副本结论；恢复原身份可继续原 attempt。正式报告和完整结果耐久后清理成功副本，失败保留；恢复沿用原 command 和已存副本核对结论，当前源版本核对不依赖副本仍存在，已清理后不重复制、不重派或再计同次 attempt。默认 cwd、网络、凭据和预算不变。此切片不提供整副本宽写、目录递归/符号链接输入，也不以副本替代真实安装位置验收。
+
+替换 profile.network 可选择：
+
+| 配置 | 已实现的连接范围 |
+|---|---|
+| `{"mode":"NONE"}` | 离线；临时文件和 SQLite 正常可写，无模型或外网探测前置 |
+| `{"mode":"LOCAL_SERVICE","unix_sockets":["resource://scratch/service.sock"]}` | 该命令拥有的 Unix socket 服务；TCP/外网关闭。长路径时包装器进入 scratch 后使用相对 socket 名，业务读取仍显式使用产品路径 |
+| `{"mode":"LOCAL_SERVICE","tcp":"LOOPBACK"}` | 原生授权允许 127.0.0.1、localhost、::1 的全部 TCP/UDP 端口，不是 TCP-only；外部连接除原生 53 端口例外外均拒绝；支持普通 HTTP/API 服务，不提供指定端口或本次服务隔离 |
+| `{"mode":"REMOTE_SERVICE","allowed_hosts":["api.example.com"]}` | 显式启动并探测原生代理，通过支持代理的 HTTP(S) 客户端连接允许主机；拒绝其他主机和直连，不承诺端口、方法或业务操作过滤 |
+
+`services: []` 表示本次支持由受保护检查器在一个有限命令内启动、等待就绪、调用并关闭服务；未实现跨命令后台服务管理。命令超时/撤销清理自身进程组。TCP 精确端口/服务隔离、秘密管理器与代理代持、请求级权限代理和远端写入去重/核对适配尚未实现；已有服务自身账号权限不由域名许可替代。模型服务授权与验收外联配置独立。
+
+TCP 和 Unix socket 两种配置二选一。TCP 分支固定 loopback 主机范围，启用原生代理及 local binding；派发前分别检查 `CODEX_NETWORK_PROXY_ACTIVE=1` 和 `CODEX_NETWORK_ALLOW_LOCAL_BINDING=1`。实际策略保存 `enforcement: CODEX_NATIVE_LOOPBACK_TCP`、`loopback_protocols: ["TCP", "UDP"]`、`guarantee: LOOPBACK_ALL_PORTS_NOT_SERVICE_ISOLATION`，随 command 恢复。输入 tcp: LOOPBACK 与 enforcement 保留为兼容标识，不是 TCP-only 承诺；新增字段说明既有原生授权，不改变网络 profile 或业务检查义务，也不表示 UDP 业务验收。历史捕获不回填新字段，不因缺少字段重派或增加 attempt。外部连接保留原生 53 端口例外，该例外不检查 DNS 协议内容。该原生绑定能力也允许 `0.0.0.0` / `::`，因此检查器应显式绑定 `127.0.0.1` 或 `::1`，建议用端口 0，从服务取得实际端点并核对本次实例身份。已有指定端口也可使用，占用冲突按启动失败处理。若合同要求只有本次服务或某端口可达，当前 TCP 适配器不满足；可用 Unix socket 或后续独立网络适配。
+
+需要测试凭据时，在该检查引用的 profile 中加入以下可选片段，不写入秘密值：
+
+```json
+{
+  "credentials": {
+    "API_TOKEN": {"ref": "env:FOUNDRY_TEST_API_TOKEN", "purpose": "测试服务认证"}
+  }
+}
+```
+
+alias 使用 `[A-Z][A-Z0-9_]*`，来源仅支持 `env:` 加 `[A-Za-z_][A-Za-z0-9_]*` 环境名，用途须非空。运行宿主用既有方式提供该环境变量，不要求用户在聊天或请求文件中粘贴 token。prepare/readback 只保存引用和用途；仅绑定的 LOCAL VERIFICATION 在通过能力探测、即将运行 workload 时解析，检查器以 `os.environ["FOUNDRY_CREDENTIAL_API_TOKEN"]` 读取。help/probes、CODEX/实施命令和未绑定此 profile 的检查不接收。缺失、空值或 NUL 返回 `workload_started=false` 的设施失败，保留实际预算，不触发产品修复。可与 NONE、本机服务和 REMOTE_SERVICE 配合，既有网络授权不变；env 名称不证明账号属性，purpose 不构成操作级权限限制。
+
+宿主采集 stdout/stderr、预览与异常字符串时过滤已知值。summary 的原始内容仅在内存按合同判定，JSON 字符串/键（包括转义）和普通附件脱敏后归档；完成 capture 的 `credential_reports` 绑定规范判定和脱敏附件 hash/size。恢复仅核对已归档附件，不读 staging、不重新取 env 或重派；完成信封缺失或其中已绑定附件丢失/不一致时保持未知。无凭据命令的采集恢复不变。这一保证不覆盖任意 scratch、脱敏前崩溃现场或主动编码泄露；秘密管理器、代理代持和自动账号权限核实尚未实现，真实外部账号业务调用仍未验收。最新证据见源码工作区的 `docs/FOUNDRY_VERIFICATION_RESOURCES_IMPLEMENTATION_RESULT_2026_10_14.md`（本地记录不随可携带包分发）。协议仍为 2.9、Plan 1.2、资源配置 1.0，不发布。
+
+检查器在 `FOUNDRY_REPORT_DIR/summary.json` 写入以下完整结果（身份值来自环境），成功退出 0：
+
+```json
+{
+  "schema_version": "1.0",
+  "case_id": "actual-case-id",
+  "command_id": "actual-command-id",
+  "status": "CHECKS_PASS",
+  "checks": [{"id":"transaction","status":"PASS"},{"id":"migration","status":"PASS"}],
+  "errors": []
+}
+```
+
+`checks` 只承载已声明的合同义务，须完整且不重复；额外诊断放其他字段。真实业务失败以 `CHECKS_FAILED`、`failure_kind: ASSERTION`、对应 `FAIL` 项并退出 1；设施错误/跳过/零检查/缺报告/身份或退出码矛盾均不能通过，也不要求产品自动返工。`LOCAL_SERVICE` 另需 `services_stopped: true`；`REMOTE_SERVICE` 另需 `external_effects: NONE` 或 `CONFIRMED`，无法核实时为 `UNKNOWN` 并保留未决影响。报告是受保护检查器的观察，不是被测产品自我验收。
+
+宿主仅复制声明的普通报告文件到正式 command 附件，拒绝符号/硬链接及特殊文件。归档临时文件使用正式 reports 外的独立宿主命名空间，完成后原子替换；summary.json.pending 等合法报告名不受限制。先持久化全部附件与结果，再清理成功暂存及选用的产品副本。普通文件清理失败记录告警，不改成产品断言失败；失败运行保留现场。`failure_days` 是保留偏好，当前无自动到期删除器。恢复使用相同 command、绑定和附件，不重派，也不把联网观测改成 DENY。
+
+`read-build --json` 的 `resource_commands` 展示每次资源绑定、实际网络策略、报告与清理结果；`--human` 显示 cwd、资源根和能力粒度。旧案例无需为这些可选能力增加字段或审批。
+
+### 本机 TCP 服务示例
+
+以下是受保护检查器的最小 HTTP 资源用例。profile 选择 `{"mode":"LOCAL_SERVICE","tcp":"LOOPBACK"}`、`services: []`、`required_checks: ["http-response"]` 和 `report_files: ["summary.json"]`；其余字段沿用上例。服务绑定时分配端口，客户端以实际地址连接并用本次 command 身份确认响应，不依赖固定端口或 sleep。接入产品时替换服务和业务断言，保留独立判定依据。
+
+```python
+import http.client
+import json
+import os
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
+
+identity = os.environ["FOUNDRY_COMMAND_ID"]
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = identity.encode()
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+server = HTTPServer(("127.0.0.1", 0), Handler)
+worker = threading.Thread(target=lambda: server.serve_forever(poll_interval=0.05))
+worker.start()
+client = http.client.HTTPConnection(*server.server_address, timeout=2)
+try:
+    client.request("GET", "/")
+    response = client.getresponse()
+    passed = response.status == 200 and response.read().decode() == identity
+finally:
+    client.close()
+    server.shutdown()
+    server.server_close()
+    worker.join(timeout=2)
+
+report = {
+    "schema_version": "1.0",
+    "case_id": os.environ["FOUNDRY_CASE_ID"],
+    "command_id": identity,
+    "status": "CHECKS_PASS" if passed else "CHECKS_FAILED",
+    "checks": [{"id": "http-response", "status": "PASS" if passed else "FAIL"}],
+    "errors": [],
+    "services_stopped": not worker.is_alive(),
+}
+if not passed:
+    report["failure_kind"] = "ASSERTION"
+Path(os.environ["FOUNDRY_REPORT_DIR"], "summary.json").write_text(json.dumps(report))
+raise SystemExit(0 if passed else 1)
+```
+
+请求超时或服务异常会让此示例失败并由 `finally` 关闭服务；没有完整结果不能被当作通过。其他产品服务有独立启动过程时，以有截止时间的就绪谓词替换这里的首个响应检查；同一命令预算仍涵盖启动、检查和关闭。宿主超时/撤销继续清理自己持有的进程组，不新增跨命令服务管理或重试框架。
 
 ### macOS 原生运行的目录适用性
 
@@ -235,5 +518,6 @@ CLI 始终返回 `harness_e2e_verified=false`；真实模型、安装后使用�
 JSONL 从原始字节增量读取，与每流 64 KiB 人读摘要分离。默认单事件上限 8 MiB、
 命令双流总量上限 128 MiB；真实超限/持久化失败保持未知，展示裁剪本身不否定完整终态。
 
-退出码沿用 CLI 错误分类；`advance-build` 未到 `PLAN_CHECKS_ACCEPTED` 返回 6。
+退出码沿用 CLI 错误分类；`advance-build` 的 `PLAN_CHECKS_ACCEPTED`，以及显式步进的
+`BUILD_CONTROL_RETURNED` 返回 0，其余推进状态仍返回 6。后者只表示控制交回，不表示业务接受。
 应阅读 JSON 的 status/reason，不把进程退出 0、编译通过或自报 PASS 当业务验收。

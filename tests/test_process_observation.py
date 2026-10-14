@@ -91,5 +91,43 @@ class ProcessObservationTests(unittest.TestCase):
         self.assertFalse(absent["replay_allowed"])
 
 
+    def test_interrupted_multiple_messages_keep_earlier_evidence_when_last_message_is_short(self):
+        journal = CommandObservation(self.root / "multi-message", "TEST-COMMAND", "CODEX")
+        reports = [
+            "Issue reader-count: confirmed for version v1; repair round r1 failed; cumulative failures 1; evidence test:r1.",
+            "Issue reader-count: repair round r2 failed; cumulative failures 2; evidence test:r2; unresolved.",
+            "Still diagnosing the same defect.",
+        ]
+        data = capture(EVENTS[:2] + [{"type": "item.completed", "item": {
+            "type": "agent_message", "text": report}} for report in reports])
+        try:
+            captured = CodexSandboxRunner("/usr/bin/true")._capture(
+                [sys.executable, "-c", "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read()); sys.stdout.flush(); raise SystemExit(130)"],
+                self.root, 5, stdin_bytes=data, on_started=journal.started,
+                stream_sink=journal.write, on_capture=journal.captured)
+        finally:
+            journal.close()
+        self.assertFalse(captured["output_truncated"])
+        before = {path.name: path.read_bytes() for path in journal.root.iterdir()}
+        for _ in range(2):
+            result = CommandObservation.recover(journal.root, "TEST-COMMAND", "CODEX")
+            self.assertEqual(result["status"], "MODEL_PROCESS_FAILED")
+            self.assertEqual(result["final_message"], reports[-1])
+            self.assertFalse(result["output_truncated"])
+            self.assertFalse(result["workpack_accepted"])
+            # The trusted reader uses only the already-bound command attachment.
+            # A short last message is not the full handoff. Earlier cumulative
+            # statements remain evidence for the outer Codex, not host counters.
+            with (journal.root / "stdout.bin").open("rb") as stream:
+                bounded = stream.read(128 * 1024)
+                self.assertFalse(stream.read(1), "fixture report fits the bounded read")
+            messages = [event["item"]["text"] for event in map(json.loads, bounded.splitlines())
+                        if event["type"] == "item.completed" and event["item"]["type"] == "agent_message"]
+            self.assertEqual(messages, reports)
+            self.assertIn("cumulative failures 1", messages[0])
+            self.assertIn("cumulative failures 2", messages[1])
+            self.assertNotIn("cumulative failures", result["final_message"])
+        self.assertEqual(before, {path.name: path.read_bytes() for path in journal.root.iterdir()})
+
 if __name__ == "__main__":
     unittest.main()

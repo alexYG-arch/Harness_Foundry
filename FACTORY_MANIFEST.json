@@ -4,19 +4,19 @@
   "factory_id": "HARNESS_FOUNDRY_V2_9_CHAT_FACTORY_V0_1",
   "baseline_factory_id": "HARNESS_FOUNDRY_V2_8_CHAT_FACTORY_V0_1",
   "target_protocol_version": "2.9",
-  "version": "0.4.0",
-  "release_status": "RELEASED",
+  "version": "0.5.0",
+  "release_status": "UNRELEASED",
   "assurance_profile": "SELF_USE_LOCAL_TRUSTED_OPERATOR",
   "external_certification_claimed": false,
   "optional_security_hardening": "NOT_RUN",
   "new_build_route": "GENERIC_REVIEWED_BUILD_ONLY",
   "legacy_new_build_status": "RETIRED_NO_FALLBACK",
   "historical_capability_scope": "BASELINE_REGRESSION_NOT_CURRENT_PRODUCT_ACCEPTANCE",
-  "public_cli": ["version", "compile-build-plan", "record-build-plan", "capture-build-sources", "prepare-build-authorization", "approve-build-authorization", "revoke-build-authorization", "resolve-build-attempt", "advance-build", "read-build", "read-history"],
+  "public_cli": ["version", "compile-build-plan", "record-build-plan", "capture-build-sources", "prepare-build-authorization", "approve-build-authorization", "revoke-build-authorization", "resolve-build-attempt", "request-build-repair", "advance-build", "read-build", "read-history"],
   "source_diagnostic_cli": ["verify-spec", "validate-core", "project-core-evidence", "self-check-diagnostic"],
   "public_python_api": ["harness_foundry_factory.build_plan.compile_build_plan", "harness_foundry_factory.build_plan.validate_compiled_build_plan", "harness_foundry_factory.build_entrypoint.apply_build_request", "harness_foundry_factory.build_entrypoint.read_build", "harness_foundry_factory.legacy_history.read_history"],
   "generic_build_update": {
-    "status": "IMPLEMENTED_PUBLISHED_WITH_DECLARED_EVIDENCE_LIMITS",
+    "status": "IMPLEMENTED_UNRELEASED_SOURCE",
     "available_cli": [
       "compile-build-plan",
       "record-build-plan",
@@ -25,6 +25,7 @@
       "approve-build-authorization",
       "revoke-build-authorization",
       "resolve-build-attempt",
+      "request-build-repair",
       "advance-build",
       "read-build",
       "read-history"
@@ -147,5 +148,24 @@
     "HARNESS_BUILD_OR_INSTALL",
     "CONFORMANCE_CERTIFICATION",
     "REAL_TARGET_INSTALL"
-  ]
+  ],
+  "verification_resources_update": {
+    "status": "LOCAL_SOURCE_IMPLEMENTED_NOT_RELEASED",
+    "plan_version": "1.2",
+    "resource_scope_version": "1.0",
+    "capabilities": [
+      "PRIVATE_SCRATCH_AND_REPORTS",
+      "SQLITE",
+      "CHECKER_SNAPSHOT",
+      "OWNED_UNIX_SOCKET_SERVICE",
+      "OWNED_LOOPBACK_TCP_UDP_SERVICE",
+      "DECLARED_PRODUCT_RUNTIME_COPY",
+      "PROXY_HOST_ALLOWLIST_HTTP_HTTPS",
+      "BOUND_STRUCTURED_REPORT_RECOVERY",
+      "DECLARED_TEST_CREDENTIAL_ENV_AND_REDACTION"
+    ],
+    "native_qualification": "SEE_RESOURCE_IMPLEMENTATION_REPORT",
+    "real_user_service_acceptance": "NOT_RUN",
+    "g1_g2_scope_expanded": false
+  }
 }

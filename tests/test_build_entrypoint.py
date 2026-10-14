@@ -123,6 +123,151 @@ class BuildEntrypointTests(unittest.TestCase):
             self.assertEqual(row["recovery"]["evidence_attempt_id"], row["attempt_id"])
         self.assertEqual(self.cli("read-build")["stream_revision"], revision)
 
+    def test_one_attempt_returns_control_without_claiming_plan_completion(self):
+        self.prepare()
+        self.approve()
+        request = {"program_id": self.f.program, "prepared_event_id": self.prepared["event_id"],
+                   "expected_revision": self.revision, "advance_mode": "ONE_ATTEMPT"}
+        with patch("harness_foundry_factory.build_runtime.NativeBuildRunner", return_value=self.f.runner):
+            first = self.cli("advance-build", request)
+        self.assertEqual(first["status"], "BUILD_CONTROL_RETURNED")
+        self.assertTrue(first["control_returned"])
+        self.assertEqual(first["attempt_status"], "ACCEPTED")
+        self.assertFalse(first["harness_e2e_verified"])
+        self.assertEqual(len(self.cli("read-build")["attempts"]), 1)
+        with patch("harness_foundry_factory.build_runtime.NativeBuildRunner", return_value=self.f.runner):
+            self.assertEqual(self.advance()["status"], "PLAN_CHECKS_ACCEPTED")
+
+    def test_invalid_optional_advance_fields_fail_without_mutation(self):
+        self.prepare()
+        self.approve()
+        request = {"program_id": self.f.program, "prepared_event_id": self.prepared["event_id"],
+                   "expected_revision": self.revision}
+        handoff = {"workpack_id": "BUILD-READER", "basis_attempt_ids": [], "summary": "fixture"}
+        before = self.database.read_bytes()
+        invalid = [
+            {"advance_mode": "NEXT_TASK"}, {"advance_mode": []},
+            {"codex_handoff": handoff}, {"advance_mode": "ONE_ATTEMPT", "codex_handoff": None},
+            {"advance_mode": "ONE_ATTEMPT", "codex_handoff": {**handoff, "authority": "override"}},
+            {"advance_mode": "ONE_ATTEMPT", "codex_handoff": {**handoff, "basis_attempt_ids": ["a", "a"]}},
+            {"advance_mode": "ONE_ATTEMPT", "codex_handoff": {**handoff, "summary": " "}},
+            {"advance_mode": "ONE_ATTEMPT", "max_attempts": 100},
+        ]
+        with patch("subprocess.Popen", side_effect=AssertionError("invalid request cannot dispatch")):
+            for fields in invalid:
+                with self.subTest(fields=fields):
+                    result = self.cli("advance-build", {**request, **fields}, expected=2)
+                    self.assertEqual(result["status"], "ERROR")
+        self.assertEqual(before, self.database.read_bytes())
+
+    def test_readback_keeps_implementation_message_after_verification(self):
+        self.prepare()
+        self.approve()
+        def reported(invocation, before_dispatch):
+            return {**self.f.runner(invocation, before_dispatch),
+                    "final_message": "implementation report" if invocation["phase"] == "IMPLEMENTATION" else "verification"}
+        with patch("harness_foundry_factory.build_runtime.NativeBuildRunner", return_value=reported):
+            self.advance()
+        before = self.database.read_bytes()
+        with patch("harness_foundry_factory.build_runtime.BuildController.advance", side_effect=AssertionError("read only")), \
+                patch("harness_foundry_factory.process_observation.CommandObservation.recover", side_effect=AssertionError("read only")):
+            view = self.cli("read-build")
+        for attempt in view["attempts"]:
+            self.assertEqual(attempt["last_command"]["phase"], "VERIFICATION")
+            self.assertEqual(attempt["implementation_observation_status"], "OBSERVED")
+            self.assertEqual(attempt["missing_implementation_command_ids"], [])
+            self.assertEqual(len(attempt["implementation_commands"]), 1)
+            report = attempt["implementation_commands"][0]
+            self.assertEqual(report["final_message"], "implementation report")
+            self.assertEqual(report["phase"], "IMPLEMENTATION")
+            self.assertEqual(report["executor"], "LOCAL")
+            self.assertTrue(report["event_id"] and report["command_id"])
+            self.assertTrue(Path(report["observation_root"]).is_absolute())
+            self.assertTrue(attempt["verification"])
+        self.assertEqual(before, self.database.read_bytes())
+
+    def test_readback_missing_implementation_observation_does_not_infer_not_dispatched(self):
+        self.prepare()
+        self.approve()
+        def interrupted(invocation, before_dispatch):
+            raise support.InjectedControllerCrash()
+        with patch("harness_foundry_factory.build_runtime.NativeBuildRunner", return_value=interrupted), \
+                self.assertRaises(support.InjectedControllerCrash):
+            self.advance()
+        before = self.database.read_bytes()
+        with patch("harness_foundry_factory.process_observation.CommandObservation.recover", side_effect=AssertionError("read only")):
+            attempt = self.cli("read-build")["attempts"][0]
+        self.assertEqual(attempt["status"], "IN_FLIGHT")
+        self.assertEqual(attempt["implementation_observation_status"], "MISSING_OBSERVATION")
+        self.assertEqual(attempt["implementation_commands"], [])
+        self.assertEqual(attempt["missing_implementation_command_ids"], [attempt["last_command"]["command_id"]])
+        self.assertEqual(before, self.database.read_bytes())
+
+    def test_public_confirmed_repair_replays_then_rebuilds_through_original_tasks(self):
+        producer = self.f.plan["workpacks"][0]
+        producer["executor"] = "CODEX"
+        producer.pop("local_argv")
+        self.f.scope.update(allow_model_service=True, model="TEST-NOT-A-MODEL-CALL")
+        self.prepare()
+        self.approve()
+        def synthetic_codex(invocation, before_dispatch):
+            if invocation["executor"] == "CODEX":
+                invocation = {**invocation, "executor": "LOCAL",
+                              "argv": [sys.executable, "-I", "-B", "-c", self.f.write_reader(support.GOOD_READER)]}
+            return self.f.runner(invocation, before_dispatch)
+        with patch("harness_foundry_factory.build_runtime.NativeBuildRunner", return_value=synthetic_codex):
+            self.advance()
+        original = self.cli("read-build")
+        attempt = original["attempts"][0]
+        request = {"program_id": self.f.program, "prepared_event_id": self.prepared["event_id"],
+                   "expected_revision": self.revision, "idempotency_key": "CONFIRMED-FIXTURE-DEFECT",
+                   "targets": [{"artifact_id": producer["artifacts"][0]["artifact_id"],
+                                "accepted_attempt_id": attempt["attempt_id"]}],
+                   "finding": {"requirement_refs": ["PROJECT-BRIEF:L1"], "reason": "synthetic extra case",
+                               "evidence_refs": ["fixture counterexample"], "repair_goal": "repair the bounded case"}}
+        before_bytes = (self.f.workspace / "src/reader.py").read_bytes()
+        before_calls = len(self.f.runner.invocations)
+        with patch("subprocess.Popen", side_effect=AssertionError("repair request must not dispatch")):
+            first = self.cli("request-build-repair", request)
+            self.assertEqual(self.cli("request-build-repair", request), first)
+        self.assertEqual(first["status"], "BUILD_REPAIR_REQUESTED")
+        self.assertFalse(first["execution_started"] or first["target_write"] or first["budget_reset"])
+        self.assertEqual(set(first["workpack_ids"]), {task["workpack_id"] for task in self.f.plan["workpacks"]})
+        invalidated = self.cli("read-build")
+        self.assertEqual(len(invalidated["attempts"]), len(original["attempts"]))
+        self.assertTrue(all(row["status"] == "INVALIDATED" for row in invalidated["attempts"]))
+        self.assertEqual(invalidated["repair_requests"][0]["finding"], request["finding"])
+        self.assertEqual(invalidated["authorizations"][0]["budget"], original["authorizations"][0]["budget"])
+        self.assertEqual(before_bytes, (self.f.workspace / "src/reader.py").read_bytes())
+        self.assertEqual(before_calls, len(self.f.runner.invocations))
+        human = render_build_readback(invalidated)
+        self.assertIn("synthetic extra case", human)
+        self.assertIn("登记不等于已修复", human)
+        with patch("harness_foundry_factory.build_runtime.NativeBuildRunner", return_value=synthetic_codex):
+            returned = self.cli("advance-build", {
+                "program_id": self.f.program, "prepared_event_id": self.prepared["event_id"],
+                "expected_revision": self.revision, "advance_mode": "ONE_ATTEMPT"})
+            self.assertEqual(returned["workpack_id"], producer["workpack_id"])
+            self.assertEqual(returned["status"], "BUILD_CONTROL_RETURNED")
+            self.advance()
+        rebuilt = self.cli("read-build")
+        self.assertEqual(len(rebuilt["attempts"]), 4)
+        self.assertEqual([row["status"] for row in rebuilt["attempts"]],
+                         ["INVALIDATED", "INVALIDATED", "ACCEPTED", "ACCEPTED"])
+        self.assertEqual(rebuilt["authorizations"][0]["budget"]["attempts_consumed"], 4)
+
+    def test_repair_request_rejects_authority_override_before_mutation(self):
+        self.prepare()
+        self.approve()
+        before = self.database.read_bytes()
+        result = self.mutation("request-build-repair", {
+            "program_id": self.f.program, "prepared_event_id": self.prepared["event_id"],
+            "targets": [{"artifact_id": "READER", "accepted_attempt_id": "attempt"}],
+            "finding": {"requirement_refs": ["R1"], "reason": "counterexample", "evidence_refs": ["fixture"],
+                        "repair_goal": "fix case"}, "write_roots": ["/"]}, expected=2)
+        self.assertEqual(result["status"], "ERROR")
+        self.assertEqual(before, self.database.read_bytes())
+
     def test_public_model_self_approval_and_legacy_actor_are_rejected(self):
         self.prepare()
         for actor in ("CODEX_DELEGATED_AGENT", "ASSISTANT", "HUMAN"):

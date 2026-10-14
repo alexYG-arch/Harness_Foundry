@@ -78,6 +78,28 @@ def render_build_readback(result):
                      + AUTHORIZATION_LABELS.get(state, "未识别状态，请查看原始 JSON"))
         lines.append(f"  尝试次数：已用 {budget['attempts_consumed']}，剩余 {budget['attempts_remaining']}；"
                      f"到期时间：{_value(grant['scope']['expires_at'])}")
+        resources = grant["scope"].get("verification_resources")
+        if resources:
+            lines.append(f"  默认验收运行目录：{_value(grant['scope']['workspace_root'])}（产品只读）；"
+                         f"独立资源根：{_value(resources['root'])}")
+            for name, profile in resources["profiles"].items():
+                lines.append(f"  资源配置 {_value(name)}：{_value(profile['network'])}；"
+                             f"可写区域：{_value(profile['writable_areas'])}；判定：STRUCTURED_V1")
+                if "product_copy" in profile:
+                    copy = profile["product_copy"]
+                    lines.append(f"    在本次产品副本中验收；复制文件：{_value(copy['files'])}；"
+                                 f"副本内可写生成目录：{_value(copy['writable_paths'])}；正式产品不写入。")
+                for alias, credential in profile.get("credentials", {}).items():
+                    lines.append(f"    测试凭据 {_value(credential['ref'])} → FOUNDRY_CREDENTIAL_{_value(alias)}；"
+                                 f"用途：{_value(credential['purpose'])}；只在该检查命令运行时解析，引用不授予网络权限。")
+            lines.append("  网络能力：Unix socket 使用声明路径；显式 TCP LOOPBACK 的原生授权允许 TCP/UDP 回环全部端口，"
+                         "保留原生 53 端口例外，不隔离其他本机服务；外联代理不承诺端口或业务操作限制。")
+    if result.get("repair_requests"):
+        lines.extend(["", "外层 Codex 已核实的返修请求（保留历史，登记不等于已修复）："])
+        for repair in result["repair_requests"]:
+            lines.append(f"- {_value(repair['event_id'])}；范围：{_value(repair['workpack_ids'])}")
+            lines.append(f"  原因：{_value(repair['finding']['reason'])}；"
+                         f"修复目标：{_value(repair['finding']['repair_goal'])}")
     lines.extend(["", "任务尝试（按记录顺序，包含历史；不合并为当前计划的完成结论）："])
     if not attempts:
         lines.append("- 尚无任务执行记录；不能据此声称已实现或已验证。")
@@ -92,6 +114,13 @@ def render_build_readback(result):
                      f"（{_value(action)}）；责任方：{_value(recovery['owner'])}")
         lines.append(f"  证据尝试：{_value(recovery['evidence_attempt_id'])}；"
                      f"最小恢复路径：{_value(recovery['minimum_return_path'])}")
+        for command in attempt.get("resource_commands", []):
+            lines.append(f"  资源检查 {_value(command['case_id'])}：实际网络 {_value(command['effective_network_policy'])}；"
+                         f"清理 {_value(command['cleanup'])}；报告 {_value(command['observation_root'])}")
+            copy = command.get("binding", {}).get("product_copy")
+            if copy:
+                lines.append(f"    本次副本运行目录：{_value(copy['root'])}；"
+                             f"副本写域：{_value(copy['write_roots'])}")
         if status != "ACCEPTED":
             if "reason" in attempt:
                 lines.append(f"  原因（原始记录）：{_value(attempt['reason'])}")

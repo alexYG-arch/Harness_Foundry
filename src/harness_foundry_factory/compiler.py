@@ -12490,7 +12490,7 @@ def _write_common_runtime_dependencies(runtime_root: Path, *, coding: bool = Fal
     not a retroactive edit of an epoch's frozen control-module declaration.
     Independent relative-import closure and relocated imports verify the result.
     """
-    names = ["build_types.py", "revision_store.py", "identity.py"]
+    names = ["build_types.py", "revision_store.py", "identity.py", "resource_network.py"]
     if coding:
         names.append("coding_events.py")
     for filename in names:

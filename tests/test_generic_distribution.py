@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 import importlib.util
+import inspect
 import json
 import os
 from pathlib import Path
@@ -14,6 +15,8 @@ import unittest
 import zipfile
 
 import test_build_runtime as support
+import test_build_resources as resource_support
+from test_resource_example import example_fixture
 from test_build_plan import request_fixture
 
 
@@ -113,6 +116,8 @@ class GenericDistributionTests(unittest.TestCase):
         self.assertFalse(database.exists())
         help_result = self.run_python([str(self.bundle / "tools/hffactory.py"), "--help"])
         self.assertEqual(help_result.returncode, 0)
+        self.assertIn("request-build-repair", help_result.stdout)
+        self.assertIn("src/harness_foundry_factory/build_repair.py", self.receipt["files"])
         self.assertNotIn("chat-turn", help_result.stdout)
         self.assertNotIn("generate-candidate", help_result.stdout)
 
@@ -138,6 +143,88 @@ class GenericDistributionTests(unittest.TestCase):
 
     def test_relocated_plan_11_preflight_effects_and_resume(self):
         self._relocated_runtime(with_quality_contract=True)
+
+    def test_relocated_resource_example_templates_and_real_offline_roundtrip(self):
+        expected_files = {"README.md", "PROJECT_BRIEF.md", "request.template.json", "scope.template.json",
+                          "starter/tools/summarize.py", "starter/fixtures/rows.json",
+                          "verifier/check_resources.py", "verifier/expected.json"}
+        example = self.bundle / "examples/resource-check"
+        self.assertEqual({str(path.relative_to(example)) for path in example.rglob("*") if path.is_file()},
+                         expected_files)
+        fixture = example_fixture(self, example_root=example)
+        fixture.scope["expires_at"] = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+        compiled = self.cli("compile-build-plan", "--request", "-",
+                            request={"requirement_ir": fixture.ir, "plan": fixture.plan})
+        self.assertEqual(compiled["status"], "PLAN_COMPILED_NOT_AUTHORIZED")
+        database = fixture.root / "relocated-resources.sqlite3"
+        revision, key = 0, 0
+
+        def mutate(command, payload):
+            nonlocal revision, key
+            key += 1
+            result = self.cli(command, "--control-db", str(database), "--request", "-",
+                request={**payload, "expected_revision": revision, "idempotency_key": f"TEST-RESOURCE-{key}"})
+            revision = result["stream_revision"]
+            return result
+
+        proposal = mutate("record-build-plan", fixture.request)
+        source = mutate("capture-build-sources", {"program_id": fixture.program,
+            "proposal_event_id": proposal["event_id"], "source_root": str(fixture.source),
+            "manifest": [{"source_id": "PROJECT-BRIEF", "path": "PROJECT_BRIEF.md"}]})
+        prepared = mutate("prepare-build-authorization", {"program_id": fixture.program,
+            "proposal_event_id": proposal["event_id"], "source_event_id": source["event_id"], "scope": fixture.scope})
+        mutate("approve-build-authorization", {"program_id": fixture.program,
+            "prepared_event_id": prepared["event_id"], "decision": {"action": "APPROVE_BUILD",
+            "actor": {"type": "HUMAN_VIA_CODEX_CHAT", "chat_thread_id": "TEST", "turn_id": "TEST-RESOURCE-APPROVAL"},
+            "user_message": "SYNTHETIC TEST ONLY: not an actual user authorization"}})
+        # Reuse the existing test-only durable runner without importing tests or
+        # source modules in the relocated child. Production still has no bypass.
+        program = (f"import sys; sys.path.insert(0, {str(self.bundle / 'src')!r}); "
+                   f"ALLOWED = {set(packager.MODULES)!r}\n" + IMPORT_GUARD + '''
+from copy import deepcopy
+import json, os, signal, subprocess
+from pathlib import Path
+from harness_foundry_factory.build_runtime import BuildController
+from harness_foundry_factory.revision_store import RevisionControlEventStore
+from harness_foundry_factory.local_process import classify_local_capture
+from harness_foundry_factory.process_observation import CommandObservation
+from harness_foundry_factory.resource_network import effective_network_policy
+''' + inspect.getsource(resource_support.DurableResourceFixtureRunner) + '''
+database, program_id, prepared_id, bundle_root = json.load(sys.stdin)
+for name, module in sys.modules.copy().items():
+    if name.startswith("harness_foundry_factory."):
+        assert Path(module.__file__).resolve().is_relative_to(Path(bundle_root)), module.__file__
+runner = DurableResourceFixtureRunner()
+store = RevisionControlEventStore(database)
+controller = BuildController(store, program_id, runner=runner)
+first = controller.advance(prepared_id)
+assert first["status"] == "PLAN_CHECKS_ACCEPTED", first
+assert not first["harness_e2e_verified"]
+revision = len(store.list_events(program_id))
+second = controller.advance(prepared_id)
+assert second["status"] == "PLAN_CHECKS_ACCEPTED", second
+assert len(store.list_events(program_id)) == revision
+assert len(runner.invocations) == 2, runner.invocations
+checks = [row["payload"] for row in store.list_events(program_id)
+          if row["event_type"] == "BUILD_COMMAND_OBSERVED" and row["payload"]["phase"] == "VERIFICATION"]
+assert len(checks) == 1
+check = checks[0]
+report = json.loads((Path(check["observation_root"]) / "reports/summary.json").read_text())
+assert report["status"] == "CHECKS_PASS", report
+assert {row["id"] for row in report["checks"]} == {"product", "temp", "sqlite"}, report
+assert check["result"]["resource_cleanup"]["status"] == "CLEANED"
+assert not Path(check["resource_binding"]["product_copy"]["root"]).exists()
+print(json.dumps(first))
+''')
+        result = self.run_python(["-c", program], data=json.dumps(
+            [str(database), fixture.program, prepared["event_id"], str(self.bundle)]))
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertEqual(json.loads((fixture.workspace / "outputs/summary.json").read_text()),
+                         {"rows": 4, "total": 12, "invalid": 1})
+        view = self.cli("read-build", "--control-db", str(database), "--program-id", fixture.program)
+        self.assertEqual([row["status"] for row in view["attempts"]], ["ACCEPTED"])
+        self.assertEqual(view["authorizations"][0]["scope"]["verification_resources"]["profiles"]["offline"]["network"],
+                         {"mode": "NONE"})
 
     def _relocated_runtime(self, with_quality_contract=False):
         fixture = support.BuildRuntimeTests()
@@ -240,11 +327,11 @@ print(json.dumps(first))
     def test_metadata_is_read_from_selected_source_not_building_interpreter(self):
         root = self.source_copy()
         path = root / "src/harness_foundry_factory/identity.py"
-        path.write_text(path.read_text().replace('FACTORY_VERSION = "0.4.0"', 'FACTORY_VERSION = "9.8.7"'))
+        path.write_text(path.read_text().replace('FACTORY_VERSION = "0.5.0"', 'FACTORY_VERSION = "9.8.7"'))
         with self.assertRaisesRegex(ValueError, "product version differs"):
             packager.collect_files(root)
         project = root / "pyproject.toml"
-        project.write_text(project.read_text().replace('version = "0.4.0"', 'version = "9.8.7"'))
+        project.write_text(project.read_text().replace('version = "0.5.0"', 'version = "9.8.7"'))
         product = root / "FACTORY_MANIFEST.json"
         manifest = json.loads(product.read_text())
         manifest["version"] = "9.8.7"

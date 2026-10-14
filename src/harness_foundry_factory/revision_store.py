@@ -240,6 +240,14 @@ class RevisionControlEventStore:
             return appended
 
 
+    def _idempotent_events(self, program_id, idempotency_key):
+        """Read an existing reservation without reserving another effect."""
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT events_json FROM control_idempotency WHERE program_id = ? AND idempotency_key = ?",
+                (program_id, idempotency_key)).fetchone()
+        return json.loads(row["events_json"]) if row is not None else None
+
     def list_events(self, program_id):
         with self._connection() as connection:
             rows = connection.execute(

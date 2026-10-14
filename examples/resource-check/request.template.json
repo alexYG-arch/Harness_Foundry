@@ -1,0 +1,45 @@
+{
+  "requirement_ir": {
+    "program_id": "RESOURCE-CHECK-EXAMPLE",
+    "revision": 1,
+    "target": {
+      "id": "RESOURCE-CHECK",
+      "mission": "验证合成产品的资源接入与独立验收。",
+      "scope": ["本地摘要工具、临时文件、SQLite 与可选自有本机服务"],
+      "non_goals": ["外部服务、真实账户、生产数据、模型调用与发布"]
+    },
+    "sources": [
+      {"source_id": "PROJECT-BRIEF", "path_or_uri": "PROJECT_BRIEF.md", "loaded_completely": true}
+    ],
+    "atoms": [
+      {"atom_id": "REQ-SUMMARY", "text_or_lossless_paraphrase": "统计输入并拒绝格式错误，按独立预期验收产物。", "source_id": "PROJECT-BRIEF", "source_locator": "L4-L6"},
+      {"atom_id": "REQ-RESOURCES", "text_or_lossless_paraphrase": "在产品副本中生成缓存和结果，验证临时文件与SQLite；显式选择时验证自有HTTP实例并关闭。", "source_id": "PROJECT-BRIEF", "source_locator": "L7-L10"}
+    ],
+    "acceptance_cases": [
+      {"case_id": "RESOURCE-CHECK", "atom_ids": ["REQ-SUMMARY", "REQ-RESOURCES"], "description": "受保护的 unittest 检查器核对产品、异常输入和声明的资源生命周期。", "acceptance_contract": {"source_id": "PROJECT-BRIEF", "source_locator": "L4-L10"}}
+    ],
+    "negative_cases": []
+  },
+  "plan": {
+    "schema_version": "1.2",
+    "plan_id": "RESOURCE-CHECK-PLAN",
+    "revision": 1,
+    "requirement_revision": 1,
+    "workpacks": [
+      {
+        "workpack_id": "MAKE-SUMMARY",
+        "job_id": "RESOURCE-EXAMPLE",
+        "executor": "LOCAL",
+        "goal": "从已复制的合成输入生成 outputs/summary.json，交给独立资源检查器。",
+        "depends_on": [],
+        "atom_ids": ["REQ-SUMMARY", "REQ-RESOURCES"],
+        "inputs": [{"kind": "SOURCE", "id": "PROJECT-BRIEF"}],
+        "artifacts": [{"artifact_id": "SUMMARY", "path": "outputs/summary.json"}],
+        "local_argv": ["python", "-I", "-B", "tools/summarize.py", "--output", "outputs/summary.json"],
+        "verification": [
+          {"case_id": "RESOURCE-CHECK", "argv": ["python", "-I", "-B", "verifier://check_resources.py", "executable://python", "offline"], "artifact_ids": ["SUMMARY"], "resource_profile_ref": "offline"}
+        ]
+      }
+    ]
+  }
+}

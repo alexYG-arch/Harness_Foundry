@@ -1,7 +1,8 @@
 # Harness Foundry — generic Codex runtime
 
-Product version **0.4.0**; protocol **2.9**. This release adds clear communication
-guidance and an optional read-only summary. Prior v0.3.0 and v0.2.0 releases remain unchanged.
+Product version **0.5.0**; protocol **2.9**. This is a release-preparation candidate.
+It adds declared verification resources, protected product copies, controlled repair
+and single-attempt handoff. Existing published releases remain unchanged.
 
 Open this directory as a Codex project. Its local `harness-foundry-build` Skill
 guides a build from clarified requirements and a human-reviewed build document.
@@ -42,10 +43,29 @@ The agent prepares public CLI requests following [Build CLI](docs/GENERIC_BUILD_
 The existing revision SQLite control store remains authoritative; it must stay
 outside all target write roots. Neither plans nor model output grant authority.
 
-Public sample inputs: [complete Task CLI PRD](examples/task-cli/PRD.md) and
+Public sample inputs: [complete Task CLI PRD](examples/task-cli/PRD.md),
 [existing CSV project](examples/csv-increment/PROJECT_BRIEF.md), with its starter
-code and tests. They are synthetic examples, not pre-approved builds or embedded
+code and tests, and the [verification resources example](examples/resource-check/README.md). They are synthetic examples, not pre-approved builds or embedded
 business logic. Every real use still requires document review and runtime approval.
+
+## Verification resources and repair
+
+Declare resource profiles only when checks need scratch/cache files, SQLite, owned
+local services or HTTP(S) calls through a host allowlist. Keep the offline NONE
+mode for checks that need no network. An explicit product copy supports tools that
+write generated files inside their project without writing the original product.
+The checker and its declared judgment dependencies run from protected copies.
+Optional test credentials reach only their bound local verification command; known
+values are filtered from controlled logs and declared archived reports. Saved
+results support recovery without replay, and successful per-command resources are
+cleaned after the result is durable. Read the exact permissions and lifecycle in
+[Build CLI](docs/GENERIC_BUILD_CLI.md) before selecting a profile.
+
+The outer Codex session confirms extra findings, merges relevant history and decides
+whether another repair is useful. The Harness preserves its independent checks and
+budgets. Use the controlled repair entry for eligible accepted producers and optional
+ONE_ATTEMPT handoff when the outer session needs to decide before the next dispatch.
+Diagnostic progress may justify another attempt even without a code change.
 
 ## Compatibility and acceptance
 
@@ -75,13 +95,11 @@ Validate and use the exact archive intended for delivery. A package inventory,
 archive checksum or successful CLI command is not evidence that a target Harness
 meets its requirements. Complete release acceptance needs the declared same-package
 new-project and existing-project evidence, plus closure of known in-scope defects.
-v0.4.0 is published with declared evidence limits: existing source checks,
-fixed-commit packaging and archive loading checks. The final v0.4.0 ZIP has not
-rerun the two real-model cases; prior evaluations do not establish writing quality
-or complete acceptance for this archive. Publication does not claim complete
-release acceptance. See the online
-[v0.4.0 release notes](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.4.0).
-The original v0.3.0 and v0.2.0 tags, releases and archives remain available unchanged.
+This candidate does not itself assert publication or CI success. Its final validation
+and release information will identify the selected commit and exact archive.
+The current stable release remains
+[v0.4.0](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.4.0);
+existing tags, releases and archives remain available unchanged.
 Use a separate directory for an upgrade; code rollback does not undo effects,
 revive authorizations or permit silent database downgrades.
 

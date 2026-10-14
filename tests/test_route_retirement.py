@@ -67,6 +67,7 @@ class RouteRetirementTests(unittest.TestCase):
             main(["--help"])
         self.assertEqual(stopped.exception.code, 0)
         self.assertIn("record-build-plan", stream.getvalue())
+        self.assertIn("request-build-repair", stream.getvalue())
         self.assertIn("read-history", stream.getvalue())
         self.assertNotIn("chat-turn", stream.getvalue())
         with redirect_stdout(StringIO()) as stream:

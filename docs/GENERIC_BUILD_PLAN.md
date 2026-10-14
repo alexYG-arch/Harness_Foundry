@@ -1,5 +1,11 @@
 # 通用建设计划接口（首个实现切片）
 
+2026-10-14 资源接口补充：Plan 1.2 保留 1.1 功能，verification 条目新增可选
+`resource_profile_ref`，引用 scope.verification_resources 1.0 中的 profile。已实现临时区、
+SQLite、Unix socket / loopback TCP 本机服务、原生 HTTP(S) 主机代理与可选测试凭据环境引用；完整形状、报告及能力边界见
+[CLI 资源合同](GENERIC_BUILD_CLI.md#可选验收资源plan-12)。
+未引用资源的检查保留原语义；Plan 1.0/1.1 不接受新增字段，不自动迁移旧授权。
+
 2026-10-10 当前接口补充：Plan 1.0 不自动迁移；Plan 1.1 支持 Case 的
 `required_artifact_ids` / `acceptance_stage`，Workpack 的 `environment` / `effects`。
 字段、兼容范围、来源归类和观察边界见[升级契约](FOUNDRY_UPGRADE_2026_10_10.md#plan-11-公开增量)。
@@ -91,7 +97,7 @@ Coding Harness 的搭建文档还应基于完整 PRD 和开发需求，包含功
   功能名作为共用实施目标；只绑定该案例来源及必要的共用约束。后续已批准能力作为
   `downstream_obligations` 上下文，不提前实施，也不额外写成永久禁止项。
   已明确要求的跨案例工作仍保留，不能借模板澄清删减真实范围。
-- 采用 Foundry 结构化检查接口时，stdout 是单个 JSON：`CHECKS_PASS` / exit 0，或
+- 原有不带 resource_profile_ref 的结构化检查接口，stdout 是单个 JSON：`CHECKS_PASS` / exit 0，或
   `CHECKS_FAILED` / exit 1；失败类别放在 `failure_kind`，`reason` 仅为可读说明。
   `ASSERTION` 是已公开业务断言失败；`INFRASTRUCTURE` 包含非预期测试/准备/发现/
   子进程错误及零用例、跳过、expected failure 导致的未完整执行；`CONTRACT_GAP`
@@ -159,6 +165,60 @@ Agent 自批、后台全部 PASS 后直启、通过兼容/委托路线绕过、�
 兼容历史 Program 只通过 `read-history` 查看，不再通过 REOPEN 恢复 authoring。
 旧委托不能提供替代 Review；当前通用运行的撤销/未知效果处置不被文档缺失阻止。
 文档历史不重写：原文中的草案状态只描述展示时状态，当前决定从控制事件读取。
+
+## Plan 1.2 验收资源引用
+
+Plan 1.2 仅为需要资源的 verification 增加资源引用，不改变 Workpack、Case 与产物归属：
+
+```json
+{
+  "case_id": "SQLITE-CHECK",
+  "argv": ["executable://python", "verifier://check.py", "resource://scratch/test.sqlite3"],
+  "artifact_ids": ["PRODUCT"],
+  "resource_profile_ref": "file-and-sqlite"
+}
+```
+
+编译仍只校验计划结构，不创建运行区或授予网络。prepare 核对 profile 存在、声明资源路径、
+检查器副本与既有 scope；宿主派发前分配命令专属叶子并持久绑定。`resource://` 只用于独立
+验收 argv 的完整元素，不替代 executable:// 或 verifier://，也不扩展实施任务写域。
+
+产品运行副本同样放在 scope 的资源 profile，不新增 Plan 字段。可选
+`product_copy: {"files":["src/tool.py","fixtures/input.txt"],"writable_paths":[".cache","build"]}`
+声明非空、无重复的规范相对输入文件和生成目录，二者不重叠。派发前从当前产品复制显式普通文件，
+包括未提交输入；不从 Git HEAD 导出或递归复制目录/符号链接。该验收命令的 cwd 及仅此模式提供的
+FOUNDRY_PRODUCT_ROOT 指向 command 的 product 副本，根和输入只读，仅声明生成目录可写。
+正式产品仍可读且不可写；工具须实际通过相对路径或 FOUNDRY_PRODUCT_ROOT 使用副本，绝对路径及
+任意 import 搜索不会透明改写。独立检查器与判定依赖仍使用 verifier:// / FOUNDRY_VERIFIER_ROOT。
+宿主绑定复制身份、持久核对结论，正常接受/产品拒绝前及恢复继续前按已声明复制清单核对当前源字节与执行位；源漂移保留旧证据并中止，恢复原身份可继续，不扫描未声明文件。成功结果耐久后清理副本，失败保留；恢复不重新复制、派发或计数。
+身份改变或不可核对不触发产品断言返修，真实安装位置不能用副本验证代替。未选用的 profile 保持
+原 cwd/环境，不增加默认要求、网络、凭据或预算权限；整副本宽写、递归/符号链接扩展未实现。
+
+新资源模式固定读取 FOUNDRY_REPORT_DIR/summary.json，要求 schema_version=1.0、本次
+case_id/command_id、完整 required_checks 对应的 checks、errors 与退出码相符。
+LOCAL_SERVICE 另核对 services_stopped；REMOTE_SERVICE 核对 external_effects。
+LOCAL_SERVICE 可选择 Unix socket，或显式 `tcp: LOOPBACK`；后者原生授权允许 loopback 的
+TCP/UDP 所有端口，拒绝外部连接但保留原生 53 端口例外（不检查 DNS 协议内容），不承诺指定端口或本次服务隔离。
+tcp: LOOPBACK 和 CODEX_NATIVE_LOOPBACK_TCP 是兼容标识，不是 TCP-only 承诺；实际策略补充
+loopback_protocols=["TCP", "UDP"]，不改变网络授权或业务检查义务，不代表 UDP 业务验收。
+历史捕获不回填字段、不因缺少字段重跑。该可选形状仍使用资源配置 1.0 和 Plan 1.2，旧配置不变。
+报告不是直接接受授权，仍由原控制器提交结果。旧 stdout 模式继续有效。
+
+凭据放在 scope 的资源 profile，不增加 Plan 字段。例如可选
+`credentials: {"API_TOKEN":{"ref":"env:FOUNDRY_TEST_API_TOKEN","purpose":"测试服务认证"}}`，
+对应实际验收命令环境 `FOUNDRY_CREDENTIAL_API_TOKEN`。alias 使用 `[A-Z][A-Z0-9_]*`，来源仅为
+`env:` 加 `[A-Za-z_][A-Za-z0-9_]*` 环境名；准备和 readback 只保存引用与非空用途，不取值。
+仅绑定的 LOCAL VERIFICATION workload 前解析，probes/CODEX/实施及未绑定 profile 的检查不接收；
+缺值是未启动 workload 的设施失败，保留实际预算。NONE、本机和 REMOTE_SERVICE 都可选用，网络授权不变。
+用途不是操作级 enforcement，也不自动证明测试账号。宿主日志与声明附件过滤已知值，原始 summary
+只在内存判定；完成 capture 的 `credential_reports` 绑定规范判定与脱敏附件，恢复核对 hash/size，
+不读 staging、不重新取 env 或重派，完成信封缺失或已绑定附件丢失时保持未知。此保证不覆盖任意 scratch、脱敏前崩溃现场或主动编码泄露。
+秘密管理器与代理代持未实现；真实外部账号调用的验收范围见源码工作区的 `docs/FOUNDRY_VERIFICATION_RESOURCES_IMPLEMENTATION_RESULT_2026_10_14.md`（本地记录不随可携带包分发）。
+资源配置仍为 1.0、Plan 1.2、协议 2.9，未使用凭据的路径不变、不发布。
+
+重规划对 verification 的完整绑定进行比较，包含 resource_profile_ref；拆分/合并不能借换
+profile 扩大资源或改变合同义务。版本化资源配置及方法见前述资源接入说明，无须新增 G1/G2
+规则、逐 Case 确认或第二套状态库。
 
 ## 既有只读编译接口
 

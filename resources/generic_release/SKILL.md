@@ -68,9 +68,134 @@ for each defect. A core/checker fault does not grant the target self-modificatio
 authority. Stop once agreed delivery is met; further optimization is follow-up,
 not a reason to reopen completed work or ask for per-task Hash confirmations.
 
-Independently check actual behavior and artifacts, then let the controller commit
-acceptance. Demonstrate using the generated Harness, not only its files or a plan.
-Report exactly which requirements/cases passed and which remain unverified.
+## Optional verification resources
+
+Use Plan 1.2 resource_profile_ref and an explicit verification_resources scope
+when checks need temporary files, SQLite or services; see the CLI contract.
+By default the product cwd remains read-only while each command gets private scratch and
+report leaves. When a tool must generate files inside its project, an optional profile
+product_copy={"files":["src/tool.py","fixtures/input.txt"],"writable_paths":[".cache","build"]}
+copies named ordinary files from the current product just before dispatch, including
+declared uncommitted inputs. Both lists are nonempty, unique normalized relative paths;
+inputs must not overlap generated directories. The command cwd and FOUNDRY_PRODUCT_ROOT
+(set only in this mode) point to its private product copy. The copy root and inputs stay
+read-only; only declared generated directories are writable. Original product reads
+remain allowed and writes remain denied. Use relative paths or FOUNDRY_PRODUCT_ROOT to
+actually run the copy: absolute tool/argv paths and arbitrary import searches are not
+transparently rewritten. Keep checker/oracle paths at protected verifier:// arguments
+or FOUNDRY_VERIFIER_ROOT. The host binds copy identity and persists its validation;
+changed/unavailable inputs cannot turn PASS/ASSERTION into acceptance or product repair.
+Successful copies are cleaned after durable results; failures remain. Recovery uses
+saved conclusions without recopying, dispatching, recounting or requiring cleaned files.
+No recursive directory/symlink input, whole-copy write grant or real-installation
+acceptance is provided. Other profiles retain their cwd/environment; network,
+credentials, budgets and G1/G2 are unchanged. Preparation copies named checker files and helpers to host storage,
+including checkers maintained in the product repository. The STRUCTURED_V1
+summary binds command/Case and required checks; only the host records acceptance.
+NONE needs no network setup. LOCAL_SERVICE supports owned Unix sockets or explicit
+{"mode":"LOCAL_SERVICE","tcp":"LOOPBACK"}. This native grant allows all TCP and
+UDP loopback ports, not service isolation. The tcp selector and
+CODEX_NATIVE_LOOPBACK_TCP remain compatibility names, not TCP-only guarantees.
+New policy records include loopback_protocols=["TCP", "UDP"] to describe existing
+permissions without changing authorization or claiming UDP business acceptance.
+Recovery preserves saved policy; do not backfill old captures or rerun commands
+because this field is absent. The native port 53 exception does not inspect DNS
+content. Native binding also permits wildcard listeners; trusted checkers bind
+loopback and use their actual endpoint, preferably an OS-assigned port. Fixed
+ports remain supported; conflicts are startup failures. REMOTE_SERVICE uses an
+active HTTP(S) proxy and host allowlist, not port or operation filtering.
+These modes do not grant model service permission. A profile may optionally declare
+credentials={"API_TOKEN":{"ref":"env:FOUNDRY_TEST_API_TOKEN","purpose":"测试服务认证"}},
+which maps to FOUNDRY_CREDENTIAL_API_TOKEN only for its LOCAL VERIFICATION workload.
+Aliases use [A-Z][A-Z0-9_]*; env source names use [A-Za-z_][A-Za-z0-9_]* and purpose
+must be nonempty. Prepare/readback persist references and purpose, never resolve
+the value. Only the bound workload reads the declared source after native probes;
+help/probes, CODEX/implementation and checks with other profiles receive no token.
+Use the host's existing secret provision method; never request secrets in chat,
+Plan or argv. Missing/empty/NUL values are infrastructure failures before workload
+dispatch, retaining actual budget use rather than triggering product repair.
+Credentials work with NONE/local/remote modes without changing network permission;
+purpose is not operation-level enforcement, nor does an env name prove a test account.
+The host filters known values from captured streams, previews, exception strings
+and declared report archives. It evaluates raw summary content only in memory,
+then archives filtered JSON strings/keys and attachments. credential_reports in
+the completed capture binds the canonical verdict and archived hash/size; recovery
+uses those attachments, never raw staging, re-resolved env or redispatch. Missing completion capture or lost/mismatched bound archive evidence remains
+unknown. Uncredentialed recovery is unchanged.
+This filtering does not cover arbitrary scratch, a crash before filtering, or
+deliberate encoding. Secret-manager integration, proxy-held credentials, exact TCP
+service isolation and remote-write reconciliation are not implemented; real external
+account acceptance remains separately unverified. Report current evidence from the
+implementation record; keep protocol 2.9, Plan 1.2 and resources 1.0, without release.
+Do not add these optional resources, credentials, probes or approvals to unrelated
+offline tasks, and do not extend G1/G2 or introduce general restrictions.
+
+## Outer Codex review and repair
+
+The outer delivery session owns one scoped review of the agreed delivery; reuse an
+equivalent review and inspect only changed/affected paths after repairs. A child
+implements its assigned task and reports this attempt's evidence and increment;
+the Harness controls execution, budgets and independent acceptance. Do not ask
+every child to review the entire delivery or let a report certify acceptance.
+
+Confirm an extra finding against the original requirement, current version,
+reachable trigger, observable difference and counterevidence. Repair confirmed
+in-scope defects automatically when the existing authority, a real repair entry,
+budget and recheck path suffice. Explain disproved findings; retain uncertain ones;
+optional improvements do not block delivery. Do not weaken protected checks.
+Current unaccepted writable outputs may be repaired directly; an original Plan's
+valid same-path replacement creates a new candidate. For an accepted producer use
+an applicable native repair route or `request-build-repair`, preserving historical
+PASS and the actual failure history. The latter supports CODEX responsibility and
+its dependency rebuilds; a fixed LOCAL command does not gain reasoning ability.
+Never edit accepted bytes to manufacture drift or forge a verifier failure.
+
+Use `advance-build` with `advance_mode: ONE_ATTEMPT` when the outer session must
+control this repair chain. After each return, use `read-build` to retrieve all
+unmerged `implementation_commands`, not just `last_command`. A `final_message`
+can be a short progress message even after multiple completed messages or an
+interruption; it does not prove a complete handoff. For an actual gap, use the
+bounded read-only recovery and round-merging method in the
+[runtime contract](../../../docs/GENERIC_BUILD_RUNTIME.md).
+Do not rerun/advance merely to recover a report. Preserve unresolved findings and
+unknown counts rather than assume zero; missing history does not block a first
+lawful repair or unrelated authorized work.
+
+Keep the task's selected finite budget, cumulative failed rounds and pending
+rounds in its existing work record; children report increments. Reopening with new
+evidence, changing sessions, replaying requests or another finding's success does
+not reset them. Success has no fixed item-count cap; real time/calls/attempts still
+count. Merge a cumulative 1 then 2 as 2, settle an existing pending round once,
+and do not equate command/attempt counts with failed product repairs. Only a native
+settlement of `NOT_DISPATCHED` proves that implementation was not dispatched: it
+adds no product repair failure and does not discredit the method, but keeps actual
+attempt/time use. Missing observations or unknown effects keep their native hold.
+
+Before the next CODEX attempt, pass relevant recovered history, selected limits,
+pending rounds and the next method through `codex_handoff` on ONE_ATTEMPT. Bind it
+to the actual receiving workpack and prior attempt IDs; a failing consumer may
+hand off to its producer. A stored summary proves binding, not that a model read
+or followed it. Recovery uses the started attempt's stored context; new summaries
+are not queued. LOCAL tasks receive no model handoff or new service calls.
+
+Stop continuing the same ineffective chain only when there is neither an effective
+change nor new diagnostic progress, or the existing stopping condition applies.
+A tested new hypothesis/reproduction condition may justify continuing without a
+diff; cosmetic edits or repeated promises are not progress. Do not actively
+dispatch successors depending on a known unresolved defect; normal diagnosis,
+repair and unrelated authorized work may continue within scope and budget through
+existing applicable entries. ONE_ATTEMPT does not add a task selector, revoke
+approval, cancel running processes or control other callers/continuous mode.
+Do not fabricate CONTRACT_GAP or command failure to stop the Harness. Native
+independent-assertion repair retains its original contract and budget, separate
+from the selected allowance for Codex's extra finding work.
+
+Check the defect's targeted recheck, related regressions and the current version's
+required independent results separately. Development checks awaiting the host are
+pending, not success or infrastructure failure; children should return normally.
+Original checks may remain green while an extra defect remains unresolved; report
+both. Let the controller commit acceptance and demonstrate actual Harness use.
+Stop when agreed delivery is met. Report which cases passed and remain unverified;
 PLAN_CHECKS_ACCEPTED is not whole-PRD, installed-Harness or release acceptance.
 
 All new builds use this route. Never fall back to retired Candidate/epoch workflows

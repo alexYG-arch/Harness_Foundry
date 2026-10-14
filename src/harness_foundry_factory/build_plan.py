@@ -126,7 +126,7 @@ def validate_build_plan(requirement_ir: Mapping[str, Any], plan: Mapping[str, An
     """
     atoms, cases, sources = _requirement_catalog(requirement_ir)
     _fields(plan, {"schema_version", "plan_id", "revision", "requirement_revision", "workpacks"}, "plan")
-    _require(isinstance(plan["schema_version"], str) and plan["schema_version"] in {"1.0", "1.1"},
+    _require(isinstance(plan["schema_version"], str) and plan["schema_version"] in {"1.0", "1.1", "1.2"},
              "BUILD_PLAN_VERSION_UNSUPPORTED", "unsupported build-plan schema")
     _id(plan["plan_id"], "plan.plan_id")
     _require(type(plan["revision"]) is int and plan["revision"] > 0,
@@ -142,7 +142,7 @@ def validate_build_plan(requirement_ir: Mapping[str, Any], plan: Mapping[str, An
         _fields(workpack, {"workpack_id", "job_id", "executor", "goal", "depends_on", "atom_ids",
                            "inputs", "artifacts", "verification"} | ({"local_argv"}
                            if "local_argv" in workpack else set()) | (
-                           set(workpack) & {"environment", "effects"} if plan["schema_version"] == "1.1" else set()),
+                           set(workpack) & {"environment", "effects"} if plan["schema_version"] in {"1.1", "1.2"} else set()),
                 f"workpack {workpack_id}")
         if "environment" in workpack:
             env = workpack["environment"]
@@ -202,7 +202,11 @@ def validate_build_plan(requirement_ir: Mapping[str, Any], plan: Mapping[str, An
                  "BUILD_PLAN_VERIFICATION_MISSING", "every workpack needs independently runnable verification")
         local_cases: set[str] = set()
         for check in verification:
-            _fields(check, {"case_id", "argv", "artifact_ids"}, "verification")
+            _fields(check, {"case_id", "argv", "artifact_ids"} | (
+                    {"resource_profile_ref"} if plan["schema_version"] == "1.2"
+                    and "resource_profile_ref" in check else set()), "verification")
+            if "resource_profile_ref" in check:
+                _id(check["resource_profile_ref"], "verification.resource_profile_ref")
             case_id = check["case_id"]
             _id(case_id, "verification.case_id")
             _require(case_id in cases, "BUILD_PLAN_REFERENCE_UNKNOWN", "verification refers to an unknown case")
@@ -255,8 +259,8 @@ def validate_build_plan(requirement_ir: Mapping[str, Any], plan: Mapping[str, An
         for check in workpack["verification"]:
             case = cases[check["case_id"]]
             if "required_artifact_ids" in case or "acceptance_stage" in case:
-                _require(plan["schema_version"] == "1.1", "BUILD_PLAN_VERSION_UNSUPPORTED",
-                         "Case prerequisites and acceptance_stage require plan 1.1")
+                _require(plan["schema_version"] in {"1.1", "1.2"}, "BUILD_PLAN_VERSION_UNSUPPORTED",
+                         "Case prerequisites and acceptance_stage require plan 1.1 or later")
                 required = _ids(case.get("required_artifact_ids", []), "case.required_artifact_ids")
                 available = {row["artifact_id"] for row in workpack["artifacts"]} | {
                     row["id"] for row in inputs if row["kind"] == "ARTIFACT"}

@@ -33,6 +33,23 @@ class SkillContractTests(unittest.TestCase):
                               "only declared outputs", "no extra reads or approval"):
                 self.assertIn(preserved, content)
 
+    def test_source_and_distribution_deliver_same_outer_repair_instructions(self):
+        source = (ROOT / ".agents/skills/harness-foundry-start-author/SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        distribution = (ROOT / "resources/generic_release/SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        heading = "## Outer Codex review and repair"
+        source_rules = source.split(heading, 1)[1].split("## Historical records", 1)[0].strip()
+        packaged_rules = distribution.split(heading, 1)[1].split("All new builds", 1)[0].strip()
+        self.assertEqual(source_rules, packaged_rules)
+        for operation in ("request-build-repair", "ONE_ATTEMPT", "codex_handoff",
+                          "implementation_commands", "NOT_DISPATCHED"):
+            self.assertIn(operation, source_rules)
+        self.assertIn("not that a model read", source_rules)
+        self.assertIn("nor new diagnostic progress", source_rules)
+
     def test_repo_skill_is_valid(self) -> None:
         completed = subprocess.run(
             [sys.executable, str(ROOT / "tools" / "validate_skill.py")],

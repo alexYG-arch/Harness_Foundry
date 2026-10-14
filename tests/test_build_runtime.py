@@ -1431,5 +1431,667 @@ else:
         self.assertEqual(self.events("BUILD_SOURCES_CAPTURED")[0]["payload"]["snapshot"]["sources"][0]["text"], full_text)
 
 
+    def test_one_attempt_returns_each_settlement_and_finishes_plan_on_next_call(self):
+        self.prepare()
+        controller = self.controller()
+        for count, workpack in enumerate(("IMPLEMENT-READER", "MAKE-REPORT"), 1):
+            result = controller.advance(self.prepared_id, advance_mode="ONE_ATTEMPT")
+            self.assertEqual(result["status"], "BUILD_CONTROL_RETURNED", result)
+            self.assertTrue(result["control_returned"])
+            self.assertEqual(result["attempt_status"], "ACCEPTED")
+            self.assertEqual(result["workpack_id"], workpack)
+            self.assertEqual(result["budget"]["attempts_consumed"], count)
+            self.assertFalse(result["budget"]["reset"])
+            self.assertFalse(result["harness_e2e_verified"])
+            self.assertEqual(result["stream_revision"], len(self.events()))
+            self.assertEqual(len(self.events("BUILD_ATTEMPT_STARTED")), count)
+        finished = controller.advance(self.prepared_id, advance_mode="ONE_ATTEMPT")
+        self.assertEqual(finished["status"], "PLAN_CHECKS_ACCEPTED")
+        self.assertEqual(len(self.events("BUILD_ATTEMPT_STARTED")), 2)
+
+    def test_one_attempt_returns_rejection_before_native_repair_route(self):
+        self._upstream_repair_fixture()
+        self.prepare()
+        controller = self.controller()
+        controller.advance(self.prepared_id, advance_mode="ONE_ATTEMPT")
+        rejected = controller.advance(self.prepared_id, advance_mode="ONE_ATTEMPT")
+        self.assertEqual(rejected["status"], "BUILD_CONTROL_RETURNED")
+        self.assertEqual(rejected["attempt_status"], "REJECTED")
+        self.assertFalse(self.events("BUILD_ACCEPTANCE_INVALIDATED"))
+        self.assertEqual(len(self.events("BUILD_ATTEMPT_STARTED")), 2)
+        repaired = controller.advance(self.prepared_id, advance_mode="ONE_ATTEMPT")
+        self.assertEqual(repaired["workpack_id"], "IMPLEMENT-READER")
+        self.assertEqual(len(self.events("BUILD_ACCEPTANCE_INVALIDATED")), 1)
+        self.assertEqual(len(self.events("BUILD_ATTEMPT_STARTED")), 3)
+
+    def test_one_attempt_native_hold_is_not_successful_control_return(self):
+        self.plan["schema_version"] = "1.1"
+        self.plan["workpacks"][0]["environment"] = {
+            "python": "python", "modules": ["test_missing_module_g2"], "paths": []}
+        self.prepare()
+        result = self.controller().advance(self.prepared_id, advance_mode="ONE_ATTEMPT")
+        self.assertEqual(result["status"], "HELD_COMMAND_FAILURE", result)
+        self.assertEqual(result["attempt_status"], "BLOCKED")
+        self.assertNotIn("control_returned", result)
+        self.assertEqual([row["phase"] for row in self.runner.invocations], ["PREFLIGHT"])
+
+    def test_one_attempt_recovery_not_dispatched_preserves_budget_and_ignores_new_handoff(self):
+        self.prepare()
+        controller = self.controller()
+        with patch.object(controller, "_execute_command", side_effect=InjectedControllerCrash()), \
+                self.assertRaises(InjectedControllerCrash):
+            controller.advance(self.prepared_id, advance_mode="ONE_ATTEMPT")
+        saved = self.events("BUILD_ATTEMPT_STARTED")[0]["payload"]
+        result = controller.advance(self.prepared_id, advance_mode="ONE_ATTEMPT", codex_handoff={
+            "workpack_id": "IMPLEMENT-READER", "basis_attempt_ids": [saved["attempt_id"]],
+            "summary": "New summary must not be attached to an existing attempt."})
+        self.assertEqual(result["status"], "BUILD_CONTROL_RETURNED")
+        self.assertEqual(result["attempt_status"], "NOT_DISPATCHED")
+        self.assertEqual(result["attempt_id"], saved["attempt_id"])
+        self.assertFalse(result["codex_handoff_used"])
+        self.assertEqual(result["budget"]["attempts_consumed"], 1)
+        self.assertEqual(result["budget"]["attempts_remaining"], 4)
+        self.assertEqual(len(self.events("BUILD_ATTEMPT_STARTED")), 1)
+        self.assertFalse(self.runner.invocations)
+        self.assertNotIn("codex_handoff", self.events("BUILD_ATTEMPT_STARTED")[0]["payload"])
+        later = controller.advance(self.prepared_id, advance_mode="ONE_ATTEMPT")
+        self.assertEqual(later["attempt_status"], "ACCEPTED")
+        self.assertEqual(later["budget"]["attempts_consumed"], 2)
+        self.assertNotEqual(later["attempt_id"], saved["attempt_id"])
+
+    def test_one_attempt_preflight_only_recovery_does_not_start_implementation(self):
+        self.plan["schema_version"] = "1.1"
+        self.plan["workpacks"][0]["environment"] = {"python": "python", "modules": ["json"], "paths": []}
+        self.prepare()
+        controller = self.controller()
+        execute = controller._execute_command
+        def interrupt_implementation(binding, prepared, invocation, revision):
+            if invocation["phase"] == "IMPLEMENTATION":
+                raise InjectedControllerCrash()
+            return execute(binding, prepared, invocation, revision)
+        with patch.object(controller, "_execute_command", side_effect=interrupt_implementation), \
+                self.assertRaises(InjectedControllerCrash):
+            controller.advance(self.prepared_id, advance_mode="ONE_ATTEMPT")
+        result = controller.advance(self.prepared_id, advance_mode="ONE_ATTEMPT")
+        self.assertEqual(result["attempt_status"], "NOT_DISPATCHED")
+        self.assertEqual(len(self.events("BUILD_ATTEMPT_STARTED")), 1)
+        self.assertEqual([row["phase"] for row in self.runner.invocations], ["PREFLIGHT"])
+
+    def test_one_attempt_missing_observation_remains_unknown_not_not_dispatched(self):
+        self.prepare()
+        self.runner.after_run = lambda *args: (_ for _ in ()).throw(InjectedControllerCrash())
+        controller = self.controller()
+        with self.assertRaises(InjectedControllerCrash):
+            controller.advance(self.prepared_id, advance_mode="ONE_ATTEMPT")
+        self.runner.after_run = None
+        result = controller.advance(self.prepared_id, advance_mode="ONE_ATTEMPT")
+        self.assertEqual(result["status"], "HELD_UNRESOLVED_ATTEMPT")
+        self.assertEqual(result["attempt_status"], "IN_FLIGHT")
+        self.assertEqual(len(self.runner.invocations), 1)
+        self.assertEqual(len(self.events("BUILD_ATTEMPT_STARTED")), 1)
+        self.assertFalse(self.events("BUILD_ATTEMPT_FINISHED"))
+
+    def test_one_attempt_recovery_completes_remaining_checks_only(self):
+        self.prepare()
+        controller = self.controller()
+        append = controller._append
+        def interrupt_before_inputs(kind, *args):
+            if kind == "BUILD_VERIFICATION_INPUTS":
+                raise InjectedControllerCrash()
+            return append(kind, *args)
+        with patch.object(controller, "_append", side_effect=interrupt_before_inputs), \
+                self.assertRaises(InjectedControllerCrash):
+            controller.advance(self.prepared_id, advance_mode="ONE_ATTEMPT")
+        self.assertEqual(len(self.runner.invocations), 1)
+        result = controller.advance(self.prepared_id, advance_mode="ONE_ATTEMPT")
+        self.assertEqual(result["status"], "BUILD_CONTROL_RETURNED")
+        self.assertEqual(result["attempt_status"], "ACCEPTED")
+        self.assertEqual([row["phase"] for row in self.runner.invocations],
+                         ["IMPLEMENTATION", "VERIFICATION", "VERIFICATION"])
+        self.assertEqual(len(self.events("BUILD_ATTEMPT_STARTED")), 1)
+        self.assertFalse((self.workspace / "outputs/summary.json").exists())
+
+    def _codex_fixture_runner(self, captured, *, first_bad=False):
+        self.plan["workpacks"][0]["executor"] = "CODEX"
+        self.plan["workpacks"][0].pop("local_argv")
+        self.scope.update(model="TEST-ONLY-NO-MODEL-CALL", allow_model_service=True)
+        local_runner = self.runner
+        def run(invocation, before_dispatch):
+            if invocation["executor"] != "CODEX":
+                return local_runner(invocation, before_dispatch)
+            before_dispatch()
+            captured.append(deepcopy(invocation))
+            (self.workspace / "src/reader.py").write_text(BAD_READER if first_bad and len(captured) == 1 else GOOD_READER)
+            return {"status": "MODEL_TURN_COMPLETED", "final_message": "TEST ONLY repair delta", "exit_code": 0}
+        return run
+
+    def test_codex_handoff_is_saved_once_and_only_sent_to_selected_implementation(self):
+        captured = []
+        runner = self._codex_fixture_runner(captured)
+        self.prepare()
+        handoff = {"workpack_id": "IMPLEMENT-READER", "basis_attempt_ids": [],
+                   "summary": "Issue count is 2; chosen method is a fresh hypothesis; summary sentinel."}
+        result = BuildController(self.store, self.program, runner=runner, clock=CLOCK).advance(
+            self.prepared_id, advance_mode="ONE_ATTEMPT", codex_handoff=handoff)
+        self.assertEqual(result["attempt_status"], "ACCEPTED")
+        self.assertEqual(self.events("BUILD_ATTEMPT_STARTED")[0]["payload"]["codex_handoff"], handoff)
+        context = json.loads(captured[0]["prompt"].split("\n", 1)[1])["task"]
+        self.assertEqual(context["codex_handoff"], handoff)
+        self.assertIn("outer Codex owns the cumulative issue record", captured[0]["prompt"])
+        self.assertIn("original Plan explicitly declares a valid replacement", captured[0]["prompt"])
+        self.assertIn("do not assume the old physical bytes remain available", captured[0]["prompt"])
+        for rule in (
+            "Use the received history and selected remaining allowance",
+            "Return normally after targeted reproduction and related regression",
+            "host runs independent acceptance after you return",
+            "do not loop on self-tests while waiting or count pending acceptance as success",
+            "stop that extra modification and return the gap",
+            "Native independent-assertion repair retains its assigned contract and host budget",
+        ):
+            self.assertIn(rule, captured[0]["prompt"])
+        self.assertTrue(all(handoff["summary"] not in item["prompt"] for item in self.runner.invocations))
+        for kind in ("BUILD_COMMAND_PLANNED", "BUILD_COMMAND_OBSERVED", "BUILD_VERIFICATION_INPUTS", "BUILD_ATTEMPT_FINISHED"):
+            self.assertTrue(all("codex_handoff" not in row["payload"] for row in self.events(kind)), kind)
+
+    def test_codex_handoff_reaches_routed_producer_from_failed_consumer(self):
+        self._upstream_repair_fixture()
+        captured = []
+        runner = self._codex_fixture_runner(captured, first_bad=True)
+        self.prepare()
+        controller = BuildController(self.store, self.program, runner=runner, clock=CLOCK)
+        controller.advance(self.prepared_id, advance_mode="ONE_ATTEMPT")
+        failure = controller.advance(self.prepared_id, advance_mode="ONE_ATTEMPT")
+        handoff = {"workpack_id": "IMPLEMENT-READER", "basis_attempt_ids": [failure["attempt_id"]],
+                   "summary": "Consumer failed once; fix reader row counting; this is the same issue."}
+        repaired = controller.advance(self.prepared_id, advance_mode="ONE_ATTEMPT", codex_handoff=handoff)
+        self.assertEqual(repaired["attempt_status"], "ACCEPTED", repaired)
+        self.assertEqual(repaired["workpack_id"], "IMPLEMENT-READER")
+        self.assertIn(handoff["summary"], captured[-1]["prompt"])
+        self.assertEqual(len(self.events("BUILD_ATTEMPT_STARTED")), 3)
+
+    def test_codex_handoff_mismatch_keeps_native_invalidation_without_dispatch(self):
+        self._upstream_repair_fixture()
+        captured = []
+        runner = self._codex_fixture_runner(captured, first_bad=True)
+        self.prepare()
+        controller = BuildController(self.store, self.program, runner=runner, clock=CLOCK)
+        controller.advance(self.prepared_id, advance_mode="ONE_ATTEMPT")
+        failure = controller.advance(self.prepared_id, advance_mode="ONE_ATTEMPT")
+        result = controller.advance(self.prepared_id, advance_mode="ONE_ATTEMPT", codex_handoff={
+            "workpack_id": "MAKE-REPORT", "basis_attempt_ids": [failure["attempt_id"]], "summary": "Wrong recipient"})
+        self.assertEqual(result["status"], "HELD_CODEX_HANDOFF")
+        self.assertEqual(len(self.events("BUILD_ACCEPTANCE_INVALIDATED")), 1)
+        self.assertEqual(len(self.events("BUILD_ATTEMPT_STARTED")), 2)
+        self.assertEqual(len(captured), 1)
+
+    def test_codex_handoff_rejects_foreign_prepared_basis_and_local_recipient(self):
+        captured = []
+        runner = self._codex_fixture_runner(captured)
+        self.prepare()
+        controller = BuildController(self.store, self.program, runner=runner, clock=CLOCK)
+        first = controller.advance(self.prepared_id, advance_mode="ONE_ATTEMPT")
+        local = controller.advance(self.prepared_id, advance_mode="ONE_ATTEMPT", codex_handoff={
+            "workpack_id": "MAKE-REPORT", "basis_attempt_ids": [first["attempt_id"]], "summary": "LOCAL has no model"})
+        self.assertEqual(local["status"], "HELD_CODEX_HANDOFF")
+        prepared = prepare_build_authorization(self.store, self.program, self.proposal_id, self.source_id,
+            self.scope, **self.kwargs("second-prepare"))
+        self.prepared_id = prepared["event_id"]
+        approve_build_authorization(self.store, self.program, self.prepared_id,
+            human_message_ref="TEST-FIXTURE-SECOND-SCOPE", **self.kwargs("second-approval"))
+        foreign = controller.advance(self.prepared_id, advance_mode="ONE_ATTEMPT", codex_handoff={
+            "workpack_id": "IMPLEMENT-READER", "basis_attempt_ids": [first["attempt_id"]], "summary": "Wrong prepared"})
+        self.assertEqual(foreign["status"], "HELD_CODEX_HANDOFF")
+        self.assertEqual(len(self.events("BUILD_ATTEMPT_STARTED")), 1)
+
+    def test_codex_handoff_preflight_failure_is_bound_but_not_delivered_to_model(self):
+        self.plan["schema_version"] = "1.1"
+        captured = []
+        runner = self._codex_fixture_runner(captured)
+        self.plan["workpacks"][0]["environment"] = {
+            "python": "python", "modules": ["test_missing_module_g2"], "paths": []}
+        self.prepare()
+        result = BuildController(self.store, self.program, runner=runner, clock=CLOCK).advance(
+            self.prepared_id, advance_mode="ONE_ATTEMPT", codex_handoff={
+                "workpack_id": "IMPLEMENT-READER", "basis_attempt_ids": [], "summary": "Do not report model delivery"})
+        self.assertEqual(result["status"], "HELD_COMMAND_FAILURE")
+        self.assertIn("codex_handoff", self.events("BUILD_ATTEMPT_STARTED")[0]["payload"])
+        self.assertFalse(captured)
+        self.assertTrue(all(row["payload"]["phase"] == "PREFLIGHT" for row in self.events("BUILD_COMMAND_OBSERVED")))
+
+    def test_one_attempt_rechecks_revocation_and_invalid_mode_does_not_dispatch(self):
+        self.prepare()
+        controller = self.controller()
+        self.assertEqual(controller.advance(self.prepared_id, advance_mode="WRONG")["status"], "BUILD_STOPPED")
+        self.assertFalse(self.events("BUILD_ATTEMPT_STARTED"))
+        first = controller.advance(self.prepared_id, advance_mode="ONE_ATTEMPT")
+        self.assertEqual(first["attempt_status"], "ACCEPTED")
+        revoke_build_authorization(self.store, self.program, self.prepared_id, **self.kwargs("revoke-step"))
+        stopped = controller.advance(self.prepared_id, advance_mode="ONE_ATTEMPT")
+        self.assertEqual(stopped["status"], "BUILD_STOPPED")
+        self.assertEqual(len(self.events("BUILD_ATTEMPT_STARTED")), 1)
+
+
+    def test_codex_handoff_recovery_preserves_saved_context_without_redelivery(self):
+        captured = []
+        runner = self._codex_fixture_runner(captured)
+        self.prepare()
+        controller = BuildController(self.store, self.program, runner=runner, clock=CLOCK)
+        original = {"workpack_id": "IMPLEMENT-READER", "basis_attempt_ids": [], "summary": "Original repair context"}
+        append = controller._append
+        def interrupt_before_inputs(kind, *args):
+            if kind == "BUILD_VERIFICATION_INPUTS":
+                raise InjectedControllerCrash()
+            return append(kind, *args)
+        with patch.object(controller, "_append", side_effect=interrupt_before_inputs), \
+                self.assertRaises(InjectedControllerCrash):
+            controller.advance(self.prepared_id, advance_mode="ONE_ATTEMPT", codex_handoff=original)
+        changed = {**original, "summary": "Later summary must stay unused"}
+        result = controller.advance(self.prepared_id, advance_mode="ONE_ATTEMPT", codex_handoff=changed)
+        self.assertEqual(result["attempt_status"], "ACCEPTED")
+        self.assertFalse(result["codex_handoff_used"])
+        self.assertEqual(len(captured), 1)
+        self.assertEqual(len(self.events("BUILD_ATTEMPT_STARTED")), 1)
+        self.assertEqual(self.events("BUILD_ATTEMPT_STARTED")[0]["payload"]["codex_handoff"], original)
+        self.assertNotIn(changed["summary"], json.dumps(self.events()))
+        self.assertTrue(all(original["summary"] not in row["prompt"] for row in self.runner.invocations))
+
+
+    def test_one_attempt_two_rejections_and_readback_do_not_dispatch_a_third(self):
+        from harness_foundry_factory.build_entrypoint import read_build
+        self.plan["workpacks"][0]["executor"] = "CODEX"
+        self.plan["workpacks"][0].pop("local_argv")
+        self.scope.update(model="TEST-ONLY-NO-MODEL-CALL", allow_model_service=True)
+        self.prepare()
+        captured = []
+        local_runner = self.runner
+        def no_progress(invocation, before_dispatch):
+            if invocation["executor"] != "CODEX":
+                return local_runner(invocation, before_dispatch)
+            before_dispatch()
+            captured.append(deepcopy(invocation))
+            if len(captured) == 1:
+                (self.workspace / "src/reader.py").write_text(BAD_READER)
+            return {"status": "MODEL_TURN_COMPLETED", "exit_code": 0,
+                    "final_message": "Round r1 failed; defect remains." if len(captured) == 1 else "Still looking."}
+        controller = BuildController(self.store, self.program, runner=no_progress, clock=CLOCK)
+        first = controller.advance(self.prepared_id, advance_mode="ONE_ATTEMPT")
+        original_bytes = (self.workspace / "src/reader.py").read_bytes()
+        second = controller.advance(self.prepared_id, advance_mode="ONE_ATTEMPT", codex_handoff={
+            "workpack_id": "IMPLEMENT-READER", "basis_attempt_ids": [first["attempt_id"]],
+            "summary": "r1 failed once; retain that round and recheck the same defect by a different method."})
+        self.assertEqual(first["attempt_status"], "REJECTED")
+        self.assertEqual(second["attempt_status"], "REJECTED")
+        self.assertEqual(original_bytes, (self.workspace / "src/reader.py").read_bytes())
+        before = self.store.database_path.read_bytes()
+        with patch.object(BuildController, "advance", side_effect=AssertionError("readback must not resume")), \
+                patch("harness_foundry_factory.process_observation.CommandObservation.recover",
+                      side_effect=AssertionError("readback must not recover commands")):
+            for _ in range(2):
+                view = read_build(self.store.database_path, self.program)
+                self.assertEqual(len(view["attempts"]), 2)
+                self.assertEqual(view["attempts"][0]["implementation_commands"][0]["final_message"],
+                                 "Round r1 failed; defect remains.")
+                self.assertEqual(view["attempts"][1]["implementation_commands"][0]["final_message"], "Still looking.")
+        self.assertEqual(before, self.store.database_path.read_bytes())
+        self.assertEqual(len(captured), 2)
+        self.assertEqual(second["budget"]["attempts_remaining"], 3)
+        # The fixture caller deliberately makes no third advance. This proves
+        # mechanical return/readback, not autonomous Codex judgment or counting.
+        self.assertFalse((self.workspace / "outputs/summary.json").exists())
+
+    def test_new_diagnosis_without_change_can_continue_with_bound_handoff(self):
+        self.plan["workpacks"][0]["executor"] = "CODEX"
+        self.plan["workpacks"][0].pop("local_argv")
+        self.scope.update(model="TEST-ONLY-NO-MODEL-CALL", allow_model_service=True)
+        self.prepare()
+        captured = []
+        local_runner = self.runner
+        def diagnose_then_fix(invocation, before_dispatch):
+            if invocation["executor"] != "CODEX":
+                return local_runner(invocation, before_dispatch)
+            before_dispatch()
+            captured.append(deepcopy(invocation))
+            path = self.workspace / "src/reader.py"
+            if len(captured) == 1:
+                path.write_text(BAD_READER)
+            elif len(captured) == 3:
+                path.write_text(GOOD_READER)
+            return {"status": "MODEL_TURN_COMPLETED", "exit_code": 0,
+                    "final_message": "Diagnostic evidence: empty input is not needed; ['1'] still returns zero rows."}
+        controller = BuildController(self.store, self.program, runner=diagnose_then_fix, clock=CLOCK)
+        initial = controller.advance(self.prepared_id, advance_mode="ONE_ATTEMPT")
+        original_bytes = (self.workspace / "src/reader.py").read_bytes()
+        diagnosed = controller.advance(self.prepared_id, advance_mode="ONE_ATTEMPT")
+        self.assertEqual(diagnosed["attempt_status"], "REJECTED")
+        self.assertEqual(original_bytes, (self.workspace / "src/reader.py").read_bytes())
+        handoff = {"workpack_id": "IMPLEMENT-READER", "basis_attempt_ids": [initial["attempt_id"], diagnosed["attempt_id"]],
+                   "summary": "New diagnostic: ['1'] also gives zero; exclude malformed-input handling. Prior r1 failure retained; diagnosis is not another product repair. Next method: count every row. Use original remaining budget."}
+        fixed = controller.advance(self.prepared_id, advance_mode="ONE_ATTEMPT", codex_handoff=handoff)
+        self.assertEqual(fixed["attempt_status"], "ACCEPTED", fixed)
+        self.assertEqual(fixed["budget"]["attempts_consumed"], 3)
+        self.assertEqual(len(captured), 3)
+        context = json.loads(captured[-1]["prompt"].split("\n", 1)[1])["task"]
+        self.assertEqual(context["codex_handoff"], handoff)
+        self.assertFalse((self.workspace / "outputs/summary.json").exists())
+
+
+class BuildRepairTests(unittest.TestCase):
+    """Confirmed findings use real control events and synthetic model outcomes."""
+
+    def setUp(self):
+        self.f = BuildRuntimeTests()
+        self.f.setUp()
+        self.addCleanup(self.f.doCleanups)
+        self.reader_text = GOOD_READER
+        self.captured = []
+        self.key = 0
+
+    def prepare(self, *, codex=True, total=10, per_task=5):
+        if codex:
+            first = self.f.plan["workpacks"][0]
+            first["executor"] = "CODEX"
+            first.pop("local_argv", None)
+        if any(task["executor"] == "CODEX" for task in self.f.plan["workpacks"]):
+            self.f.scope.update(model="TEST-NO-MODEL-CALL", allow_model_service=True)
+        self.f.scope.update(max_attempts=total, max_task_attempts=per_task)
+        self.f.prepare()
+        self.controller = BuildController(self.f.store, self.f.program, runner=self.runner, clock=CLOCK)
+        self.assertEqual(self.controller.advance(self.f.prepared_id)["status"], "PLAN_CHECKS_ACCEPTED")
+
+    def runner(self, invocation, before_dispatch):
+        if invocation["executor"] != "CODEX":
+            return self.f.runner(invocation, before_dispatch)
+        before_dispatch()
+        self.captured.append(deepcopy(invocation))
+        if invocation["workpack_id"] == "MAKE-REPORT":
+            (self.f.workspace / "outputs/summary.json").write_text(json.dumps({"rows": 3, "invalid": 2}))
+        else:
+            suffix = "# accepted replacement\n" if invocation["workpack_id"] == "READER-V2" else ""
+            (self.f.workspace / "src/reader.py").write_text(self.reader_text + suffix)
+        return {"status": "MODEL_TURN_COMPLETED", "final_message": "TEST ONLY incremental repair report", "exit_code": 0}
+
+    def state(self):
+        return self.controller._state(self.f.events(), self.f.prepared_id)
+
+    def request(self, *, artifacts=("READER-SOURCE",), origin=None):
+        self.key += 1
+        _, accepted = self.state()
+        owners = {artifact["artifact_id"]: task["workpack_id"] for task in self.f.plan["workpacks"]
+                  for artifact in task["artifacts"]}
+        request = {"program_id": self.f.program, "prepared_event_id": self.f.prepared_id,
+                   "expected_revision": len(self.f.events()), "idempotency_key": "G1-REQUEST-" + str(self.key),
+                   "targets": [{"artifact_id": artifact, "accepted_attempt_id": accepted[owners[artifact]]["attempt_id"]}
+                               for artifact in artifacts],
+                   "finding": {"requirement_refs": ["PROJECT-BRIEF:L1-L2"], "reason": "confirmed synthetic extra case",
+                               "evidence_refs": ["fixture counterexample"], "repair_goal": "repair and recheck this case"}}
+        if origin:
+            request["continuation_of"] = origin["event_id"]
+        return request
+
+    def repair(self, request=None, *, controller=None):
+        from harness_foundry_factory.build_repair import request_build_repair
+        return request_build_repair(controller or self.controller, request or self.request())
+
+    def step(self):
+        return self.controller.advance(self.f.prepared_id, advance_mode="ONE_ATTEMPT")
+
+    def rejected_without_mutation(self, request, message=None, *, exception=RequestValidationError):
+        before = self.f.events()
+        before_calls = len(self.captured) + len(self.f.runner.invocations)
+        with self.assertRaises(exception) as caught:
+            self.repair(request)
+        if message:
+            self.assertIn(message, str(caught.exception))
+        self.assertEqual(self.f.events(), before)
+        self.assertEqual(len(self.captured) + len(self.f.runner.invocations), before_calls)
+
+    def test_exact_replay_after_rebuild_and_expiry_never_invalidates_again(self):
+        self.prepare()
+        request = self.request()
+        original = self.repair(request)
+        self.assertEqual(self.controller.advance(self.f.prepared_id)["status"], "PLAN_CHECKS_ACCEPTED")
+        self.assertEqual(len(self.f.events("BUILD_ATTEMPT_STARTED")), 4)
+        expired = BuildController(self.f.store, self.f.program, runner=self.runner,
+                                  clock=lambda: datetime.fromisoformat("2026-09-19T00:00:00+00:00"))
+        before = self.f.events()
+        self.assertEqual(self.repair(request, controller=expired), original)
+        self.assertEqual(self.f.events(), before)
+        self.assertEqual(len(self.f.events("BUILD_ACCEPTANCE_INVALIDATED")), 1)
+        self.assertEqual(len(self.state()[1]), 2)
+        from harness_foundry_factory.build_types import IdempotencyConflictError
+        changed = deepcopy(request)
+        changed["finding"]["reason"] = "a different claim under the same key"
+        self.rejected_without_mutation(changed, exception=IdempotencyConflictError)
+
+    def test_stale_revision_target_and_byte_drift_do_not_invalidate(self):
+        from harness_foundry_factory.build_types import RevisionConflictError
+        self.prepare()
+        stale_revision = self.request()
+        stale_revision["expected_revision"] -= 1
+        self.rejected_without_mutation(stale_revision, exception=RevisionConflictError)
+        stale_target = self.request()
+        stale_target["targets"][0]["accepted_attempt_id"] = "not-the-current-attempt"
+        self.rejected_without_mutation(stale_target, "current accepted version")
+        path = self.f.workspace / "src/reader.py"
+        path.write_text(GOOD_READER + "# external drift\n")
+        self.rejected_without_mutation(self.request(), "bytes differ")
+        self.assertFalse(self.f.events("BUILD_ACCEPTANCE_INVALIDATED"))
+
+    def test_local_producer_is_explicit_gap_without_new_attempt(self):
+        self.prepare(codex=False)
+        self.rejected_without_mutation(self.request(), "LOCAL producer")
+        self.assertEqual(len(self.f.events("BUILD_ATTEMPT_STARTED")), 2)
+        self.assertEqual(len(self.state()[1]), 2)
+
+    def test_insufficient_total_or_task_budget_preserves_acceptance(self):
+        for total, per_task, reason in ((3, 4, "ATTEMPT_BUDGET_EXHAUSTED"),
+                                        (10, 1, "TASK_REPAIR_BUDGET_EXHAUSTED")):
+            with self.subTest(total=total, per_task=per_task):
+                case = BuildRepairTests()
+                case.setUp()
+                self.addCleanup(case.doCleanups)
+                case.prepare(total=total, per_task=per_task)
+                case.rejected_without_mutation(case.request(), reason)
+                self.assertEqual(len(case.state()[1]), 2)
+
+    def test_cas_conflict_does_not_commit_partial_invalidation(self):
+        from harness_foundry_factory.build_types import RevisionConflictError
+        self.prepare()
+        request = self.request()
+        append = self.f.store.append_batch
+        def concurrent_revoke(program, records, **kwargs):
+            append(program, [{"event_type": "BUILD_AUTHORIZATION_REVOKED",
+                              "payload": {"prepared_event_id": self.f.prepared_id}}],
+                   expected_revision=request["expected_revision"], idempotency_key="CONCURRENT-REVOKE", created_at=NOW)
+            return append(program, records, **kwargs)
+        with patch.object(self.f.store, "append_batch", side_effect=concurrent_revoke), \
+                self.assertRaises(RevisionConflictError):
+            self.repair(request)
+        self.assertEqual(len(self.f.events("BUILD_AUTHORIZATION_REVOKED")), 1)
+        self.assertFalse(self.f.events("BUILD_ACCEPTANCE_INVALIDATED"))
+        self.assertEqual(len(self.state()[1]), 2)
+        self.assertEqual(len(self.f.events("BUILD_ATTEMPT_STARTED")), 2)
+
+    def test_continuation_before_consumer_rebuild_counts_union_once(self):
+        # Spent=3; producer+consumer require exactly 2 more, not 3 because the
+        # invalidated consumer is both pending and in the new dependency closure.
+        self.prepare(total=5, per_task=3)
+        origin = self.repair()
+        self.assertEqual(self.step()["attempt_status"], "ACCEPTED")
+        attempts, accepted = self.state()
+        self.assertEqual(set(accepted), {"IMPLEMENT-READER"})
+        self.assertEqual(list(attempts.values())[1]["status"], "INVALIDATED")
+        continuation = self.repair(self.request(origin=origin))
+        self.assertEqual(continuation["payload"]["workpack_ids"], ["IMPLEMENT-READER", "MAKE-REPORT"])
+        self.assertEqual(len(self.f.events("BUILD_ATTEMPT_STARTED")), 3)
+        self.assertEqual(self.controller.advance(self.f.prepared_id)["status"], "PLAN_CHECKS_ACCEPTED")
+        self.assertEqual(len(self.f.events("BUILD_ATTEMPT_STARTED")), 5)
+
+    def _recover_undispatched_consumer(self, *, preflight=False, total=6, per_task=3):
+        if preflight:
+            self.f.plan["schema_version"] = "1.1"
+            self.f.plan["workpacks"][1]["environment"] = {"python": "python", "modules": ["json"], "paths": []}
+        self.prepare(total=total, per_task=per_task)
+        origin = self.repair()
+        self.assertEqual(self.step()["workpack_id"], "IMPLEMENT-READER")
+        execute = self.controller._execute_command
+        def interrupt_implementation(binding, prepared, invocation, revision):
+            if invocation["phase"] == "IMPLEMENTATION":
+                raise InjectedControllerCrash()
+            return execute(binding, prepared, invocation, revision)
+        with patch.object(self.controller, "_execute_command", side_effect=interrupt_implementation), \
+                self.assertRaises(InjectedControllerCrash):
+            self.step()
+        # A missing observation alone never grants continuation eligibility.
+        self.rejected_without_mutation(self.request(origin=origin), "unresolved attempts")
+        recovered = self.step()
+        self.assertEqual(recovered["attempt_status"], "NOT_DISPATCHED")
+        self.assertEqual(recovered["workpack_id"], "MAKE-REPORT")
+        self.assertEqual(recovered["budget"]["attempts_consumed"], 4)
+        self.assertEqual(recovered["budget"]["attempts_remaining"], total - 4)
+        self.assertEqual(recovered["budget"]["task_attempts_consumed"], {"IMPLEMENT-READER": 2, "MAKE-REPORT": 2})
+        self.assertFalse(recovered["budget"]["reset"])
+        return origin, recovered
+
+    def _continue_after_undispatched_consumer(self, *, preflight):
+        origin, recovered = self._recover_undispatched_consumer(preflight=preflight)
+        request = self.request(origin=origin)
+        event = self.repair(request)
+        before = self.f.events()
+        self.assertEqual(self.repair(request), event)
+        self.assertEqual(self.f.events(), before)
+        self.assertEqual(len(self.f.events("BUILD_ATTEMPT_STARTED")), 4)
+        self.assertEqual(self.state()[0][recovered["attempt_id"]]["status"], "NOT_DISPATCHED")
+        # Repair A before dispatching B, counting B once despite being both
+        # pending and a dependent of A; the interrupted attempt is not refunded.
+        repaired = self.step()
+        self.assertEqual((repaired["workpack_id"], repaired["attempt_status"]), ("IMPLEMENT-READER", "ACCEPTED"))
+        rebuilt = self.step()
+        self.assertEqual((rebuilt["workpack_id"], rebuilt["attempt_status"]), ("MAKE-REPORT", "ACCEPTED"))
+        self.assertEqual(rebuilt["budget"]["attempts_consumed"], 6)
+        self.assertEqual(rebuilt["budget"]["task_attempts_consumed"], {"IMPLEMENT-READER": 3, "MAKE-REPORT": 3})
+        self.assertEqual(self.step()["status"], "PLAN_CHECKS_ACCEPTED")
+        self.assertEqual(len(self.f.events("BUILD_ATTEMPT_STARTED")), 6)
+
+    def test_continuation_after_no_intent_recovery_repairs_producer_first(self):
+        self._continue_after_undispatched_consumer(preflight=False)
+
+    def test_continuation_after_preflight_only_recovery_repairs_producer_first(self):
+        self._continue_after_undispatched_consumer(preflight=True)
+
+    def test_undispatched_continuation_preserves_total_attempt_consumption(self):
+        origin, _ = self._recover_undispatched_consumer(total=5)
+        self.rejected_without_mutation(self.request(origin=origin), "ATTEMPT_BUDGET_EXHAUSTED")
+
+    def test_undispatched_continuation_preserves_task_attempt_consumption(self):
+        origin, _ = self._recover_undispatched_consumer(per_task=2)
+        self.rejected_without_mutation(self.request(origin=origin), "TASK_REPAIR_BUDGET_EXHAUSTED")
+
+    def _independent_producers(self):
+        consumer = self.f.plan["workpacks"][1]
+        consumer.update(executor="CODEX", depends_on=[], inputs=[{"kind": "SOURCE", "id": "PROJECT-BRIEF"}])
+        consumer.pop("local_argv")
+
+    def test_continuation_counts_unrebuilt_original_producer_even_outside_new_closure(self):
+        self._independent_producers()
+        self.prepare(total=4, per_task=3)
+        origin = self.repair(self.request(artifacts=("READER-SOURCE", "SUMMARY")))
+        self.assertEqual(self.step()["workpack_id"], "IMPLEMENT-READER")
+        self.rejected_without_mutation(self.request(origin=origin), "ATTEMPT_BUDGET_EXHAUSTED")
+        # Omitting MAKE-REPORT from the pending budget would incorrectly admit
+        # this request at spent 3 / total 4, leaving no budget to rebuild it.
+        self.assertEqual(len(self.state()[1]), 1)
+        self.assertEqual(len(self.f.events("BUILD_ACCEPTANCE_INVALIDATED")), 1)
+
+    def test_continuation_allows_other_original_producer_with_enough_budget(self):
+        self._independent_producers()
+        self.prepare(total=5, per_task=3)
+        origin = self.repair(self.request(artifacts=("READER-SOURCE", "SUMMARY")))
+        self.step()
+        event = self.repair(self.request(origin=origin))
+        self.assertEqual(event["payload"]["workpack_ids"], ["IMPLEMENT-READER"])
+        self.assertEqual(self.controller.advance(self.f.prepared_id)["status"], "PLAN_CHECKS_ACCEPTED")
+        self.assertEqual(len(self.f.events("BUILD_ATTEMPT_STARTED")), 5)
+
+    def _consumer_failure(self):
+        self.f._upstream_repair_fixture()
+        self.prepare(total=12, per_task=6)
+        origin = self.repair()
+        self.reader_text = BAD_READER
+        self.assertEqual(self.step()["attempt_status"], "ACCEPTED")
+        failed = self.step()
+        self.assertEqual(failed["attempt_status"], "REJECTED")
+        self.assertEqual(failed["workpack_id"], "MAKE-REPORT")
+        return origin, failed
+
+    def test_unhandled_consumer_failure_cannot_be_overwritten_by_g1(self):
+        origin, _ = self._consumer_failure()
+        self.rejected_without_mutation(self.request(origin=origin), "latest unaccepted attempt")
+        self.assertEqual(len(self.f.events("BUILD_ACCEPTANCE_INVALIDATED")), 1)
+
+    def test_latest_native_routed_rejected_consumer_is_valid_pending_rebuild(self):
+        origin, failed = self._consumer_failure()
+        self.reader_text = GOOD_READER
+        self.assertEqual(self.step()["workpack_id"], "IMPLEMENT-READER")
+        attempts, accepted = self.state()
+        self.assertEqual(attempts[failed["attempt_id"]]["status"], "REJECTED")
+        native = self.f.events("BUILD_ACCEPTANCE_INVALIDATED")[-1]["payload"]
+        self.assertEqual(native["failed_attempt_id"], failed["attempt_id"])
+        self.assertEqual(native["prepared_event_id"], self.f.prepared_id)
+        self.assertEqual(set(accepted), {"IMPLEMENT-READER"})
+        self.repair(self.request(origin=origin))
+        self.assertEqual(self.controller.advance(self.f.prepared_id)["status"], "PLAN_CHECKS_ACCEPTED")
+        self.assertEqual(len(self.f.events("BUILD_ATTEMPT_STARTED")), 7)
+
+    def test_old_handled_failure_does_not_cover_latest_unhandled_failure(self):
+        origin, old_failed = self._consumer_failure()
+        self.assertEqual(self.step()["workpack_id"], "IMPLEMENT-READER")
+        new_failed = self.step()
+        self.assertEqual(new_failed["attempt_status"], "REJECTED")
+        self.assertNotEqual(old_failed["attempt_id"], new_failed["attempt_id"])
+        self.assertEqual(self.f.events("BUILD_ACCEPTANCE_INVALIDATED")[-1]["payload"]["failed_attempt_id"],
+                         old_failed["attempt_id"])
+        self.rejected_without_mutation(self.request(origin=origin), "latest unaccepted attempt")
+
+    def test_other_prepared_handling_event_does_not_acknowledge_current_failure(self):
+        origin, failed = self._consumer_failure()
+        other = prepare_build_authorization(self.f.store, self.f.program, self.f.proposal_id, self.f.source_id,
+                                           self.f.scope, **self.f.kwargs("OTHER-PREPARED"))
+        # Explicit competing-scope fixture event: its failure ID alone must not
+        # be used as acknowledgement in this request's prepared stream.
+        self.f.store.append_batch(self.f.program, [{"event_type": "BUILD_ACCEPTANCE_INVALIDATED", "payload": {
+            "prepared_event_id": other["event_id"], "reason": "INDEPENDENT_ARTIFACT_REPAIR_REQUIRED",
+            "failed_attempt_id": failed["attempt_id"], "workpack_ids": ["IMPLEMENT-READER", "MAKE-REPORT"],
+            "budget_reset": False, "files_deleted": False}}], **self.f.kwargs("OTHER-HANDLED"))
+        self.rejected_without_mutation(self.request(origin=origin), "latest unaccepted attempt")
+
+    def test_unresolved_overlapping_scope_blocks_new_repair(self):
+        self.prepare()
+        other = prepare_build_authorization(self.f.store, self.f.program, self.f.proposal_id, self.f.source_id,
+                                           self.f.scope, **self.f.kwargs("OTHER-PREPARED"))
+        approve_build_authorization(self.f.store, self.f.program, other["event_id"], human_message_ref="TEST ONLY",
+                                    **self.f.kwargs("OTHER-APPROVED"))
+        def unknown(invocation, before_dispatch):
+            before_dispatch()
+            return {"status": "UNKNOWN_SIDE_EFFECT", "reason_code": "TEST OBSERVATION LOST"}
+        controller = BuildController(self.f.store, self.f.program, runner=unknown, clock=CLOCK)
+        self.assertEqual(controller.advance(other["event_id"])["status"], "HELD_UNRESOLVED_ATTEMPT")
+        self.rejected_without_mutation(self.request(), "unresolved attempts")
+
+    def test_repair_of_replacement_cannot_reuse_consumed_input_version(self):
+        replacement = deepcopy(self.f.plan["workpacks"][0])
+        replacement.update(workpack_id="READER-V2", job_id="READER-V2", executor="CODEX", depends_on=["MAKE-REPORT"],
+                           inputs=[{"kind": "ARTIFACT", "id": "READER-SOURCE"}],
+                           artifacts=[{"artifact_id": "READER-V2", "path": "src/reader.py", "replaces_artifact_id": "READER-SOURCE"}])
+        replacement.pop("local_argv")
+        for check in replacement["verification"]:
+            check["artifact_ids"] = ["READER-V2"]
+        self.f.plan["workpacks"].append(replacement)
+        self.f.scope["task_write_roots"]["READER-V2"] = ["src"]
+        self.prepare()
+        self.rejected_without_mutation(self.request(artifacts=("READER-V2",)), "consumed artifact version")
+        self.assertEqual(len(self.state()[1]), 3)
+        self.assertFalse(self.f.events("BUILD_ACCEPTANCE_INVALIDATED"))
+
 if __name__ == "__main__":
     unittest.main()

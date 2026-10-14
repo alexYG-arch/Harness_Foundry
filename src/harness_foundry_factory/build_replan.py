@@ -27,7 +27,7 @@ def adapt_build_plan(original, current, scope, started_tasks=()):
 
     Both plans have already passed independent Plan validation. Preserve every
     declared output, its Job/executor, and every exact Case command/artifact
-    binding. A merge is possible only across identical approved write scopes.
+    binding, including the resource profile in Plan 1.2. A merge is possible only across identical approved write scopes.
     Splits may introduce dependencies between the original task's own outputs;
     external source/artifact reads and approved ordering cannot be widened.
     """
@@ -49,7 +49,7 @@ def adapt_build_plan(original, current, scope, started_tasks=()):
     def checks(plan):
         return Counter(canonical_json(check) for task in plan["workpacks"] for check in task["verification"])
 
-    _check(checks(original) == checks(current), "acceptance command or artifact binding changed outside approval")
+    _check(checks(original) == checks(current), "acceptance command, artifact or resource binding changed outside approval")
     owners, writes, replacements = {}, {}, {key: set() for key in old_tasks}
     for key, task in new_tasks.items():
         parents = sorted({old_outputs[item["artifact_id"]][1]["workpack_id"] for item in task["artifacts"]})

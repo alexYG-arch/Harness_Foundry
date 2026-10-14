@@ -54,6 +54,17 @@ class RevisionControlStoreTests(unittest.TestCase):
             self.append(require_new=True)
         self.assertEqual(len(self.store.list_events("DATA")), 2)
 
+    def test_idempotent_lookup_is_readonly_scoped_and_returns_original_events(self):
+        self.assertIsNone(self.store._idempotent_events("DATA", "request-1"))
+        first = self.append()
+        self.append(1, "request-2")
+        readonly = ControlEventStore(self.path, storage_format="REVISION_V1", read_only=True)
+        self.assertEqual(readonly._idempotent_events("DATA", "request-1"), first)
+        self.assertIsNone(readonly._idempotent_events("OTHER", "request-1"))
+        first[0]["payload"]["value"] = "local mutation"
+        self.assertEqual(readonly._idempotent_events("DATA", "request-1")[0]["payload"], {"value": 1})
+        self.assertEqual(len(readonly.list_events("DATA")), 2)
+
     def test_idempotency_preserves_content_and_json_types(self):
         self.append()
         for changed in ({"value": 2}, {"value": True}, {"value": 1.0}):
