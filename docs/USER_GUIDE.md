@@ -3,8 +3,8 @@
 这份指南面向希望用 Codex 为自己的项目搭建 Harness 的使用者。
 运行包、案例需求和本文说明不自动启动任务；先确认要做什么，再批准具体执行范围。
 
-当前源码为 **0.5.0 发行准备版**，协议仍为 **2.9**；最新稳定下载仍是 **v0.4.0**。
-本文区分稳定包与候选源码。资源接入和续修功能使用 v0.5.0 候选包；旧版 tag、Release 和附件保持不变。
+当前稳定版为 **0.5.0**，于 **2026-10-15** 发布，协议仍为 **2.9**。
+资源接入和续修功能已进入 v0.5.0 运行包；旧版 tag、Release 和附件保持不变。
 
 ## Foundry 与 Harness 的关系
 
@@ -71,14 +71,20 @@ Windows 也不是本版已支持的同等执行环境。不要为了启动而关
 
 ### 1. 获取运行包
 
-稳定使用打开 [v0.4.0 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.4.0)，
-下载 Assets 中的 `Harness-Foundry-0.4.0-generic.zip`，保留隐藏的 `.agents/` 目录完整解压。
-旧 [v0.3.0 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.3.0) 和
+打开 [v0.5.0 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.5.0)，
+下载 Assets 中的 `Harness-Foundry-0.5.0-generic.zip` 和 `SHA256SUMS`，
+保留隐藏的 `.agents/` 目录完整解压。
+旧 [v0.4.0 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.4.0)、
+[v0.3.0 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.3.0) 和
 [v0.2.0 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.2.0)
 及各自的 ZIP、SHA256SUMS 继续保留，不覆盖替换。
 
-v0.5.0 仍在发行准备；候选包名称为 `Harness-Foundry-0.5.0-generic.zip`。
-仅从明确给出的候选文件或正式 Release 获取，不把源码工作区与候选包当成同一个受检版本。
+本次发布直接复用已验收原 ZIP，来自固定提交 `a8312c65a21b3fb82175e7908611d49be422da7e`。
+从 Release 下载后的 SHA-256 应为
+`def7d377c5115bc55ea0992b26345bcea9fe42e7a0c9ba23cfcfe584b1be6127`。
+正式下载包已核对 53 个文件，并通过隔离 version/help 加载复验。
+包内准备阶段措辞属于冻结构建记录，当前发布事实以本指南和 Release 页面为准；
+不要因为措辞而替换包内文件或把任意源码工作区当成相同受检版本。
 
 不要把 GitHub 自动生成的 Source code ZIP/TAR 当成运行包：
 它们包含开发源码、历史模块和工程资料，面向维护者。
@@ -95,10 +101,10 @@ python3 tools/hffactory.py version --json
 python3 tools/hffactory.py --help
 ```
 
-v0.5.0 候选包应输出 `implementation_version: 0.5.0`，v0.4.0 稳定包仍输出 `0.4.0`；
+v0.5.0 运行包应输出 `implementation_version: 0.5.0`，v0.4.0 历史包仍输出 `0.4.0`；
 两者的 `product_route` 均为 `GENERIC_REVIEWED_BUILD`，协议均为 `2.9`。
 这两条命令不会创建业务工程或调用模型。旧 v0.3.0、v0.2.0 包保持各自的版本。
-本轮功能与准备进度见[v0.5.0 发行准备说明](releases/v0.5.0.md)，
+本轮功能、发布来源与检查依据见[v0.5.0 发布说明](releases/v0.5.0.md)，
 既有稳定版记录见[v0.4.0 发布说明](releases/v0.4.0.md)。
 
 ### 3. 准备材料并发起需求

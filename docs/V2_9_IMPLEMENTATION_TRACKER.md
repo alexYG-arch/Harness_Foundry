@@ -1,5 +1,29 @@
 # Harness Foundry v2.9 Implementation Tracker
 
+## 2026-10-15 v0.5.0 已发布与下载复验
+
+产品版本 **0.5.0**，协议保持 **2.9**。[v0.5.0 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.5.0)
+正式发布，tag 与通用运行 ZIP 均绑定提交
+[`a8312c65a21b3fb82175e7908611d49be422da7e`](https://github.com/alexYG-arch/Harness_Foundry/commit/a8312c65a21b3fb82175e7908611d49be422da7e)。
+该提交的 [main CI #38668881367](https://github.com/alexYG-arch/Harness_Foundry/actions/runs/38668881367) 和
+[tag CI #38669156738](https://github.com/alexYG-arch/Harness_Foundry/actions/runs/38669156738) 均已通过；这些结果不由旧版 CI 推定。
+
+本次直接上传已验收的原 `Harness-Foundry-0.5.0-generic.zip` 与 `SHA256SUMS`，
+没有重新装配或改写包内文件。Release 下载复验确认 ZIP 完整、**53 文件**、
+SHA-256 为 `def7d377c5115bc55ea0992b26345bcea9fe42e7a0c9ba23cfcfe584b1be6127`，并通过隔离 version/help 加载；
+下载件与本地已验收原包一致。
+
+此前同包的 6 项安装位置资源检查、受控 G1/G2/Q18 模型观察和源码检查范围保持原义。
+G2 无进展交回与全局调用上限同时发生，不将其写成已排除预算因素的自主停止因果；
+Q18 后继是独立 Codex 调用，不能扩大为完整跨 Program 验收。
+包内准备阶段措辞和来源提交的 `UNRELEASED` 元数据保留为冻结构建记录，
+当前发布事实以公开指南和 Release 页面为准。
+
+本轮发布后只同步 README、使用指南、本发布说明和 Tracker 四份非打包公开文档，
+不移动 v0.5.0 tag，不替换 ZIP，不将后续文档提交冒充已验收运行包来源。
+既有 v0.4.0 及更早版本保持原样；本地运行证据、内部草稿和项目数据不进入发布附件。
+下方“发行准备”“未发布”“当前交付状态”等描述均属于各条目的历史时点。
+
 ## 2026-10-14 v0.5.0 发行准备
 
 当前源码版本统一为 **0.5.0**，协议保持 **2.9**，Manifest 标记 `UNRELEASED`。

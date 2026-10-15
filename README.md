@@ -7,14 +7,14 @@ Foundry 是搭建工具，不是另一套模型，也不是固定行业流水线
 Foundry 管理输入输出约定、任务依赖、运行权限、独立检查和进度记录。确定性步骤可由本地 Python 等程序执行。
 搭建 Harness 与完成业务应用是两件事；如果希望一并开发应用，需要在搭建文档和运行范围中写明。
 
-[下载当前稳定版 v0.4.0](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.4.0) ·
+[下载 v0.5.0](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.5.0) ·
 [完整使用指南](docs/USER_GUIDE.md) ·
 [案例说明](docs/USER_GUIDE.md#案例说明) ·
 [问题反馈](https://github.com/alexYG-arch/Harness_Foundry/issues)
 
-**当前源码为 v0.5.0 发行准备版，尚未发布；最新稳定版仍为 v0.4.0。** 协议版本保持 **2.9**，
+**v0.5.0 已于 2026-10-15 发布，发布提交的 main 与 tag CI 已通过。** 协议版本保持 **2.9**，
 采用 [MIT](LICENSE) 许可。既有 tag、Release 和下载包原样保留。
-本轮检查与发布进度见[工程记录](docs/V2_9_IMPLEMENTATION_TRACKER.md)。
+本轮发布来源、检查和下载复验见[工程记录](docs/V2_9_IMPLEMENTATION_TRACKER.md)。
 
 ## v0.5.0 · 验收资源与有依据的续修
 
@@ -24,7 +24,7 @@ Foundry 管理输入输出约定、任务依赖、运行权限、独立检查和
 - **核实额外问题后继续修复。** 外层 Codex 负责核实、去重和停止判断；Harness 提供受控返修与单次交回，继续负责预算和独立验收。
 
 默认离线流程保持兼容；只有项目需要时才声明额外资源。详细变化见
-[v0.5.0 发行准备说明](docs/releases/v0.5.0.md)。原有清晰表达、`read-build --human` 和 JSON 接口保持。
+[v0.5.0 发布说明](docs/releases/v0.5.0.md)。原有清晰表达、`read-build --human` 和 JSON 接口保持。
 
 ## 适合什么场景
 
@@ -41,12 +41,13 @@ Foundry 管理输入输出约定、任务依赖、运行权限、独立检查和
 
 ### 1. 下载并打开
 
-当前稳定使用请在 v0.4.0 Release 的 Assets 中下载 `Harness-Foundry-0.4.0-generic.zip`。
-v0.5.0 候选包完成验证并正式发布后再提供下载。下载后，
+在 v0.5.0 Release 的 Assets 中下载 `Harness-Foundry-0.5.0-generic.zip` 和 `SHA256SUMS`。
+下载后，
 保留隐藏的 `.agents/` 目录，解压到普通独立项目目录，并用 Codex 打开该目录。
 
 请使用这个通用运行包，而不是 GitHub 自动生成的 `Source code.zip`。
 不用安装为全局 Skill，也不需要把整个开发仓库复制到你的业务项目。
+本次复用已验收的原 ZIP；包内准备阶段措辞是冻结构建记录，当前发布信息以本指南和 Release 页面为准。
 
 ### 2. 检查环境
 
@@ -99,7 +100,7 @@ python3 tools/hffactory.py --help
 - **已有项目：CSV 增量。** 为已有 CSV 汇总工具增加必填列检查，保留原命令、API、测试和用户笔记。
   [查看项目说明](examples/csv-increment/PROJECT_BRIEF.md)。
 - **验收资源接入。** 用临时文件、SQLite 和产品副本运行独立检查，按需启用本机 HTTP。
-  [查看接入示例](examples/resource-check/README.md)。此示例随 v0.5.0 候选源码提供。
+  [查看接入示例](examples/resource-check/README.md)。此示例随 v0.5.0 运行包提供。
 
 `examples/` 提供的是需求和起始代码，不是已搭建好的业务程序；案例中的具体用法和预期产物见
 [案例说明](docs/USER_GUIDE.md#案例说明)。
@@ -107,8 +108,12 @@ python3 tools/hffactory.py --help
 ## 验证与发行进度
 
 v0.5.0 本地完整回归 **1197/1197**、公开源码检查 **438/438** 通过，均无跳过、失败或错误。
-同一候选包完成 **6 项安装位置资源检查**及真实 Codex 的受控续修、单次交回和报告交接场景。
-规范与 Skill 检查通过。当前仍为发行准备版，具体检查范围见[工程记录](docs/V2_9_IMPLEMENTATION_TRACKER.md)。
+本次发行的同一 ZIP 完成 **6 项安装位置资源检查**及真实 Codex 的受控续修、单次交回和报告交接场景。
+规范与 Skill 检查通过。tag 与运行包来源为提交
+[`a8312c6`](https://github.com/alexYG-arch/Harness_Foundry/commit/a8312c65a21b3fb82175e7908611d49be422da7e)；
+该提交的 [main CI](https://github.com/alexYG-arch/Harness_Foundry/actions/runs/38668881367) 和 [tag CI](https://github.com/alexYG-arch/Harness_Foundry/actions/runs/38669156738) 均已通过。
+Release 下载复验确认 **53 文件**，ZIP SHA-256 与已验收原包一致；隔离环境的 version/help 加载通过。
+具体检查范围及完整校验值见[v0.5.0 发布说明](docs/releases/v0.5.0.md)。
 
 以下为 v0.4.0 的历史发行记录，不代替本轮验证。v0.4.0 于 **2026-10-13** 发布，tag 和运行包均来自提交
 [`c7c8b8e`](https://github.com/alexYG-arch/Harness_Foundry/commit/c7c8b8ed0a81e904f5baa42538f1f4b4b6829eaa)。
@@ -128,8 +133,8 @@ v0.5.0 本地完整回归 **1197/1197**、公开源码检查 **438/438** 通过�
 ## 更新记录与支持
 
 - [使用指南](docs/USER_GUIDE.md)：接入、依赖、案例、继续工作和常见问题。
-- [v0.5.0 发行准备说明](docs/releases/v0.5.0.md)：资源接入、续修与候选包准备。
-- [v0.4.0 发布说明](docs/releases/v0.4.0.md)：当前稳定版的增量、下载和检查依据。
+- [v0.5.0 发布说明](docs/releases/v0.5.0.md)：资源接入、续修、下载与检查依据。
+- [v0.4.0 发布说明](docs/releases/v0.4.0.md)：上一稳定版的增量、下载和检查依据。
 - [v0.3.0 历史说明](docs/releases/v0.3.0.md)：保留上一版及其下载包。
 - [v0.2.0 历史说明](docs/releases/v0.2.0.md)：保留旧版本的能力、下载和兼容性记录。
 - [2026-10-10 升级说明](docs/FOUNDRY_UPGRADE_2026_10_10.md)：验收前置、环境预检、输入交接和失败处理；已纳入 v0.3.0。
