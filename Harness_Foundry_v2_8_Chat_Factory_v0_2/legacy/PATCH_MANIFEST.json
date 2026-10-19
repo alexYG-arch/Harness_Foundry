@@ -1,0 +1,11 @@
+{
+  "schema_version": "1.0",
+  "source_repository": "/Users/guoxiaopang/Documents/Project/Harness_Foundry_v2_8_Chat_Factory_v0_1",
+  "source_file": "src/harness_foundry_factory/validator.py",
+  "patch_ref": "patches/v0_1_validator_uncommitted.patch",
+  "patch_sha256": "a4ac0ec980617486ee6b3546536e1a0805b1528f84ca5dd101911c5d0c054a47",
+  "disposition": "READ_ONLY_LEGACY_MIGRATION_INPUT_NOT_FACTORY_CORE",
+  "source_worktree_was_dirty": true,
+  "source_worktree_mutated_by_v0_2_implementation": false,
+  "source_diff_insertions": 722
+}

@@ -1,0 +1,126 @@
+{
+  "program_id": "PROGRAM-REFERENCE-HARNESS",
+  "target": {
+    "id": "REFERENCE-HARNESS",
+    "name": "Reference Harness",
+    "type": "HARNESS",
+    "profile": "FULL",
+    "output_root": "/tmp/hf-factory-reference-output",
+    "mission": "Build a reference multi-stage coding Harness whose installed runtime is distinct from its Build Program Driver.",
+    "scope": [
+      "Define a deterministic multi-stage runtime contract",
+      "Require independent Lab conformance and read-only Linkage review",
+      "Preserve phase order and repair routing"
+    ],
+    "non_goals": [
+      "Execute the generated Workpacks during authoring",
+      "Install the final Harness during authoring"
+    ],
+    "primary_runtime": "Codex"
+  },
+  "sources": [
+    {
+      "source_id": "SRC-CHAT-001",
+      "path_or_uri": "chat://reference/thread-1/turn-1",
+      "sha256": "aa5f7f0f12de3cbb7391bd3f48e4bbbf67d60667aa6c6907ee76075b35594633",
+      "authority_level": "HUMAN_APPROVED",
+      "scope": "Reference Harness mission and safety boundaries",
+      "loaded_completely": true
+    }
+  ],
+  "atoms": [
+    {
+      "atom_id": "ATOM-001",
+      "source_id": "SRC-CHAT-001",
+      "source_locator": "turn-1#mission",
+      "text_or_lossless_paraphrase": "The final Harness runtime and Build Program Driver must be separate entrypoints.",
+      "modality": "MUST",
+      "qualifiers": [],
+      "order_constraints": [],
+      "units": [],
+      "defaults": [],
+      "error_semantics": ["Reject source or Driver fallback"],
+      "cancel_retry_timeout": [],
+      "compatibility_constraints": [],
+      "explicit_non_goals": [],
+      "owner": "MAIN_HARNESS_BUILD",
+      "verification_mode": "RUNTIME_EVIDENCE",
+      "status": "PLANNED_NOT_VERIFIED"
+    },
+    {
+      "atom_id": "ATOM-002",
+      "source_id": "SRC-CHAT-001",
+      "source_locator": "turn-1#phase-order",
+      "text_or_lossless_paraphrase": "P4 must not be reached without a current P3 lock or approved P3 not-applicable lock and C3 evidence.",
+      "modality": "MUST",
+      "qualifiers": [],
+      "order_constraints": ["P2", "P3", "P4"],
+      "units": [],
+      "defaults": [],
+      "error_semantics": ["ILLEGAL_PHASE_TRANSITION"],
+      "cancel_retry_timeout": [],
+      "compatibility_constraints": [],
+      "explicit_non_goals": [],
+      "owner": "BUILD_PROGRAM_DRIVER",
+      "verification_mode": "SCHEMA",
+      "status": "PLANNED_NOT_VERIFIED"
+    }
+  ],
+  "acceptance_cases": [
+    {
+      "case_id": "AC-001",
+      "atom_ids": ["ATOM-001"],
+      "description": "Installed entrypoint origin is independent from the Driver and source tree.",
+      "evidence_type": "INSTALLED_TARGET_DESCRIPTOR"
+    },
+    {
+      "case_id": "AC-002",
+      "atom_ids": ["ATOM-002"],
+      "description": "The machine DAG rejects a P2 to P4 transition without current P3 and C3 evidence.",
+      "evidence_type": "PHASE_TRANSITION_VALIDATION"
+    }
+  ],
+  "negative_cases": [
+    {
+      "case_id": "NEG-001",
+      "atom_ids": ["ATOM-001"],
+      "description": "A Python-created self-report cannot prove that Codex ran.",
+      "expected_failure": "INVOCATION_UNVERIFIED"
+    },
+    {
+      "case_id": "NEG-002",
+      "atom_ids": ["ATOM-002"],
+      "description": "P1, P2 and P4 locks without P3 must be rejected.",
+      "expected_failure": "ILLEGAL_PHASE_TRANSITION"
+    }
+  ],
+  "assumptions": [],
+  "open_questions": [],
+  "decisions": [
+    {
+      "decision_id": "DEC-001",
+      "decision": "Use the FULL profile.",
+      "status": "CONFIRMED"
+    }
+  ],
+  "user_adjustments": [],
+  "automation": {
+    "schema_version": "1.0",
+    "requested_level": "A3_PROGRAM_BOUNDED",
+    "activation_default": "DISABLED",
+    "max_transitions": 32,
+    "max_loop_rounds": 3,
+    "max_wall_time_seconds": 7200,
+    "stop_gate": "P4_CERTIFIED_RELEASE_LOCK",
+    "retryable_error_codes": ["RUNNER_TRANSPORT_TEMPORARY_FAILURE"],
+    "mandatory_human_gate_ids": [
+      "START_PACKAGE_HUMAN_APPROVAL",
+      "P3_NOT_APPLICABLE_DECISION",
+      "REAL_TARGET_INSTALL"
+    ],
+    "real_target_install_excluded": true,
+    "execution_mode": "AUTHORING_ONLY",
+    "auto_start_generated_workpacks": false,
+    "execution_started": false
+  }
+}
