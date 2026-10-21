@@ -1,0 +1,59 @@
+{
+  "schema_version": "2.8",
+  "policy_id": "<AUTHORIZATION-POLICY-ID>",
+  "program_id": "<PROGRAM-ID>",
+  "default_disposition": "DENY",
+  "authorization_classes": [
+    "PROJECT_BOOTSTRAP_AUTHORIZATION",
+    "PROJECT_VALIDATION_AUTHORIZATION",
+    "REGISTRATION_AUTHORIZATION",
+    "PROGRAM_EXECUTION_AUTHORIZATION",
+    "RELEASE_PIPELINE_AUTHORIZATION",
+    "PACKAGE_BUILD_AUTHORIZATION",
+    "LINKAGE_EXECUTION_AUTHORIZATION",
+    "INSTALLABILITY_AUTHORIZATION",
+    "CANDIDATE_PROMOTION_AUTHORIZATION",
+    "CERTIFICATION_INSTALL_AUTHORIZATION",
+    "LAB_CERTIFICATION_AUTHORIZATION",
+    "CERTIFIED_RELEASE_PROMOTION_AUTHORIZATION",
+    "REPAIR_EXECUTION_AUTHORIZATION",
+    "REAL_TARGET_INSTALL_AUTHORIZATION"
+  ],
+  "authorized_issuers": {
+    "HUMAN_GATE_OWNER": ["ALL_CLASSES"],
+    "DESIGN_AUTHORITY": ["PROTOCOL_BASELINE_APPROVAL", "P3_NOT_APPLICABLE_DECISION"],
+    "BUILD_PROGRAM_DRIVER": []
+  },
+  "required_token_fields": [
+    "authorization_id",
+    "authorization_class",
+    "status",
+    "program_id",
+    "issuer_role",
+    "issued_at",
+    "expires_at",
+    "scope",
+    "command_manifest_hashes",
+    "max_transitions",
+    "signature"
+  ],
+  "validation_rules": {
+    "status_must_be_granted": true,
+    "issuer_must_be_authorized": true,
+    "scope_must_match_exactly": true,
+    "hashes_must_match_current_inputs": true,
+    "expired_or_revoked_is_invalid": true,
+    "delegation_forbidden": true,
+    "wildcard_command_authorization_forbidden": true,
+    "scope_expansion_requires_new_authorization": true
+  },
+  "real_target_install_rules": {
+    "separate_token_type_required": true,
+    "may_not_be_included_in_execution_authorization": true,
+    "certified_release_lock_required": true,
+    "one_time_use_required": true,
+    "exact_target_and_artifact_binding_required": true,
+    "human_signature_required": true
+  },
+  "revocation_ledger_ref": "REVOCATION_LEDGER.jsonl"
+}

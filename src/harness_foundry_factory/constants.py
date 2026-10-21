@@ -439,10 +439,19 @@ def project_root() -> Path:
 
 
 def default_spec_root() -> Path:
-    return project_root().parent / "Harness_Foundry_v2_8_Start_Package"
+    """Pinned source-development input; generic runtime does not use it."""
+    return project_root() / "devtools" / "specifications" / "Harness_Foundry_v2_8_Start_Package"
 
 
 def default_spec_lock_path() -> Path:
+    return project_root() / "spec_lock" / "HF28_DEVELOPMENT_SPEC_LOCK.json"
+
+
+def historical_spec_root() -> Path:
+    return project_root().parent / "Harness_Foundry_v2_8_Start_Package"
+
+
+def historical_spec_lock_path() -> Path:
     return project_root() / "spec_lock" / "HF28_SPEC_LOCK.json"
 
 

@@ -1,0 +1,79 @@
+{
+  "name": "qt-cmake",
+  "version": "2",
+  "usage": "both",
+  "inputs": [
+    "Explicit Qt SDK, CMake/CTest and Qt helper Python invocation bindings; a generated nonsecret environment profile",
+    "Project-owned source, isolated build/report paths and independent required-test assertions"
+  ],
+  "outputs": [
+    "Versioned public environment and delivery files; observed selected tool/QtCore dependency evidence",
+    "One retained record for each explicit configure/build/test or declared smoke-probe command"
+  ],
+  "materials": [
+    "guide.md"
+  ],
+  "tools": [
+    {
+      "id": "qt-cmake",
+      "path": "qt_cmake.py",
+      "interpreter": "qt-python",
+      "interpreter_args": [
+        "-I",
+        "-B"
+      ]
+    },
+    {
+      "id": "qt-environment",
+      "path": "qt_environment.py",
+      "interpreter": "qt-python",
+      "interpreter_args": [
+        "-I",
+        "-B"
+      ]
+    }
+  ],
+  "runtime_files": [
+    "stack_runtime.py",
+    "probe-CMakeLists.txt",
+    "probe-main.cpp",
+    "native_dependencies.py"
+  ],
+  "verification_files": [
+    "check_ctest.py",
+    {
+      "path": "qt_environment.py",
+      "shared": true
+    },
+    {
+      "path": "stack_runtime.py",
+      "shared": true
+    },
+    {
+      "path": "native_dependencies.py",
+      "shared": true
+    }
+  ],
+  "environment": [
+    {
+      "id": "qt-python",
+      "kind": "executable",
+      "version_min": "3.11"
+    },
+    {
+      "id": "cmake",
+      "kind": "executable",
+      "version_min": "3.21"
+    },
+    {
+      "id": "ctest",
+      "kind": "executable",
+      "version_min": "3.21"
+    },
+    {
+      "id": "qt-sdk",
+      "kind": "directory"
+    }
+  ],
+  "support": "Native QtCore/CMake environment bridge. SDK dependencies and permissions remain declared by the host. First native validation is macOS; other layouts require their selected observation/probe. No installation, scheduler, retries, global preflight, network expansion or acceptance authority."
+}

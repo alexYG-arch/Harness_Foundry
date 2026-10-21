@@ -1,0 +1,33 @@
+{
+  "id": "prd_design",
+  "status": "EXECUTION_NOT_RUN",
+  "task": "task.md",
+  "inputs": [
+    "inputs/brief.md",
+    "inputs/interviews.md",
+    "inputs/user-customization.json"
+  ],
+  "expected": "expected.json",
+  "counterexamples": "counterexamples.json",
+  "workflows": {
+    "v1": "workflows/v1.md",
+    "v2": "workflows/v2.md"
+  },
+  "upgrade": "upgrade.md",
+  "tool_preparation": "../TOOL_PREPARATION.md",
+  "outputs": [
+    "prd.md",
+    "traceability.json",
+    "prototype.html",
+    "design-notes.md"
+  ],
+  "v2_additional_outputs": [
+    "state-transitions.json"
+  ],
+  "runtime_evidence": [
+    "workflow-version-and-load-record",
+    "actual-render-and-interaction-record",
+    "independent-requirement-review"
+  ],
+  "claim_boundary": "这些是任务材料，不是已生成或已验收的 PRD/设计。"
+}

@@ -547,19 +547,19 @@ class BuildResourceIntegrationTests(unittest.TestCase):
             return result
 
         fixture.runner = runner
-        with patch("harness_foundry_factory.build_runtime.finish_resource_observation", side_effect=finish_then_interrupt):
+        with patch("harness_foundry_factory.build_resource_lifecycle.finish_resource_observation", side_effect=finish_then_interrupt):
             with self.assertRaises(support.InjectedControllerCrash):
                 fixture.advance()
         crashed_binding = next(row["resource_binding"] for row in invocations if row["command_id"] == crashed[0])
         self.assertEqual(Path(crashed_binding["product_copy"]["root"]).exists(), not after_cleanup)
-        from harness_foundry_factory import build_runtime
-        materialize = build_runtime.materialize_product_copy
+        from harness_foundry_factory import build_resource_lifecycle
+        materialize = build_resource_lifecycle.materialize_product_copy
 
         def only_new_commands(binding, workspace_root):
             self.assertNotEqual(binding["command_id"], crashed[0], "captured command must never recopy its product")
             return materialize(binding, workspace_root)
 
-        with patch("harness_foundry_factory.build_runtime.materialize_product_copy", side_effect=only_new_commands):
+        with patch("harness_foundry_factory.build_resource_lifecycle.materialize_product_copy", side_effect=only_new_commands):
             result = fixture.advance()
         self.assertEqual(result["status"], "PLAN_CHECKS_ACCEPTED", result)
         self.assertEqual(len(invocations), 5, "two implementations plus three checks, without a repeated process")
@@ -607,7 +607,7 @@ class BuildResourceIntegrationTests(unittest.TestCase):
         attempts = len(fixture.events("BUILD_ATTEMPT_STARTED"))
         calls = len(fixture.runner.invocations)
         self.assertEqual((attempts, calls), (2, 5))
-        with patch("harness_foundry_factory.build_runtime.materialize_product_copy",
+        with patch("harness_foundry_factory.build_resource_lifecycle.materialize_product_copy",
                    side_effect=AssertionError("old copies must not be recreated")):
             for _ in range(2):
                 held = fixture.advance()
@@ -647,7 +647,7 @@ class BuildResourceIntegrationTests(unittest.TestCase):
             self.assertEqual(command["result"]["resource_cleanup"]["status"], "RETAINED")
         evidence = {path: path.read_bytes() for command in commands
                     for path in Path(command["observation_root"]).rglob("*") if path.is_file()}
-        with patch("harness_foundry_factory.build_runtime.materialize_product_copy",
+        with patch("harness_foundry_factory.build_resource_lifecycle.materialize_product_copy",
                    side_effect=AssertionError("stale failure cannot recreate copies or start repair")):
             self.assertEqual(one_attempt()["status"], "BUILD_STOPPED")
             source.write_bytes(original)
@@ -690,7 +690,7 @@ class BuildResourceIntegrationTests(unittest.TestCase):
             return result
 
         fixture.runner = runner
-        with patch("harness_foundry_factory.build_runtime.finish_resource_observation", side_effect=finish_then_interrupt):
+        with patch("harness_foundry_factory.build_resource_lifecycle.finish_resource_observation", side_effect=finish_then_interrupt):
             with self.assertRaises(support.InjectedControllerCrash):
                 fixture.advance()
         command = next(row for row in invocations if row["command_id"] == crashed[0])
@@ -708,8 +708,8 @@ class BuildResourceIntegrationTests(unittest.TestCase):
         roots = sorted(roots_path.iterdir())
         attempts = len(fixture.events("BUILD_ATTEMPT_STARTED"))
         calls = len(invocations)
-        from harness_foundry_factory import build_runtime
-        materialize = build_runtime.materialize_product_copy
+        from harness_foundry_factory import build_resource_lifecycle
+        materialize = build_resource_lifecycle.materialize_product_copy
         old_commands = {row["command_id"] for row in invocations}
 
         def only_new_commands(resource_binding, workspace_root):
@@ -717,7 +717,7 @@ class BuildResourceIntegrationTests(unittest.TestCase):
                              "restoring a source must reuse the original checker evidence")
             return materialize(resource_binding, workspace_root)
 
-        with patch("harness_foundry_factory.build_runtime.materialize_product_copy", side_effect=only_new_commands):
+        with patch("harness_foundry_factory.build_resource_lifecycle.materialize_product_copy", side_effect=only_new_commands):
             if not undeclared_change:
                 for _ in range(2):
                     result = fixture.advance()

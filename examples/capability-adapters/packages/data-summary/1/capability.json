@@ -1,0 +1,12 @@
+{
+  "name": "data-summary",
+  "version": "1",
+  "usage": "both",
+  "inputs": ["UTF-8 CSV and explicit project-owned aggregation configuration"],
+  "outputs": ["JSON exact sum/count/ratio results, row contributions, and exclusions"],
+  "materials": ["guide.md"],
+  "tools": [{"id": "summarize-csv", "path": "summarize_csv.py", "interpreter": "python", "interpreter_args": ["-I", "-B"]}],
+  "environment": [{"id": "python", "kind": "executable", "version_min": "3.11"}],
+  "verification_files": ["check_summary.py"],
+  "support": "Standard-library exact CSV aggregation. The project supplies business rules and independent expected results; engineering fixtures do not accept a real DATA business workflow."
+}

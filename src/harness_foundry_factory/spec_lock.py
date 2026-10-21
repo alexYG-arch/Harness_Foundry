@@ -1,4 +1,4 @@
-"""Hash-lock and verify the sibling Harness Foundry v2.8 specification."""
+"""Verify the pinned development specification and unchanged historical lock."""
 
 from __future__ import annotations
 
@@ -15,6 +15,8 @@ from .constants import (
     HF28_SCHEMA_VERSION,
     default_spec_lock_path,
     default_spec_root,
+    historical_spec_root,
+    historical_spec_lock_path,
 )
 
 
@@ -22,6 +24,10 @@ SPEC_PACKAGE_VERSION = "2.8.0"
 SPEC_LOCK_VERSION = "2.0"
 SPEC_LOCK_KIND = "HARNESS_FOUNDRY_V2_8_PORTABLE_SIBLING_SPEC_LOCK"
 SPEC_ROOT_BINDING = "PHYSICAL_SIBLING_NAME_AND_CONTENT_HASH"
+DEVELOPMENT_LOCK_KIND = "HARNESS_FOUNDRY_V2_8_DEVELOPMENT_SPEC_LOCK"
+DEVELOPMENT_ROOT_BINDING = "REPOSITORY_DEVELOPMENT_PATH_AND_CONTENT_HASH"
+DEVELOPMENT_ROOT_RELATIVE = "devtools/specifications/Harness_Foundry_v2_8_Start_Package"
+HISTORICAL_LOCK_REF = "spec_lock/HF28_SPEC_LOCK.json"
 IGNORED_NAMES = {".DS_Store"}
 
 
@@ -103,13 +109,13 @@ def _run_spec_validator(spec_root: Path) -> dict[str, Any]:
     return report
 
 
-def _require_sibling_path(spec_root: Path) -> Path:
-    expected = default_spec_root().absolute()
+def _require_bound_path(spec_root: Path, *, development: bool) -> Path:
+    expected = (default_spec_root() if development else historical_spec_root()).absolute()
     actual = spec_root.expanduser().absolute()
     if actual != expected:
-        raise SpecLockError(f"spec root must be the sibling path {expected}")
+        raise SpecLockError(f"spec root must be the declared development or historical path {expected}")
     if actual.is_symlink():
-        raise SpecLockError("spec root must be a physical sibling, not a symlink")
+        raise SpecLockError("spec root must be a physical directory, not a symlink")
     return actual.resolve()
 
 
@@ -127,21 +133,26 @@ def load_spec_lock(lock_path: Path | None = None) -> dict[str, Any]:
 
 
 def build_spec_lock(spec_root: Path | None = None) -> dict[str, Any]:
-    """Return a deterministic lock for the validated, read-only sibling spec."""
+    """Return a deterministic development or historical lock without changing input."""
 
-    root = _require_sibling_path(spec_root or default_spec_root())
+    requested = spec_root or default_spec_root()
+    development = requested.expanduser().absolute() == default_spec_root().absolute()
+    root = _require_bound_path(requested, development=development)
     manifest = _load_manifest(root)
     before_snapshot = _file_snapshot(root)
     before = {path: value[2] for path, value in before_snapshot.items()}
+    historical = load_spec_lock(historical_spec_lock_path()) if development else None
+    if historical is not None and before != historical.get("files"):
+        raise SpecLockError("development specification differs from the preserved historical lock")
     report = _run_spec_validator(root)
     after_snapshot = _file_snapshot(root)
     if before_snapshot != after_snapshot:
         raise SpecLockError("sibling validator changed the specification tree")
     validator_ref = "tools/validate_package.py"
-    return {
+    result = {
         "schema_version": SPEC_LOCK_VERSION,
-        "lock_kind": SPEC_LOCK_KIND,
-        "spec_root_binding": SPEC_ROOT_BINDING,
+        "lock_kind": DEVELOPMENT_LOCK_KIND if development else SPEC_LOCK_KIND,
+        "spec_root_binding": DEVELOPMENT_ROOT_BINDING if development else SPEC_ROOT_BINDING,
         "spec_root_name": root.name,
         "package_id": manifest["package_id"],
         "package_version": manifest["version"],
@@ -154,6 +165,13 @@ def build_spec_lock(spec_root: Path | None = None) -> dict[str, Any]:
         "content_sha256": _content_hash(before),
         "files": before,
     }
+    if development:
+        result.update({
+            "spec_root_relative": DEVELOPMENT_ROOT_RELATIVE,
+            "historical_lock_ref": HISTORICAL_LOCK_REF,
+            "historical_lock_sha256": _sha256(historical_spec_lock_path()),
+        })
+    return result
 
 
 def verify_spec_lock(
@@ -166,8 +184,10 @@ def verify_spec_lock(
     def fail(code: str, message: str) -> None:
         findings.append({"code": code, "message": message})
 
+    development = lock.get("lock_kind") == DEVELOPMENT_LOCK_KIND
     try:
-        root = _require_sibling_path(spec_root or default_spec_root())
+        selected = spec_root or (default_spec_root() if development else historical_spec_root())
+        root = _require_bound_path(selected, development=development)
     except SpecLockError as exc:
         return {"status": "FAIL", "valid": False, "findings": [{"code": "SPEC_PATH_MISMATCH", "message": str(exc)}]}
 
@@ -175,9 +195,23 @@ def verify_spec_lock(
         fail("SPEC_ABSOLUTE_PATH_FORBIDDEN", "portable lock must not contain spec_root_abs")
     if lock.get("spec_root_name") != root.name:
         fail("SPEC_PATH_MISMATCH", "lock does not bind the required sibling name")
-    if lock.get("spec_root_binding") != SPEC_ROOT_BINDING:
-        fail("SPEC_PATH_BINDING_INVALID", "lock does not require the physical sibling contract")
-    if lock.get("schema_version") != SPEC_LOCK_VERSION or lock.get("lock_kind") != SPEC_LOCK_KIND:
+    binding = DEVELOPMENT_ROOT_BINDING if development else SPEC_ROOT_BINDING
+    kind = DEVELOPMENT_LOCK_KIND if development else SPEC_LOCK_KIND
+    if lock.get("spec_root_binding") != binding:
+        fail("SPEC_PATH_BINDING_INVALID", "lock does not match its declared root binding")
+    if development:
+        if lock.get("spec_root_relative") != DEVELOPMENT_ROOT_RELATIVE:
+            fail("SPEC_PATH_BINDING_INVALID", "development root is not the declared repository path")
+        try:
+            historical_path = historical_spec_lock_path()
+            historical = load_spec_lock(historical_path)
+            if (lock.get("historical_lock_ref") != HISTORICAL_LOCK_REF
+                    or lock.get("historical_lock_sha256") != _sha256(historical_path)
+                    or lock.get("files") != historical.get("files")):
+                fail("SPEC_HISTORICAL_BINDING_MISMATCH", "development input does not match the preserved historical lock")
+        except (OSError, SpecLockError) as exc:
+            fail("SPEC_HISTORICAL_BINDING_INVALID", str(exc))
+    if lock.get("schema_version") != SPEC_LOCK_VERSION or lock.get("lock_kind") != kind:
         fail("SPEC_LOCK_SCHEMA_INVALID", "lock schema_version or lock_kind is invalid")
     if lock.get("package_id") != HF28_PACKAGE_ID:
         fail("SPEC_IDENTITY_MISMATCH", "lock package_id is not Harness Foundry v2.8")
@@ -247,7 +281,7 @@ def load_verified_spec_lock(
     spec_root: Path | None = None,
     lock_path: Path | None = None,
 ) -> dict[str, Any]:
-    """Load the committed lock and verify the current sibling against it."""
+    """Load the committed lock and verify its declared development or historical input."""
 
     lock = load_spec_lock(lock_path)
     report = verify_spec_lock(lock, spec_root)

@@ -1,0 +1,43 @@
+[
+  {
+    "id": "PRD-C1",
+    "description": "PRD 和原型都漏掉离线需求，即使二者一致也失败",
+    "omitted_requirements": [
+      "R03"
+    ],
+    "violates": [
+      "R03"
+    ]
+  },
+  {
+    "id": "PRD-C2",
+    "description": "离线保存后页面显示预约成功，解释称已解决销售冲突",
+    "display_state": "confirmed",
+    "network_state": "offline",
+    "violates": [
+      "R03",
+      "R08"
+    ]
+  },
+  {
+    "id": "PRD-C3",
+    "description": "HTML 中有长文案，但手机上按钮被固定高度遮挡且键盘不能到达",
+    "html_contains_long_title": true,
+    "mobile_button_visible": false,
+    "keyboard_reachable": false,
+    "violates": [
+      "R05"
+    ]
+  },
+  {
+    "id": "PRD-C4",
+    "description": "V2 转换表存在，但升级把用户品牌色和营业时间换成默认值",
+    "changed_customizations": [
+      "brand_color",
+      "service_hours"
+    ],
+    "violates": [
+      "R07"
+    ]
+  }
+]

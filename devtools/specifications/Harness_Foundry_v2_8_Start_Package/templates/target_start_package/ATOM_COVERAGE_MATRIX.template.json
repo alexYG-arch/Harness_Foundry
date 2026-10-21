@@ -1,0 +1,22 @@
+{
+  "schema_version": "2.8",
+  "matrix_id": "<MATRIX-ID>",
+  "source_manifest_sha256": "<SHA256>",
+  "normative_atom_catalog_sha256": "<SHA256>",
+  "coverage": [
+    {
+      "atom_id": "ATOM-001",
+      "outcome_ids": ["PO-001"],
+      "workpack_ids": ["<WP-ID>"],
+      "stage_ids": ["<STAGE-ID>"],
+      "scenario_ids": ["<SCENARIO-ID>"],
+      "assertion_ids": ["<ASSERTION-ID>"],
+      "required_evidence_types": ["<EVIDENCE-TYPE>"],
+      "reverse_mapping_required": true,
+      "status": "PLANNED_NOT_VERIFIED"
+    }
+  ],
+  "required_atom_coverage_percent": 100,
+  "missing_required_atoms": ["ATOM-001"],
+  "release_ready": false
+}

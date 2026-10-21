@@ -1,0 +1,79 @@
+{
+  "schema_version": "2.8",
+  "target_id": "<TARGET-ID>",
+  "roles": {
+    "program_author": {
+      "responsibility": "Create and validate the Start Package candidate in AUTHORING_ONLY mode.",
+      "may_start_driver": false,
+      "may_execute_workpacks": false,
+      "may_grant_execution_authorization": false
+    },
+    "human_gate_owner": {
+      "responsibility": "Approve baselines and issue, constrain or revoke authorizations.",
+      "may_issue_authorization": true,
+      "may_self_certify_target": false
+    },
+    "design_authority": {
+      "responsibility": "Resolve normative ambiguity and approve explicit not-applicable decisions.",
+      "may_modify_runtime_evidence": false,
+      "may_issue_certificate": false
+    },
+    "build_program_driver": {
+      "responsibility": "Compute and perform only the next eligible authorized transition and maintain state and ledgers.",
+      "may_self_authorize": false,
+      "may_skip_phase_or_gate": false,
+      "may_issue_certificate": false,
+      "contract_ref": "PROGRAM_DRIVER_CONTRACT.json",
+      "state_ref": "PROGRAM_DRIVER_STATE.json"
+    },
+    "coding_agent": {
+      "responsibility": "Implement the active bounded Workpack inside its capsule and command authorization.",
+      "may_activate_next_workpack": false,
+      "may_install_certification_or_real_target": false,
+      "may_issue_certificate": false
+    },
+    "main_build_project": {
+      "responsibility": "Build and package the target Agent or Harness.",
+      "may_issue_certificate": false,
+      "may_self_certify": false,
+      "may_install": false,
+      "build_driver_ref": "<BUILD-DRIVER-REF>",
+      "final_runtime_entrypoint_ref": "<FINAL-RUNTIME-ENTRYPOINT-REF>"
+    },
+    "external_conformance_lab": {
+      "responsibility": "Run authoritative external checks and issue certificate or findings.",
+      "may_modify_target": false,
+      "may_issue_certificate": true,
+      "artifact_ref": "<LAB-ARTIFACT-REF>",
+      "trusted_runner_ref": "<TRUSTED-RUNNER-REF>"
+    },
+    "read_only_linkage_review": {
+      "responsibility": "Verify normative, evidence, execution and repair linkage.",
+      "may_install": false,
+      "may_repair": false,
+      "may_issue_certificate": false,
+      "artifact_ref": "<LINKAGE-ARTIFACT-REF>"
+    },
+    "trusted_runner": {
+      "responsibility": "Execute authorized Codex, LLM or command invocations under Lab challenge and emit independent attestation.",
+      "may_decide_business_pass": false,
+      "may_modify_target": false,
+      "may_self_report_unobserved_execution": false
+    },
+    "certification_installer": {
+      "responsibility": "Sole owner of environment creation, install, uninstall, upgrade and cleanup operations.",
+      "may_modify_source": false,
+      "may_replace_failed_artifact": false,
+      "may_decide_conformance_pass": false,
+      "real_target_install_requires_separate_authorization": true
+    }
+  },
+  "conformance_pack_role": "DECLARATIVE_HARNESS_SPECIFIC_INPUT_NOT_EXECUTION_AUTHORITY",
+  "separation_invariants": [
+    "MAIN_BUILD_CANNOT_SELF_CERTIFY",
+    "LINKAGE_IS_READ_ONLY_AND_CANNOT_ISSUE_CERTIFICATE",
+    "LAB_CANNOT_REPAIR_MAIN_TARGET",
+    "ONLY_CERTIFICATION_INSTALLER_MAY_CHANGE_INSTALL_ENVIRONMENTS",
+    "DRIVER_IS_CONTROL_PLANE_NOT_FOURTH_ENGINEERING_PROJECT"
+  ]
+}

@@ -166,16 +166,25 @@ class PortableLocalCliTests(unittest.TestCase):
 
         # Check the actual relocated consumer, not just the source allowlist.
         self.assertEqual((relocated / "LICENSE").read_bytes(), (ROOT / "LICENSE").read_bytes())
-        for name in ("GENERIC_BUILD_PLAN", "GENERIC_BUILD_CLI", "GENERIC_BUILD_RUNTIME",
+        for name in ("GENERIC_BUILD_PLAN", "HARNESS_DESIGN_GUIDE", "GENERIC_BUILD_CLI", "GENERIC_BUILD_RUNTIME",
                      "GENERIC_SOURCE_INTAKE", "ACCEPTANCE_CONTRACT_ALIGNMENT", "RELEASE_READINESS", "CLEAR_COMMUNICATION"):
             document = relocated / "docs" / f"{name}.md"
-            if name == "CLEAR_COMMUNICATION":
+            if name in ("CLEAR_COMMUNICATION", "HARNESS_DESIGN_GUIDE"):
                 self.assertEqual(document.read_bytes(), (ROOT / "docs" / f"{name}.md").read_bytes())
             for link in re.findall(r"\[[^\]]+\]\(([^)]+)\)", document.read_text()):
                 if "://" not in link:
                     target = (document.parent / link.split("#", 1)[0]).resolve()
                     self.assertTrue(target.is_relative_to(relocated.resolve()))
                     self.assertTrue(target.is_file(), f"Packaged documentation link is missing: {link}")
+
+        for name in ("offline-naming.md", "audio-handoff.md"):
+            relative = Path("examples/harness-design") / name
+            document = relocated / relative
+            self.assertEqual(document.read_bytes(), (ROOT / relative).read_bytes())
+            for link in re.findall(r"\[[^\]]+\]\(([^)]+)\)", document.read_text()):
+                if "://" not in link:
+                    target = (document.parent / link.split("#", 1)[0]).resolve()
+                    self.assertTrue(target.is_relative_to(relocated.resolve()) and target.is_file(), link)
 
         from tests.test_build_plan import request_fixture
         before = set(relocated.rglob("*"))
@@ -190,7 +199,8 @@ class PortableLocalCliTests(unittest.TestCase):
         self.assertEqual(set(relocated.rglob("*")), before)
 
     def test_missing_license_or_contract_document_fails_before_output_creation(self) -> None:
-        for relative in ("LICENSE", "docs/ACCEPTANCE_CONTRACT_ALIGNMENT.md"):
+        for relative in ("LICENSE", "docs/ACCEPTANCE_CONTRACT_ALIGNMENT.md",
+                         "docs/HARNESS_DESIGN_GUIDE.md"):
             with self.subTest(relative=relative):
                 source = self.root / ("missing-" + Path(relative).stem)
                 self._copy_source(source)
@@ -332,6 +342,7 @@ class PortableLocalCliTests(unittest.TestCase):
             "LICENSE",
             "pyproject.toml",
             "docs",
+            "examples/harness-design",
             ".agents",
             "schemas",
             "spec_lock",

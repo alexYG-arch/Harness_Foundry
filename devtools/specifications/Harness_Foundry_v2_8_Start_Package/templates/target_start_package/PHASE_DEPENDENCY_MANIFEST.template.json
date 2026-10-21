@@ -1,0 +1,39 @@
+{
+  "schema_version": "2.8",
+  "profile": "<FULL|STANDARD|LITE>",
+  "profile_lock_ref": "<PROFILE-LOCK-REF>",
+  "phase_order": ["G0", "C0", "P1", "C1", "P2", "C2", "P3", "C3", "P4_BUILD_INPUT", "RELEASE_PIPELINE", "C4", "CERTIFIED_RELEASE"],
+  "single_next_transition_required": true,
+  "transitions": [
+    {"transition_id": "T-G0-LOCAL", "from": "CHARTER_LOCKED", "to": "G0_LOCAL_GATE_READY", "requires": ["CHARTER_LOCK_VALID"], "authorization_class": "PROGRAM_EXECUTION_AUTHORIZATION", "auto_advance_eligible": true},
+    {"transition_id": "T-C0", "from": "G0_LOCAL_GATE_READY", "to": "C0_READY", "requires": ["G0_LOCAL_GATE_PASS"], "authorization_class": "LAB_CERTIFICATION_AUTHORIZATION", "auto_advance_eligible": true},
+    {"transition_id": "T-G0-CONTROL-LOCK", "from": "C0_READY", "to": "G0_CONTROL_LOCK_READY", "requires": ["C0_CHECKPOINT_PASS"], "authorization_class": "PROGRAM_EXECUTION_AUTHORIZATION", "auto_advance_eligible": true},
+    {"transition_id": "T-P1", "from": "G0_CONTROL_LOCK_READY", "to": "P1_READY", "requires": ["G0_CONTROL_LOCK_VALID"], "authorization_class": "PROGRAM_EXECUTION_AUTHORIZATION", "auto_advance_eligible": true},
+    {"transition_id": "T-C1", "from": "P1_READY", "to": "C1_READY", "requires": ["P1_LOCAL_GATE_PASS"], "authorization_class": "LAB_CERTIFICATION_AUTHORIZATION", "auto_advance_eligible": true},
+    {"transition_id": "T-P1-LOCK", "from": "C1_READY", "to": "P1_BUILD_LOCK_READY", "requires": ["C1_CHECKPOINT_PASS"], "authorization_class": "PROGRAM_EXECUTION_AUTHORIZATION", "auto_advance_eligible": true},
+    {"transition_id": "T-P2", "from": "P1_BUILD_LOCK_READY", "to": "P2_READY", "requires": ["P1_BUILD_LOCK_VALID"], "authorization_class": "PROGRAM_EXECUTION_AUTHORIZATION", "auto_advance_eligible": true},
+    {"transition_id": "T-C2", "from": "P2_READY", "to": "C2_READY", "requires": ["P2_LOCAL_GATE_PASS"], "authorization_class": "LAB_CERTIFICATION_AUTHORIZATION", "auto_advance_eligible": true},
+    {"transition_id": "T-P2-LOCK", "from": "C2_READY", "to": "P2_BUILD_LOCK_READY", "requires": ["C2_CHECKPOINT_PASS"], "authorization_class": "PROGRAM_EXECUTION_AUTHORIZATION", "auto_advance_eligible": true},
+    {"transition_id": "T-P3", "from": "P2_BUILD_LOCK_READY", "to": "P3_READY", "requires": ["P2_BUILD_LOCK_VALID"], "authorization_class": "PROGRAM_EXECUTION_AUTHORIZATION", "auto_advance_eligible": true},
+    {"transition_id": "T-C3", "from": "P3_READY", "to": "C3_READY", "requires": ["P3_LOCAL_GATE_OR_NA_DECISION_PASS"], "authorization_class": "LAB_CERTIFICATION_AUTHORIZATION", "auto_advance_eligible": true},
+    {"transition_id": "T-P3-LOCK", "from": "C3_READY", "to": "P3_LOCK_READY", "requires": ["C3_CHECKPOINT_PASS"], "authorization_class": "PROGRAM_EXECUTION_AUTHORIZATION", "auto_advance_eligible": true},
+    {"transition_id": "T-P4", "from": "P3_LOCK_READY", "to": "P4_READY", "requires": ["P3_BUILD_LOCK_OR_APPROVED_NA_LOCK_VALID", "C3_CHECKPOINT_PASS"], "authorization_class": "PROGRAM_EXECUTION_AUTHORIZATION", "auto_advance_eligible": true},
+    {"transition_id": "T-P4-BUILD-INPUT", "from": "P4_READY", "to": "P4_BUILD_INPUT_LOCK_READY", "requires": ["P4_LOCAL_GATE_PASS"], "authorization_class": "PROGRAM_EXECUTION_AUTHORIZATION", "auto_advance_eligible": true},
+    {"transition_id": "T-C4", "from": "P4_RELEASE_CANDIDATE_LOCK_VALID", "to": "C4_READY", "requires": ["P4_RELEASE_CANDIDATE_LOCK_VALID", "PACK_B1_PASS", "INSTALLED_TARGET_DESCRIPTOR_VERIFIED", "LINKAGE_D_PASS"], "authorization_class": "LAB_CERTIFICATION_AUTHORIZATION", "auto_advance_eligible": true},
+    {"transition_id": "T-CERTIFIED", "from": "C4_READY", "to": "CERTIFIED_RELEASE_READY", "requires": ["C4_CHECKPOINT_PASS", "CONFORMANCE_CERTIFICATE_READY"], "authorization_class": "CERTIFIED_RELEASE_PROMOTION_AUTHORIZATION", "auto_advance_eligible": true}
+  ],
+  "forbidden_transitions": [
+    "P1_TO_P4",
+    "P2_TO_P4_WITHOUT_P3_LOCK",
+    "P4_TO_CERTIFIED_WITHOUT_C4",
+    "SKIPPED_AS_PREDECESSOR_SATISFACTION"
+  ],
+  "transition_evidence": {
+    "append_only": true,
+    "predecessor_hash_chain_required": true,
+    "human_decision_required_for_not_applicable": true,
+    "validated_result_required": true,
+    "promotion_event_required": true,
+    "authorization_ref_required_for_auto_advance": true
+  }
+}

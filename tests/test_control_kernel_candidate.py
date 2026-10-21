@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from harness_foundry_factory.constants import default_spec_root
+
 from copy import deepcopy
 import hashlib
 import json
@@ -17,7 +19,7 @@ from tests.permissions import make_path_writable
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-SPEC_ROOT = REPOSITORY_ROOT.parent / "Harness_Foundry_v2_8_Start_Package"
+SPEC_ROOT = default_spec_root()
 FIXTURE_PATH = REPOSITORY_ROOT / "tests/fixtures/harness_requirement_ir.json"
 CORRECTION_IDS = [f"CORR-29-{index:03d}" for index in range(1, 9)]
 

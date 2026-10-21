@@ -1,0 +1,53 @@
+{
+  "schema_version": "1.0",
+  "report_id": "HF28-PACKAGE-VALIDATION-2026-07-10",
+  "package_id": "HARNESS_FOUNDRY_V2_8_START_PACKAGE",
+  "scope": "Documentation, machine templates, three-project templates and package validator only.",
+  "status": "CONTROLLED_PROGRESSION_AUTHORING_PACKAGE_VALIDATED_NOT_RUNTIME",
+  "automation_contract_status": "READY_FOR_TARGET_INSTANTIATION",
+  "checks": [
+    {"check_id": "JSON_AND_JSONL_PARSE", "status": "PASS"},
+    {"check_id": "MARKDOWN_RELATIVE_LINKS", "status": "PASS"},
+    {"check_id": "PACKAGE_IDENTITY_V2_8", "status": "PASS"},
+    {"check_id": "AUTOMATION_TEMPLATES", "status": "PASS"},
+    {"check_id": "PROJECT_START_PACKAGES", "status": "PASS"},
+    {"check_id": "CONTROL_STATE_AND_ROLES", "status": "PASS"},
+    {"check_id": "AUTHORING_DEFAULT_DISABLED", "status": "PASS"},
+    {"check_id": "REAL_TARGET_INSTALL_SEPARATE_AUTHORIZATION", "status": "PASS"},
+    {"check_id": "COMMAND_ABSOLUTE_EXECUTABLE_AND_AUTHORIZATION", "status": "PASS"},
+    {"check_id": "P3_NOT_SKIPPABLE", "status": "PASS"},
+    {"check_id": "ENGINEERING_DAG_16_NODE_ORDER", "status": "PASS"},
+    {"check_id": "RELEASE_PIPELINE_17_STEP_ORDER", "status": "PASS"},
+    {"check_id": "SOURCE_HASHES_UNCHANGED", "status": "PASS"},
+    {"check_id": "MARKDOWN_FILES_AT_OR_BELOW_350_LINES", "status": "PASS", "observed_max_lines": 340},
+    {"check_id": "VALIDATOR_NEGATIVE_TESTS", "status": "PASS", "tests_passed": 12, "tests_total": 12},
+    {"check_id": "VALIDATOR_READ_ONLY", "status": "PASS", "writes_performed": false},
+    {"check_id": "NO_CACHE_OR_RUNTIME_ARTIFACTS", "status": "PASS"}
+  ],
+  "metrics": {
+    "total_files": 101,
+    "markdown_files": 48,
+    "json_files": 48,
+    "jsonl_files": 3,
+    "python_files": 2,
+    "engineering_dag_nodes": 16,
+    "release_pipeline_steps": 17,
+    "maximum_markdown_lines": 340
+  },
+  "validated_boundaries": [
+    "Authoring defaults to no execution and stops for human review.",
+    "Approved progression requires a verified Driver Runtime and explicit bounded authorization.",
+    "Lab is built, self-validated and released before Linkage; Linkage precedes Main execution-package materialization.",
+    "Main phase execution preserves G0 through P4 predecessor locks and explicit P3 or P3 N/A approval.",
+    "Release, installability and certification follow the complete A/B0/C/Build/B1/Installability/D/C4 chain.",
+    "Automatic loops are bounded, observable, invalidation-aware and escalation-capable.",
+    "Real target installation cannot inherit generic execution authorization."
+  ],
+  "non_claims": [
+    "No target Agent, Harness or target-specific Start Package was generated.",
+    "No Program Driver Runtime was installed or executed.",
+    "No Main, Lab or Linkage engineering project was built or installed.",
+    "No Workpack, release pipeline, certification or real target installation was executed.",
+    "This report validates the v2.8 authoring/control contract, not a target runtime implementation."
+  ]
+}

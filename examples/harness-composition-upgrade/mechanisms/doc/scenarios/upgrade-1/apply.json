@@ -1,0 +1,36 @@
+{
+  "format_version": 1,
+  "status": "PROPOSED_REFERENCE_NOT_ACCEPTED",
+  "files": [
+    {
+      "path": "config.json",
+      "action": "update",
+      "expected": {
+        "file": "../../custom/current/config.json",
+        "executable": false
+      },
+      "desired": {
+        "file": "../../expected/after-v2/config.json",
+        "executable": false
+      }
+    },
+    {
+      "path": "tools/render.py",
+      "action": "update",
+      "expected": {
+        "file": "../../custom/current/tools/render.py",
+        "executable": false
+      },
+      "desired": {
+        "file": "../../expected/after-v2/tools/render.py",
+        "executable": false
+      }
+    }
+  ],
+  "candidate_note": "config.json contains a prewritten semantic reference candidate; merge.py must not silently invent this resolution.",
+  "acceptance_refs": [
+    "../../../../verifier/check_mechanisms.py",
+    "../../../../verifier/expectations/doc-v2.json"
+  ],
+  "recovery_note": "Keep fixed C/desired source snapshots. A helper result is diagnostic only; actual controller capture controls whether command recovery is permitted."
+}

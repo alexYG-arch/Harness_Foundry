@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from harness_foundry_factory.constants import default_spec_root
+
 import json
 from pathlib import Path
 import tempfile
@@ -18,7 +20,7 @@ from tests.permissions import make_path_writable, make_tree_writable
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-SPEC_ROOT = REPOSITORY_ROOT.parent / "Harness_Foundry_v2_8_Start_Package"
+SPEC_ROOT = default_spec_root()
 FIXTURE_PATH = REPOSITORY_ROOT / "tests/fixtures/harness_requirement_ir.json"
 CREATED_AT = "2026-07-30T00:00:00Z"
 

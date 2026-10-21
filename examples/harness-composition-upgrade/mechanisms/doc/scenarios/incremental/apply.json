@@ -1,0 +1,21 @@
+{
+  "format_version": 1,
+  "status": "PROPOSED_REFERENCE_NOT_ACCEPTED",
+  "files": [
+    {
+      "path": "config.json",
+      "action": "update",
+      "expected": {
+        "file": "../../expected/after-v3/config.json",
+        "executable": false
+      },
+      "desired": {
+        "file": "../../expected/after-incremental/config.json",
+        "executable": false
+      }
+    }
+  ],
+  "acceptance_refs": [
+    "../../../../verifier/expectations/doc-incremental.json"
+  ]
+}

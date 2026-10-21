@@ -1,35 +1,24 @@
 """Narrow accepted-artifact repair requests; defect judgment stays with Codex."""
 
 from copy import deepcopy
+from dataclasses import dataclass
 from pathlib import Path
 
 from .build_types import RequestValidationError, RevisionConflictError, IdempotencyConflictError, canonical_json
+from .build_state import affected_workpacks, repair_budget_exhaustion, project_execution_state, project_budget_attempts
+from .build_artifacts import relative_path, file_identity, superseded_artifacts, check_accepted_files
 
 
-def affected_workpacks(plan, producers):
-    affected = set(producers)
-    while True:
-        expanded = affected | {task["workpack_id"] for task in plan["workpacks"]
-                               if affected.intersection(task["depends_on"])}
-        if expanded == affected:
-            return affected
-        affected = expanded
+@dataclass(frozen=True)
+class RepairContext:
+    """Current checked facts supplied immediately by the controller.
 
-
-def repair_budget_exhaustion(prepared, attempts, required):
-    """Count each required task once, including shared owners after replanning."""
-    required = set(required)
-    scope, owners = prepared["scope"], prepared["task_budget_owners"]
-    for key in sorted(required):
-        for owner in owners[key]:
-            spent = sum(owner in row.get("budget_workpack_ids", [row["workpack_id"]])
-                        for row in attempts.values())
-            needed = sum(owner in owners[item] for item in required)
-            if spent + needed > scope["max_task_attempts"]:
-                return {"status": "TASK_REPAIR_BUDGET_EXHAUSTED", "workpack_id": key}
-    if len(attempts) + len(required) > scope["max_attempts"]:
-        return {"status": "ATTEMPT_BUDGET_EXHAUSTED"}
-    return None
+    No cached authority or dispatcher is exposed. The existing store's expected
+    revision still protects the single invalidation transaction.
+    """
+    events: list
+    prepared: dict
+    plan: dict
 
 
 def _require(condition, message):
@@ -67,13 +56,10 @@ def _validate_request(request, program_id):
 
 def request_build_repair(controller, request):
     """Invalidate current accepted versions atomically; never dispatch a command."""
-    # Runtime imports this module's small graph/budget helpers; keep this local.
-    from .build_runtime import _file_identity, _relative
-
     _validate_request(request, controller.program_id)
     request = deepcopy(request)
     store, program = controller.store, controller.program_id
-    replay = store._idempotent_events(program, request["idempotency_key"])
+    replay = store.idempotent_events(program, request["idempotency_key"])
     if replay is not None:
         if (len(replay) != 1 or replay[0]["event_type"] != "BUILD_ACCEPTANCE_INVALIDATED"
                 or canonical_json(replay[0]["payload"].get("repair_request")) != canonical_json(request)):
@@ -81,7 +67,8 @@ def request_build_repair(controller, request):
         return replay[0]
 
     prepared_id = request["prepared_event_id"]
-    events, prepared, plan = controller._current(prepared_id)
+    context = controller.repair_context(prepared_id)
+    events, prepared, plan = context.events, context.prepared, context.plan
     if len(events) != request["expected_revision"]:
         raise RevisionConflictError("re-read current build progress before repair")
     workspace = Path(prepared["scope"]["workspace_root"])
@@ -90,10 +77,10 @@ def request_build_repair(controller, request):
             continue
         prior_root = Path(event["payload"]["scope"]["workspace_root"])
         if workspace.is_relative_to(prior_root) or prior_root.is_relative_to(workspace):
-            prior, _ = controller._state(events, event["event_id"])
+            prior, _ = project_execution_state(events, event["event_id"])
             _require(not any(row["status"] in {"IN_FLIGHT", "UNKNOWN_SIDE_EFFECT"} for row in prior.values()),
                      "repair requires reconciliation of unresolved attempts in overlapping scopes")
-    attempts, accepted = controller._state(events, prepared_id)
+    attempts, accepted = project_execution_state(events, prepared_id)
     tasks = {task["workpack_id"]: task for task in plan["workpacks"]}
     producers = {item["artifact_id"]: task["workpack_id"]
                  for task in plan["workpacks"] for item in task["artifacts"]}
@@ -138,18 +125,18 @@ def request_build_repair(controller, request):
         _require(tasks[owner]["executor"] == "CODEX", "LOCAL producer has no prompt-driven repair method")
         _require(origin is None or owner in original_scope, "repair target is outside the original repair chain")
         identity = record["artifacts"][target["artifact_id"]]
-        path = _relative(workspace, identity["path"])
-        _require(path.is_file() and _file_identity(path) == {key: identity[key] for key in ("size", "sha256")},
+        path = relative_path(workspace, identity["path"])
+        _require(path.is_file() and file_identity(path) == {key: identity[key] for key in ("size", "sha256")},
                  "repair target bytes differ from the current accepted version")
         owners.add(owner)
-    controller._check_accepted_files(workspace, plan, accepted, attempts)
+    check_accepted_files(workspace, plan, accepted, project_budget_attempts(events, prepared_id))
     affected = affected_workpacks(plan, owners)
     required = affected | pending
-    superseded = controller._superseded_artifacts(plan, attempts)
+    superseded = superseded_artifacts(plan, project_budget_attempts(events, prepared_id))
     _require(not target_ids.intersection(superseded) and not any(
         item["kind"] == "ARTIFACT" and item["id"] in superseded
         for key in required for item in tasks[key]["inputs"]), "repair needs a consumed artifact version")
-    exhausted = repair_budget_exhaustion(prepared, attempts, required)
+    exhausted = repair_budget_exhaustion(prepared, project_budget_attempts(events, prepared_id), required)
     _require(exhausted is None, exhausted["status"] if exhausted else "")
     payload = {"prepared_event_id": prepared_id, "reason": "CODEX_CONFIRMED_REPAIR_REQUEST",
                "targets": request["targets"], "finding": request["finding"], "repair_request": request,

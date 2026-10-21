@@ -1,0 +1,15 @@
+{
+  "title": "我的周报（补充版）",
+  "sections": [
+    {
+      "id": "actions",
+      "title": "先做什么"
+    },
+    {
+      "id": "summary",
+      "title": "本周要点"
+    }
+  ],
+  "include_source_titles": true,
+  "show_priority": true
+}

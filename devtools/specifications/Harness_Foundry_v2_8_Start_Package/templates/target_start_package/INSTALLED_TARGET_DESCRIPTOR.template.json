@@ -1,0 +1,23 @@
+{
+  "schema_version": "2.8",
+  "descriptor_id": "<DESCRIPTOR-ID>",
+  "environment_id": "<CERTIFICATION-ENV-ID>",
+  "release_artifact_sha256": "<SHA256>",
+  "distribution_name": "<DIST-NAME>",
+  "distribution_version": "<VERSION>",
+  "install_mode": "NON_EDITABLE_IMMUTABLE_ARTIFACT",
+  "python_executable_abs": "<ABSOLUTE-PATH>",
+  "entrypoint_abs": "<ABSOLUTE-PATH>",
+  "entrypoint_realpath": "<ABSOLUTE-REALPATH>",
+  "entrypoint_sha256": "<SHA256>",
+  "site_packages_root": "<ABSOLUTE-PATH>",
+  "imported_module_file": "<ABSOLUTE-PATH>",
+  "working_directory_abs": "<PATH-OUTSIDE-SOURCE-AND-BUILD-PROGRAM>",
+  "pythonpath": "EMPTY",
+  "user_site_enabled": false,
+  "source_tree_on_sys_path": false,
+  "build_program_on_sys_path": false,
+  "runtime_entrypoint_is_build_program_driver": false,
+  "environment_snapshot_ref": "<REF>",
+  "verification_status": "PENDING"
+}

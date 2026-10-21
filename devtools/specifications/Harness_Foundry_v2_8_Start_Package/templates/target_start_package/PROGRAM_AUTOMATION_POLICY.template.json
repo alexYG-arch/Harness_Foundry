@@ -1,0 +1,57 @@
+{
+  "schema_version": "2.8",
+  "policy_id": "<PROGRAM-AUTOMATION-POLICY-ID>",
+  "program_id": "<PROGRAM-ID>",
+  "default_mode": "AUTHORING_ONLY",
+  "automatic_progress_default": false,
+  "authoring_may_start_driver": false,
+  "activation_requirements": [
+    "CHARTER_LOCK_VALID",
+    "PROFILE_LOCK_VALID",
+    "START_PACKAGE_HUMAN_APPROVAL",
+    "SHARED_CONTROL_BASELINE_LOCKED",
+    "CONTROL_PLANE_REGISTRATION_COMPLETE",
+    "PROGRAM_DRIVER_RUNTIME_VERIFIED",
+    "VALID_UNREVOKED_EXECUTION_AUTHORIZATION"
+  ],
+  "mode_policy": {
+    "AUTHORING_ONLY": {"executes_target_code": false, "auto_advance_allowed": false},
+    "REGISTRATION_ONLY": {"executes_target_code": false, "auto_advance_allowed": true},
+    "WORKPACK_EXECUTION": {"executes_target_code": true, "auto_advance_allowed": true},
+    "PACKAGE_BUILD": {"executes_target_code": true, "auto_advance_allowed": true},
+    "P4_INSTALLABILITY": {"executes_target_code": true, "auto_advance_allowed": true},
+    "CERTIFICATION_INSTALL": {"executes_target_code": true, "auto_advance_allowed": true},
+    "LAB_CERTIFICATION": {"executes_target_code": true, "auto_advance_allowed": true},
+    "LINKAGE_READ_ONLY": {"executes_target_code": false, "auto_advance_allowed": true},
+    "REAL_TARGET_INSTALL": {"executes_target_code": true, "auto_advance_allowed": false}
+  },
+  "controlled_auto_advance": {
+    "requires_explicit_scope_for_every_mode": true,
+    "requires_exact_command_hashes": true,
+    "requires_predecessor_evidence": true,
+    "requires_result_validation_before_promotion": true,
+    "max_transitions_per_driver_invocation": 20,
+    "stop_at_next_human_gate": true,
+    "stop_on_unknown_state": true,
+    "stop_on_open_finding": true,
+    "stop_on_unpropagated_invalidation": true,
+    "stop_on_hash_or_schema_drift": true
+  },
+  "automatic_loop_policy_ref": "LOOP_POLICY.json",
+  "authorization_policy_ref": "AUTHORIZATION_POLICY.json",
+  "generic_authorization_exclusions": [
+    "START_PACKAGE_HUMAN_APPROVAL",
+    "PROTOCOL_BASELINE_APPROVAL",
+    "P3_NOT_APPLICABLE_DECISION",
+    "REAL_TARGET_INSTALL",
+    "SCOPE_EXPANSION",
+    "CERTIFICATE_OVERRIDE"
+  ],
+  "success_claim_policy": {
+    "exit_code_zero_is_not_sufficient": true,
+    "file_presence_is_not_sufficient": true,
+    "model_self_report_is_not_sufficient": true,
+    "loop_convergence_is_not_sufficient": true,
+    "validated_result_and_promotion_event_required": true
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "format_version": 1,
+  "status": "FIXTURE_NOT_RUN",
+  "route": "project-incremental",
+  "reason": "No reliable component G for this project-only title change. Preserve current customizations and inspect the proposed change.",
+  "rename_map": {},
+  "shared_dependencies": [],
+  "leave_unmanaged": [
+    "USER_NOTES.md",
+    "data/notes.json",
+    "data/sources.json",
+    "tools/render.py"
+  ],
+  "conflicts_requiring_semantic_review": [
+    "config.json"
+  ],
+  "expected_candidate": "../../expected/after-incremental",
+  "accepted_A": null
+}

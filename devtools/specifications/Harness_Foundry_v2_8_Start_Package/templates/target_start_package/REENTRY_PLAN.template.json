@@ -1,0 +1,30 @@
+{
+  "schema_version": "2.8",
+  "plan_id": "<REENTRY-PLAN-ID>",
+  "program_id": "<PROGRAM-ID>",
+  "status": "DRAFT_NOT_AUTHORIZED",
+  "finding_ids": ["<FINDING-ID>"],
+  "repair_owner": "<MAIN_BUILD|EXTERNAL_LAB|LINKAGE_TOOL|DESIGN_AUTHORITY>",
+  "repair_workpack_id": "<REPAIR-WORKPACK-ID>",
+  "invalidation_event_refs": ["<REVOCATION-EVENT-REF>"],
+  "invalidated_node_ids": [],
+  "earliest_required_reentry_gate": "<GATE-ID>",
+  "steps": [
+    {"order": 1, "step_id": "VALIDATE_REPAIR_RESULT", "requires": ["REPAIR_WORKPACK_RESULT_VALID"], "status": "PLANNED"},
+    {"order": 2, "step_id": "CONFIRM_INVALIDATION_PROPAGATED", "requires": ["REVOCATION_LEDGER_CURRENT"], "status": "PLANNED"},
+    {"order": 3, "step_id": "REBUILD_FROM_EARLIEST_GATE", "requires": ["VALID_REPAIR_EXECUTION_AUTHORIZATION"], "status": "PLANNED"},
+    {"order": 4, "step_id": "REVALIDATE_ALL_DOWNSTREAM_BINDINGS", "requires": ["ALL_REQUIRED_GATE_RESULTS_PASS"], "status": "PLANNED"},
+    {"order": 5, "step_id": "PROMOTE_REBUILT_STATE", "requires": ["VALID_PROMOTION_AUTHORIZATION"], "status": "PLANNED"}
+  ],
+  "authorization_ref": null,
+  "loop_state_ref": "LOOP_STATE.json",
+  "required_new_evidence_refs": [],
+  "stale_evidence_refs_forbidden": [],
+  "completion_requires": [
+    "ALL_FINDINGS_RESOLVED_WITH_VALIDATED_RESULTS",
+    "ALL_INVALIDATED_NODES_REBUILT_OR_EXPLICITLY_REVOKED",
+    "ALL_DOWNSTREAM_HASH_BINDINGS_CURRENT",
+    "NO_OPEN_BLOCKER",
+    "PROMOTION_EVENT_APPENDED"
+  ]
+}

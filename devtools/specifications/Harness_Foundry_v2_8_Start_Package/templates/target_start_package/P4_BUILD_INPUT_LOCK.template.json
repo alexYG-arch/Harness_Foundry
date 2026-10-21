@@ -1,0 +1,17 @@
+{
+  "schema_version": "2.8",
+  "lock_type": "P4_BUILD_INPUT_LOCK",
+  "lock_id": "<LOCK-ID>",
+  "program_id": "<PROGRAM-ID>",
+  "charter_hash": "<SHA256>",
+  "profile_lock_hash": "<SHA256>",
+  "p3_lock_or_na_lock_hash": "<SHA256>",
+  "c3_checkpoint_hash": "<SHA256>",
+  "p4_local_gate_report_hash": "<SHA256>",
+  "workpack_dag_hash": "<SHA256>",
+  "stage_spec_hash": "<SHA256>",
+  "run_path_hash": "<SHA256>",
+  "may_build_release_candidate_artifact": true,
+  "may_install_real_target": false,
+  "may_claim_release_ready": false
+}

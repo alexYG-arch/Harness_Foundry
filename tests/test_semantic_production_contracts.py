@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from harness_foundry_factory.constants import default_spec_root
+
 import ast
 from copy import deepcopy
 import hashlib
@@ -38,7 +40,7 @@ from harness_foundry_factory.validator import validate_candidate
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-SPEC_ROOT = REPOSITORY_ROOT.parent / "Harness_Foundry_v2_8_Start_Package"
+SPEC_ROOT = default_spec_root()
 FIXTURE_PATH = REPOSITORY_ROOT / "tests/fixtures/harness_requirement_ir.json"
 CREATED_AT = "2026-08-03T00:00:00Z"
 

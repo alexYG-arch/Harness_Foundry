@@ -48,6 +48,20 @@ Public sample inputs: [complete Task CLI PRD](examples/task-cli/PRD.md),
 code and tests, and the [verification resources example](examples/resource-check/README.md). They are synthetic examples, not pre-approved builds or embedded
 business logic. Every real use still requires document review and runtime approval.
 
+The [static capability reference](docs/CAPABILITY_REFERENCE.md) separates factory
+knowledge, execution support and target delivery. It is descriptive, not an
+execution allowlist. The [composition/upgrade examples](examples/harness-composition-upgrade/README.md)
+include two mechanism fixtures and three business workflow preparations with their
+helper and checker dependencies. Their presence does not establish live business
+or complete Harness acceptance.
+
+Optional [capability preparation helpers](examples/capability-adapters/README.md)
+support explicitly selected, separately supplied capability versions. They resolve
+host bindings and prepare tool calls; they do not install packages or execute them.
+The Foundry observation adapter is included here; its optional public dashboard
+component is selected separately. Projects without these components keep the same
+reviewed build route.
+
 ## Verification resources and repair
 
 Declare resource profiles only when checks need scratch/cache files, SQLite, owned
@@ -97,9 +111,9 @@ meets its requirements. Complete release acceptance needs the declared same-pack
 new-project and existing-project evidence, plus closure of known in-scope defects.
 This candidate does not itself assert publication or CI success. Its final validation
 and release information will identify the selected commit and exact archive.
-The current stable release remains
-[v0.4.0](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.4.0);
-existing tags, releases and archives remain available unchanged.
+Existing tags and archives remain available from
+[published releases](https://github.com/alexYG-arch/Harness_Foundry/releases).
+This engineering candidate does not replace a published release.
 Use a separate directory for an upgrade; code rollback does not undo effects,
 revive authorizations or permit silent database downgrades.
 

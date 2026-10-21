@@ -1,0 +1,44 @@
+{
+  "format_version": 1,
+  "status": "FIXTURE_NOT_RUN",
+  "requirements": [
+    "README.md"
+  ],
+  "components": [
+    {
+      "id": "api",
+      "source": "synthetic-local-fixture",
+      "version": "v1",
+      "config": "versions/v1/config.json",
+      "dependencies": [
+        "Python standard library"
+      ],
+      "files": [
+        {
+          "path": "config.json",
+          "G": {
+            "file": "versions/v1/config.json",
+            "executable": false
+          }
+        },
+        {
+          "path": "tools/service.py",
+          "G": {
+            "file": "versions/v1/tools/service.py",
+            "executable": false
+          }
+        },
+        {
+          "path": "tools/client.py",
+          "G": {
+            "file": "versions/v1/tools/client.py",
+            "executable": false
+          }
+        }
+      ]
+    }
+  ],
+  "project_files": [],
+  "accepted_A": null,
+  "acceptance_note": "No controller acceptance or lineage is asserted. expected/ contains proposed reference candidates only."
+}

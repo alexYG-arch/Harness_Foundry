@@ -1,0 +1,15 @@
+{
+  "schema_version": "2.8",
+  "project_id": "<MAIN-BUILD-PROJECT-ID>",
+  "project_role": "MAIN_BUILD_PROJECT",
+  "single_active_workpack": true,
+  "auto_start_next_workpack": false,
+  "workpacks": [
+    {"workpack_id": "MB-G0", "phase": "G0", "status": "PLANNED", "requires": ["CHARTER_LOCK_VALID"]},
+    {"workpack_id": "MB-P1", "phase": "P1", "status": "PLANNED", "requires": ["G0_CONTROL_LOCK_VALID"]},
+    {"workpack_id": "MB-P2", "phase": "P2", "status": "PLANNED", "requires": ["P1_BUILD_LOCK_VALID"]},
+    {"workpack_id": "MB-P3", "phase": "P3", "status": "PLANNED", "requires": ["P2_BUILD_LOCK_VALID"]},
+    {"workpack_id": "MB-P4", "phase": "P4", "status": "PLANNED", "requires": ["P3_BUILD_LOCK_OR_APPROVED_P3_NA_LOCK_VALID", "C3_CHECKPOINT_PASS"]},
+    {"workpack_id": "MB-RELEASE-CANDIDATE", "phase": "P4_RELEASE", "status": "PLANNED", "requires": ["P4_BUILD_INPUT_LOCK_VALID", "PACK_B1_PASS", "INSTALLABILITY_PASS"]}
+  ]
+}

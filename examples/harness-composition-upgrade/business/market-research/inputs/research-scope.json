@@ -1,0 +1,17 @@
+{
+  "synthetic": true,
+  "as_of": "2026-10-01",
+  "region": "虚构 A 社区",
+  "question": "是否值得开展预约产品的小规模试点，以及还缺什么证据？",
+  "preserve_decisions": {
+    "report_title": "邻里预约试点观察",
+    "currency": "CNY",
+    "pricing_period": "monthly",
+    "separate_interest_from_use": true
+  },
+  "not_requested": [
+    "全行业市场规模",
+    "实时全市场竞品排名",
+    "付费账号或私人数据"
+  ]
+}

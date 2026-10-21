@@ -3,6 +3,8 @@
 import json
 import sys
 
+from .python_startup import require_supported_python
+
 
 # Source-engineering diagnostics only. None advances a historical Program.
 DIAGNOSTIC_COMMANDS = frozenset({"verify-spec", "validate-core", "project-core-evidence", "self-check-diagnostic"})
@@ -17,6 +19,7 @@ RETIRED_COMMANDS = frozenset({
 
 
 def main(argv=None):
+    require_supported_python(argv)
     arguments = list(sys.argv[1:] if argv is None else argv)
     command = arguments[0] if arguments else None
     if command in RETIRED_COMMANDS:

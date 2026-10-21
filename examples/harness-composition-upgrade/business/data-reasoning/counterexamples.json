@@ -1,0 +1,71 @@
+[
+  {
+    "id": "DATA-C1",
+    "description": "保留 b002 旧版本造成多计",
+    "wrong_claim": {
+      "known_revenue_yuan": "100.50"
+    },
+    "violates": [
+      "highest_revision_only"
+    ]
+  },
+  {
+    "id": "DATA-C2",
+    "description": "数字 80.50 正确，但把已知小计称为完整收入",
+    "wrong_claim": {
+      "complete_revenue_yuan": "80.50"
+    },
+    "violates": [
+      "missing_is_unknown"
+    ]
+  },
+  {
+    "id": "DATA-C3",
+    "description": "把已知小计除以全部 5 笔，并称为已知金额均值",
+    "wrong_claim": {
+      "known_amount_mean_display_yuan": "16.10"
+    },
+    "violates": [
+      "denominator_known_amount"
+    ]
+  },
+  {
+    "id": "DATA-C4",
+    "description": "按 UTC 字面日期漏 b001 并加入 b009",
+    "wrong_claim": {
+      "scoped_paid_ids": [
+        "b002",
+        "b004",
+        "b005",
+        "b008",
+        "b009"
+      ]
+    },
+    "violates": [
+      "local_date_boundary"
+    ]
+  },
+  {
+    "id": "DATA-C5",
+    "description": "正确的小计加上没有依据的促销增长因果解释",
+    "wrong_claim": {
+      "known_revenue_yuan": "80.50",
+      "growth_rate": "0.20",
+      "cause": "促销提高收入 20%"
+    },
+    "violates": [
+      "no_comparison_or_causal_evidence"
+    ]
+  },
+  {
+    "id": "DATA-C6",
+    "description": "V2 把用户 40 元情景假设称为观测上限",
+    "wrong_claim": {
+      "conditional_upper_bound_yuan": "120.50",
+      "is_actual_complete_revenue": true
+    },
+    "violates": [
+      "assumption_not_observation"
+    ]
+  }
+]

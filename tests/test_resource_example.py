@@ -403,11 +403,11 @@ class ResourceExampleTests(unittest.TestCase):
             return result
 
         fixture.runner = runner
-        with patch("harness_foundry_factory.build_runtime.finish_resource_observation", side_effect=finish_then_interrupt):
+        with patch("harness_foundry_factory.build_resource_lifecycle.finish_resource_observation", side_effect=finish_then_interrupt):
             with self.assertRaises(support.InjectedControllerCrash):
                 fixture.advance()
         self.assertEqual(len(calls), 2)
-        with patch("harness_foundry_factory.build_runtime.materialize_product_copy",
+        with patch("harness_foundry_factory.build_resource_lifecycle.materialize_product_copy",
                    side_effect=AssertionError("recovery must not recopy a completed example command")):
             self.assertEqual(fixture.advance()["status"], "PLAN_CHECKS_ACCEPTED")
         self.assertEqual(len(calls), 2, "neither the product command nor completed check is replayed")

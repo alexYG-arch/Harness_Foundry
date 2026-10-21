@@ -1,0 +1,39 @@
+{
+  "format_version": 1,
+  "status": "FIXTURE_NOT_RUN",
+  "requirements": [
+    "README.md"
+  ],
+  "components": [
+    {
+      "id": "doc",
+      "source": "synthetic-local-fixture",
+      "version": "v1",
+      "config": "versions/v1/config.json",
+      "dependencies": [
+        "Python standard library"
+      ],
+      "files": [
+        {
+          "path": "config.json",
+          "G": {
+            "file": "versions/v1/config.json",
+            "executable": false
+          }
+        },
+        {
+          "path": "tools/render.py",
+          "G": {
+            "file": "versions/v1/tools/render.py",
+            "executable": false
+          }
+        }
+      ]
+    }
+  ],
+  "project_files": [
+    "USER_NOTES.md"
+  ],
+  "accepted_A": null,
+  "acceptance_note": "No controller acceptance or lineage is asserted. expected/ contains proposed reference candidates only."
+}

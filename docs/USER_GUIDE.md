@@ -279,7 +279,8 @@ python tools/validate_skill.py
 报告路径必须尚不存在；再次运行时换一个文件名。
 `test` extra 声明 jsonschema，`security` extra 声明 cryptography；
 历史 `runtime-audit` extra 另含 referencing。它们不属于通用运行包依赖。
-部分历史全量回归另依赖只读规范资料，不能把这些维护者要求套到普通使用者身上。
+历史全量回归使用源码自带的固定只读规范资料，不再隐式依赖本机相邻目录；
+校验方式见[源码回归规范依赖](DEVELOPMENT_SPECIFICATION.md)。这些维护者要求不适用于普通运行包用户。
 
 更多底层资料：[Build CLI](GENERIC_BUILD_CLI.md)、[运行控制](GENERIC_BUILD_RUNTIME.md)。
 普通问题在 [Issues](https://github.com/alexYG-arch/Harness_Foundry/issues) 提交去敏复现；

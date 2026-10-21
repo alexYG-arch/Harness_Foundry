@@ -1,0 +1,39 @@
+{
+  "format_version": 1,
+  "title": "我的周报（补充版）",
+  "ordered_headings": [
+    "先做什么",
+    "本周要点"
+  ],
+  "required_facts": [
+    "团队需要每周离线汇总。",
+    "先核对来源，再导出报告。"
+  ],
+  "citations": [
+    "[s1]",
+    "[s2]"
+  ],
+  "sources": {
+    "s1": {
+      "title": "合成访谈",
+      "locator": "fixture://interview-01"
+    },
+    "s2": {
+      "title": "合成流程",
+      "locator": "fixture://workflow-01"
+    }
+  },
+  "priorities": [
+    "(high)",
+    "(normal)"
+  ],
+  "user_notes": "用户保留：下周再讨论正式发布；本例不自动发布。\n",
+  "section_lines": {
+    "先做什么": [
+      "- 先核对来源，再导出报告。 (normal) [s2]"
+    ],
+    "本周要点": [
+      "- 团队需要每周离线汇总。 (high) [s1]"
+    ]
+  }
+}

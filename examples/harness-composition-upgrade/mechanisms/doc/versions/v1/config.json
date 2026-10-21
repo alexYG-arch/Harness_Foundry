@@ -1,0 +1,15 @@
+{
+  "title": "Weekly report",
+  "sections": [
+    {
+      "id": "summary",
+      "title": "Summary"
+    },
+    {
+      "id": "actions",
+      "title": "Actions"
+    }
+  ],
+  "include_source_titles": false,
+  "show_priority": false
+}

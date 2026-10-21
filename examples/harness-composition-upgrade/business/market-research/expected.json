@@ -1,0 +1,90 @@
+{
+  "basis": [
+    "inputs/research-scope.json",
+    "inputs/sources.json",
+    "inputs/sources/S01-interest-2024.md",
+    "inputs/sources/S02-pilot-2026.md",
+    "inputs/sources/S03-vendor-price.md",
+    "inputs/sources/S04-community-price.md"
+  ],
+  "supported_observations": [
+    {
+      "id": "M01",
+      "claim": "2024 年合成便利样本中 35/100 表示愿意考虑，比例 35%；不是付费转化。",
+      "citations": [
+        "S01:P1",
+        "S01:P2"
+      ],
+      "numerator": 35,
+      "denominator": 100,
+      "ratio": "0.35"
+    },
+    {
+      "id": "M02",
+      "claim": "2026 年合成试点志愿者当周免费使用 28/40=70%；不代表居民整体。",
+      "citations": [
+        "S02:P1",
+        "S02:P2"
+      ],
+      "numerator": 28,
+      "denominator": 40,
+      "ratio": "0.70"
+    }
+  ],
+  "conflicts": [
+    {
+      "id": "M03",
+      "field": "同一虚构套餐的月费",
+      "citations": [
+        "S03:P1",
+        "S04:P1"
+      ],
+      "values_yuan": [
+        "29",
+        "39"
+      ],
+      "resolution": "未知；需要生效时间、税费、优惠和合同依据，不能自行宣布已解决。"
+    }
+  ],
+  "unsupported_claims": [
+    {
+      "id": "M04",
+      "claim": "市场需求从 35% 增长到 70%，翻倍",
+      "why": "年份、招募人群和意愿/实际免费使用指标不同；不具可比性。",
+      "citations": [
+        "S01:P1",
+        "S02:P1"
+      ]
+    },
+    {
+      "id": "M05",
+      "claim": "当前所有用户愿付 29 元，全年收入可确定",
+      "why": "价目不是支付意愿/收入记录；缺少客户数量和付费转化。",
+      "citations": [
+        "S03:P1",
+        "S02:P2"
+      ]
+    },
+    {
+      "id": "M06",
+      "claim": "排队盒已支持离线确认或是最佳产品",
+      "why": "S03:P2 只说预约列表和通知，S04:P2 无排名证据。",
+      "citations": [
+        "S03:P2",
+        "S04:P2"
+      ]
+    }
+  ],
+  "decision_boundary": "允许不同试点建议，但必须限定合成样本、没有收费/因果证据、价格冲突未解；不要求唯一措辞。",
+  "v2_addition": [
+    "保留价格冲突两方，列需要补充的价格条件/合同依据。",
+    "列真实付费转化与更代表性样本的待补证据，区分下一步研究与已获事实。"
+  ],
+  "live_branch_status": "NOT_RUN",
+  "not_proven_by": [
+    "固定资料有引用编号",
+    "合成来源的比例计算正确",
+    "宿主有网络权限",
+    "检索仅返回标题未打开原文"
+  ]
+}

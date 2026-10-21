@@ -1,0 +1,63 @@
+{
+  "schema_version": "2.8",
+  "dag_id": "<INVALIDATION-DAG-ID>",
+  "program_id": "<PROGRAM-ID>",
+  "nodes": [
+    "CANONICAL_INTENT",
+    "CHARTER_PROFILE_LOCKS",
+    "G0_C0",
+    "P1_C1",
+    "P2_C2",
+    "P3_C3",
+    "P4_BUILD_INPUT_LOCK",
+    "PACK_DRAFT",
+    "LINKAGE_A_B0_C",
+    "RELEASE_ARTIFACT",
+    "LINKAGE_B1",
+    "P4_INSTALLABILITY",
+    "P4_RELEASE_CANDIDATE_LOCK",
+    "CERTIFICATION_INSTALLATION",
+    "LINKAGE_D",
+    "LAB_C4_EVIDENCE",
+    "CONFORMANCE_CERTIFICATE",
+    "P4_CERTIFIED_RELEASE_LOCK",
+    "REAL_TARGET_INSTALL_RECEIPT"
+  ],
+  "edges": [
+    {"from": "CANONICAL_INTENT", "to": "CHARTER_PROFILE_LOCKS"},
+    {"from": "CHARTER_PROFILE_LOCKS", "to": "G0_C0"},
+    {"from": "G0_C0", "to": "P1_C1"},
+    {"from": "P1_C1", "to": "P2_C2"},
+    {"from": "P2_C2", "to": "P3_C3"},
+    {"from": "P3_C3", "to": "P4_BUILD_INPUT_LOCK"},
+    {"from": "P4_BUILD_INPUT_LOCK", "to": "PACK_DRAFT"},
+    {"from": "PACK_DRAFT", "to": "LINKAGE_A_B0_C"},
+    {"from": "LINKAGE_A_B0_C", "to": "RELEASE_ARTIFACT"},
+    {"from": "RELEASE_ARTIFACT", "to": "LINKAGE_B1"},
+    {"from": "LINKAGE_B1", "to": "P4_INSTALLABILITY"},
+    {"from": "P4_INSTALLABILITY", "to": "P4_RELEASE_CANDIDATE_LOCK"},
+    {"from": "P4_RELEASE_CANDIDATE_LOCK", "to": "CERTIFICATION_INSTALLATION"},
+    {"from": "CERTIFICATION_INSTALLATION", "to": "LINKAGE_D"},
+    {"from": "LINKAGE_D", "to": "LAB_C4_EVIDENCE"},
+    {"from": "LAB_C4_EVIDENCE", "to": "CONFORMANCE_CERTIFICATE"},
+    {"from": "CONFORMANCE_CERTIFICATE", "to": "P4_CERTIFIED_RELEASE_LOCK"},
+    {"from": "P4_CERTIFIED_RELEASE_LOCK", "to": "REAL_TARGET_INSTALL_RECEIPT"}
+  ],
+  "triggers": [
+    {"trigger": "CANONICAL_INTENT_CHANGED", "invalidate_from": "CANONICAL_INTENT", "required_reentry_gate": "G0"},
+    {"trigger": "P3_CHANGED_MISSING_OR_NA_DECISION_CHANGED", "invalidate_from": "P3_C3", "required_reentry_gate": "P3"},
+    {"trigger": "PACK_NORMATIVE_BINDING_CHANGED", "invalidate_from": "LINKAGE_A_B0_C", "required_reentry_gate": "B0"},
+    {"trigger": "ARTIFACT_OR_BUILD_PROVENANCE_CHANGED", "invalidate_from": "RELEASE_ARTIFACT", "required_reentry_gate": "B1"},
+    {"trigger": "INSTALL_ORIGIN_MISMATCH", "invalidate_from": "P4_INSTALLABILITY", "required_reentry_gate": "P4_INSTALLABILITY"},
+    {"trigger": "CANDIDATE_LOCK_CHANGED", "invalidate_from": "P4_RELEASE_CANDIDATE_LOCK", "required_reentry_gate": "CERTIFICATION_INSTALL"},
+    {"trigger": "LAB_CHECKER_OR_SCENARIO_HASH_CHANGED", "invalidate_from": "LAB_C4_EVIDENCE", "required_reentry_gate": "C4"},
+    {"trigger": "CERTIFICATE_BINDING_MISMATCH", "invalidate_from": "CONFORMANCE_CERTIFICATE", "required_reentry_gate": "C4"}
+  ],
+  "propagation_policy": {
+    "transitive_downstream_invalidation_required": true,
+    "append_only_revocation_event_required": true,
+    "invalidated_nodes_cannot_satisfy_dependencies": true,
+    "active_runtime_must_drop_certified_claim_on_binding_mismatch": true
+  },
+  "revocation_ledger_ref": "REVOCATION_LEDGER.jsonl"
+}

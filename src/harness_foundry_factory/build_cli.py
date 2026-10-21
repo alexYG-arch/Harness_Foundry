@@ -5,6 +5,10 @@ import json
 from pathlib import Path
 import sys
 
+from .python_startup import require_supported_python
+
+require_supported_python(module="harness_foundry_factory.build_cli")
+
 from .build_types import FactoryError, RequestValidationError, canonical_json
 from .identity import BASELINE_FACTORY_ID, FACTORY_ID, FACTORY_VERSION, TARGET_PROTOCOL_VERSION
 

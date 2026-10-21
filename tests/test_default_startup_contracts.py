@@ -13,6 +13,7 @@ import subprocess
 import sys
 import unittest
 
+from harness_foundry_factory.constants import default_spec_root
 from harness_foundry_factory.compiler import compile_candidate
 from harness_foundry_factory.validator import (
     validate_candidate, _check_shared_control_baseline_executable_contract,
@@ -36,7 +37,7 @@ class DefaultStartupContractTests(unittest.TestCase):
         ir["target"].update(output_root=str(cls.candidate), portability_mode="LOGICAL_RESOURCE_URI")
         ir["target"].update(cls.target_overrides)
         assert "shared_control_baseline_execution_contract" not in ir["target"]
-        compile_candidate(ir, ROOT.parent / "Harness_Foundry_v2_8_Start_Package",
+        compile_candidate(ir, default_spec_root(),
                           cls.root / "staging", cls.candidate, "2026-09-06T00:00:00Z")
 
     @classmethod

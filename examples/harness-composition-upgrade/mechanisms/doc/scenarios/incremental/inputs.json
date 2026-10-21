@@ -1,0 +1,20 @@
+{
+  "format_version": 1,
+  "files": [
+    {
+      "path": "config.json",
+      "C": {
+        "file": "../../expected/after-v3/config.json",
+        "executable": false
+      },
+      "G": null,
+      "N": {
+        "file": "../../expected/after-incremental/config.json",
+        "executable": false
+      },
+      "owners": [
+        "project"
+      ]
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create or verify the read-only sibling Harness Foundry v2.8 spec lock."""
+"""Inspect the pinned development spec; preserve the historical sibling lock."""
 
 from __future__ import annotations
 
@@ -12,6 +12,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
+from harness_foundry_factory.constants import historical_spec_root
+
 from harness_foundry_factory.spec_lock import (  # noqa: E402
     SpecLockError,
     build_spec_lock,
@@ -22,6 +24,7 @@ from harness_foundry_factory.spec_lock import (  # noqa: E402
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--verify", type=Path, metavar="LOCK_JSON")
+    parser.add_argument("--historical", action="store_true", help="inspect the unchanged physical sibling binding")
     parser.add_argument("--output", type=Path, help="explicitly persist a newly built lock")
     args = parser.parse_args(argv)
     try:
@@ -29,7 +32,7 @@ def main(argv: list[str] | None = None) -> int:
             lock = json.loads(args.verify.read_text(encoding="utf-8"))
             result = verify_spec_lock(lock)
         else:
-            result = build_spec_lock()
+            result = build_spec_lock(historical_spec_root() if args.historical else None)
             if args.output:
                 args.output.write_text(
                     json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n",

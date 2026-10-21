@@ -1,0 +1,52 @@
+{
+  "schema_version": "2.8",
+  "manifest_id": "<COMMAND-MANIFEST-ID>",
+  "workpack_id": "<WORKPACK-ID>",
+  "workspace_root_ref": "<ROOT-ID-AND-HASH>",
+  "default_disposition": "DECLARE_ONLY",
+  "execution_authorization_ref": null,
+  "manifest_sha256": "<SHA256>",
+  "commands": [
+    {
+      "command_id": "<COMMAND-ID>",
+      "source": "CURRENT_WORKPACK_MANIFEST",
+      "executable": "/absolute/path/to/python",
+      "executable_abs": "/absolute/path/to/python",
+      "executable_sha256": "<SHA256>",
+      "argv": ["/absolute/path/to/python", "-m", "pytest", "tests/<scope>/"],
+      "shell": false,
+      "command_sha256": "<SHA256-OF-EXECUTABLE-ARGV-CWD-ENV-SCOPE>",
+      "disposition": "DECLARE_ONLY_UNTIL_AUTHORIZED",
+      "allowed_modes": ["WORKPACK_EXECUTION"],
+      "cwd_relative_to_workspace_root": "repository",
+      "cwd_abs": "/absolute/path/to/workspace/repository",
+      "target_environment": "CANDIDATE_SANDBOX",
+      "network": "DENY",
+      "privilege_escalation": false,
+      "allowed_write_roots": ["repository/.test-artifacts/"],
+      "environment_allowlist": {},
+      "forbidden_environment_variables": ["PYTHONPATH"],
+      "timeout_seconds": 300,
+      "expected_exit_codes": [0],
+      "cleanup_required": true,
+      "stdout_stderr_exit_code_required": true,
+      "runtime_attestation_required": false,
+      "auto_execute": false,
+      "authorization_ref": "<EXECUTION-AUTHORIZATION-ID>",
+      "evidence": {
+        "stdout_ref": "evidence/commands/<COMMAND-ID>.stdout",
+        "stderr_ref": "evidence/commands/<COMMAND-ID>.stderr",
+        "exit_code_ref": "evidence/commands/<COMMAND-ID>.exit-code.json",
+        "runtime_attestation_ref": null
+      }
+    }
+  ],
+  "execution_invariants": {
+    "exact_argv_no_shell_reparse": true,
+    "absolute_executable_required": true,
+    "exact_command_hash_authorization_required": true,
+    "cwd_must_resolve_inside_authorized_root": true,
+    "undeclared_environment_injection_forbidden": true,
+    "result_ref_required": true
+  }
+}

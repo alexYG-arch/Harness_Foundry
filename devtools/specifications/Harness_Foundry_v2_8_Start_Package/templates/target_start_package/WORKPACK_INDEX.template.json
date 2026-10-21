@@ -1,0 +1,36 @@
+{
+  "schema_version": "2.8",
+  "program_id": "<PROGRAM-ID>",
+  "dag_status": "PLANNED_NOT_EXECUTABLE",
+  "single_active_workpack": true,
+  "workpacks": [
+    {
+      "workpack_id": "<WP-G0-ID>",
+      "project_id": "MAIN_HARNESS_BUILD",
+      "phase": "G0",
+      "topological_order": 1,
+      "status": "PLANNED_NOT_ACTIVE",
+      "primary_layer_type": "RULE_DEFINITION",
+      "dependency_ids": [],
+      "required_predecessor_lock_refs": ["CHARTER_LOCK.json"],
+      "workpack_ref": "workpacks/<WP-G0-ID>.md",
+      "capsule_ref": "capsules/<WP-G0-ID>.capsule.json",
+      "command_manifest_ref": "commands/<WP-G0-ID>.commands.json",
+      "result_ref": "results/<WP-G0-ID>.result.json",
+      "loop_state_ref": "loops/<WP-G0-ID>.loop.json",
+      "execution_authorization_ref": null,
+      "auto_start": false,
+      "controlled_auto_advance_eligible": true,
+      "promotion_status": "NOT_PROMOTED"
+    }
+  ],
+  "active_workpack_id": null,
+  "next_eligible_workpack_id": null,
+  "activation_requires": [
+    "VALID_PREDECESSOR_LOCKS",
+    "VALID_EXECUTION_AUTHORIZATION",
+    "HYDRATED_CAPSULE",
+    "NO_OPEN_BLOCKER_OR_INVALIDATION"
+  ],
+  "promotion_ledger_ref": "PROMOTION_LEDGER.jsonl"
+}

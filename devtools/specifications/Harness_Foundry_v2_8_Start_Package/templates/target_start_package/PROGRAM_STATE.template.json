@@ -1,0 +1,63 @@
+{
+  "schema_version": "2.8",
+  "program_id": "<PROGRAM-ID>",
+  "target": "P4_CERTIFIED_RELEASE_LOCK",
+  "charter": {
+    "status": "DRAFT",
+    "lock_ref": null,
+    "sha256": null
+  },
+  "profile": {
+    "value": "<FULL|STANDARD|LITE>",
+    "status": "PENDING_HUMAN_APPROVAL"
+  },
+  "program_registration_status": "NOT_REGISTERED",
+  "control_plane_registration_status": "NOT_REGISTERED",
+  "program_driver_runtime_verification_status": "NOT_VERIFIED",
+  "current_project_id": null,
+  "current_phase": null,
+  "current_phase_state": "WAITING_CHARTER_LOCK",
+  "next_eligible_phase": "G0",
+  "current_release_step": null,
+  "next_eligible_release_step": null,
+  "phases": {
+    "G0": {"status": "WAITING_CHARTER_LOCK", "lock_ref": null},
+    "C0": {"status": "WAITING_G0_LOCAL_GATE", "lock_ref": null},
+    "P1": {"status": "WAITING_G0_CONTROL_LOCK", "lock_ref": null},
+    "C1": {"status": "WAITING_P1_LOCAL_GATE", "lock_ref": null},
+    "P2": {"status": "WAITING_P1_BUILD_LOCK", "lock_ref": null},
+    "C2": {"status": "WAITING_P2_LOCAL_GATE", "lock_ref": null},
+    "P3": {"status": "WAITING_P2_BUILD_LOCK", "lock_ref": null},
+    "C3": {"status": "WAITING_P3_LOCAL_GATE_OR_NA_DECISION", "lock_ref": null},
+    "P4": {"status": "WAITING_P3_LOCK_AND_C3", "lock_ref": null},
+    "C4": {"status": "WAITING_CANDIDATE_INSTALL_AND_LINKAGE_D", "lock_ref": null}
+  },
+  "highest_touched_phase": null,
+  "highest_locally_closed_phase": null,
+  "valid_locks": [],
+  "invalidated_locks": [],
+  "valid_checkpoint_reports": [],
+  "invalidated_checkpoint_reports": [],
+  "open_finding_ids": [],
+  "blockers": ["<BLOCKER-ID>"],
+  "unpropagated_invalidation_ids": [],
+  "release_candidate_ready": false,
+  "certified_release_ready": false,
+  "real_target_installed": false,
+  "active_workpack": null,
+  "authoring_activity": "BUILD_PROGRAM_AUTHORING",
+  "active_execution_mode": "AUTHORING_ONLY",
+  "auto_start_generated_workpacks": false,
+  "controlled_auto_advance": {
+    "enabled": false,
+    "active_authorization_ref": null,
+    "transition_budget_remaining": 0,
+    "waiting_human_gate": "START_PACKAGE_HUMAN_APPROVAL"
+  },
+  "driver_state_ref": "PROGRAM_DRIVER_STATE.json",
+  "release_pipeline_ref": "RELEASE_PIPELINE_MANIFEST.json",
+  "loop_state_ref": "LOOP_STATE.json",
+  "transition_ledger_ref": "PHASE_TRANSITION_LEDGER.jsonl",
+  "promotion_ledger_ref": "PROMOTION_LEDGER.jsonl",
+  "revocation_ledger_ref": "REVOCATION_LEDGER.jsonl"
+}

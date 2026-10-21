@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from harness_foundry_factory.constants import default_spec_root
+
 from copy import deepcopy
 import hashlib
 import json
@@ -22,7 +24,7 @@ from tests.build_review_fixture import reviewed_document
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = ROOT.parent / "Harness_Foundry_v2_8_Start_Package"
+SPEC = default_spec_root()
 
 
 class SpecAndSourceTests(unittest.TestCase):
@@ -65,13 +67,13 @@ class SpecAndSourceTests(unittest.TestCase):
         after = {path: (path.stat().st_mtime_ns, hashlib.sha256(path.read_bytes()).hexdigest()) for path in before}
         self.assertEqual(after, before)
 
-    def test_spec_lock_is_portable_between_physical_sibling_layouts(self) -> None:
+    def test_development_spec_lock_is_portable_between_source_layouts(self) -> None:
         lock = build_spec_lock(SPEC)
 
         self.assertNotIn("spec_root_abs", lock)
         self.assertEqual(
             lock["spec_root_binding"],
-            "PHYSICAL_SIBLING_NAME_AND_CONTENT_HASH",
+            "REPOSITORY_DEVELOPMENT_PATH_AND_CONTENT_HASH",
         )
         self.assertEqual(verify_spec_lock(lock, SPEC)["status"], "PASS")
 
@@ -90,7 +92,7 @@ class SpecAndSourceTests(unittest.TestCase):
     def test_service_verify_spec_consumes_committed_lock(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            lock = json.loads((ROOT / "spec_lock" / "HF28_SPEC_LOCK.json").read_text())
+            lock = json.loads((ROOT / "spec_lock" / "HF28_DEVELOPMENT_SPEC_LOCK.json").read_text())
             lock["files"]["README.md"] = "0" * 64
             lock_path = root / "HF28_SPEC_LOCK.json"
             lock_path.write_text(json.dumps(lock))

@@ -1,0 +1,14 @@
+{
+  "schema_version": "2.8",
+  "project_id": "<LINKAGE-REVIEW-PROJECT-ID>",
+  "project_role": "READ_ONLY_LINKAGE_REVIEW",
+  "single_active_workpack": true,
+  "auto_start_next_workpack": false,
+  "workpacks": [
+    {"workpack_id": "LINK-PROTOCOL", "status": "PLANNED", "requires": ["SHARED_PROTOCOL_LOCK_VALID"]},
+    {"workpack_id": "LINK-CLI", "status": "PLANNED", "requires": ["LINK_PROTOCOL_SCHEMA_PASS", "EXTERNAL_LAB_INTERFACE_REGISTERED"]},
+    {"workpack_id": "LINK-SELFTEST", "status": "PLANNED", "requires": ["LINK_CLI_READY", "READ_ONLY_NEGATIVE_TESTS_READY"]},
+    {"workpack_id": "LINK-PREFLIGHT", "status": "PLANNED", "requires": ["LINK_SELFTEST_PASS", "MAIN_AND_LAB_INTERFACES_REGISTERED"]},
+    {"workpack_id": "LINK-D", "status": "PLANNED", "requires": ["RELEASE_CANDIDATE_LOCK_VALID", "CERTIFICATION_INSTALL_RECEIPT_VALID"]}
+  ]
+}

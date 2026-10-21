@@ -1,0 +1,28 @@
+{
+  "schema_version": "2.8",
+  "report_id": "<REPORT-ID>",
+  "package_id": "<TARGET-START-PACKAGE-ID>",
+  "status": "CANDIDATE_NOT_RUN",
+  "checks": [
+    {"check_id": "REQUIRED_FILES_PRESENT", "status": "NOT_RUN", "evidence_refs": []},
+    {"check_id": "JSON_PARSEABLE", "status": "NOT_RUN", "evidence_refs": []},
+    {"check_id": "CANONICAL_SOURCE_HASHES_PRESENT", "status": "NOT_RUN", "evidence_refs": []},
+    {"check_id": "INTENT_ATOM_COVERAGE_COMPLETE", "status": "NOT_RUN", "evidence_refs": []},
+    {"check_id": "PHASE_PREDECESSOR_LOCKS_EXPLICIT", "status": "NOT_RUN", "evidence_refs": []},
+    {"check_id": "P4_REQUIRES_P3_AND_C3", "status": "NOT_RUN", "evidence_refs": []},
+    {"check_id": "BUILD_AND_RUNTIME_ENTRYPOINTS_SEPARATE", "status": "NOT_RUN", "evidence_refs": []},
+    {"check_id": "THREE_PROJECT_CONSTRUCTION_DAG_COMPLETE", "status": "NOT_RUN", "evidence_refs": []},
+    {"check_id": "THREE_PROJECT_START_PACKAGES_COMPLETE", "status": "NOT_RUN", "evidence_refs": []},
+    {"check_id": "PROGRAM_DRIVER_DEFAULT_STOP_AND_AUTHORIZATION_BOUNDARY_VALID", "status": "NOT_RUN", "evidence_refs": []},
+    {"check_id": "RELEASE_PIPELINE_ORDER_AND_DAG_VALID", "status": "NOT_RUN", "evidence_refs": []},
+    {"check_id": "LOOP_BUDGET_STOP_AND_ESCALATION_DEFINED", "status": "NOT_RUN", "evidence_refs": []},
+    {"check_id": "DRIVER_IDEMPOTENCY_LEASE_AND_CRASH_RECOVERY_DEFINED", "status": "NOT_RUN", "evidence_refs": []},
+    {"check_id": "REPAIR_OWNER_INVALIDATION_AND_REENTRY_DEFINED", "status": "NOT_RUN", "evidence_refs": []},
+    {"check_id": "REAL_TARGET_INSTALL_SEPARATE_AUTHORIZATION_ENFORCED", "status": "NOT_RUN", "evidence_refs": []},
+    {"check_id": "COMMAND_ABSOLUTE_ENTRY_AUTHORIZATION_AND_EVIDENCE", "status": "NOT_RUN", "evidence_refs": []},
+    {"check_id": "NEGATIVE_TEST_WORKPACKS_PLANNED", "status": "NOT_RUN", "evidence_refs": []},
+    {"check_id": "NO_EXECUTION_OR_RELEASE_CLAIM", "status": "NOT_RUN", "evidence_refs": []}
+  ],
+  "blocking_findings": [],
+  "permitted_terminal_state": "START_PACKAGE_CANDIDATE_READY_FOR_HUMAN_REVIEW"
+}

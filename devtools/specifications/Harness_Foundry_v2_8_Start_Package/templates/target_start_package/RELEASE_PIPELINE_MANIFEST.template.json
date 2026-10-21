@@ -1,0 +1,43 @@
+{
+  "schema_version": "2.8",
+  "pipeline_id": "<RELEASE-PIPELINE-ID>",
+  "program_id": "<PROGRAM-ID>",
+  "target_id": "<TARGET-ID>",
+  "pipeline_status": "PLANNED_NOT_ACTIVE",
+  "active_step_id": null,
+  "steps": [
+    {"step_id": "P4_LOCAL_CLOSURE", "order": 1, "owner": "MAIN_HARNESS_BUILD", "mode": "WORKPACK_EXECUTION", "requires": ["P3_BUILD_LOCK_OR_APPROVED_NA_LOCK_VALID", "C3_CHECKPOINT_PASS"], "produces": ["P4_LOCAL_GATE_PASS"], "authorization_class": "PROGRAM_EXECUTION_AUTHORIZATION", "auto_advance_eligible": true},
+    {"step_id": "P4_BUILD_INPUT_LOCK", "order": 2, "owner": "MAIN_HARNESS_BUILD", "mode": "WORKPACK_EXECUTION", "requires": ["P4_LOCAL_GATE_PASS"], "produces": ["P4_BUILD_INPUT_LOCK_VALID"], "authorization_class": "PROGRAM_EXECUTION_AUTHORIZATION", "auto_advance_eligible": true},
+    {"step_id": "PACK_DRAFT", "order": 3, "owner": "MAIN_HARNESS_BUILD", "mode": "WORKPACK_EXECUTION", "requires": ["P4_BUILD_INPUT_LOCK_VALID"], "produces": ["CONFORMANCE_PACK_DRAFT_READY"], "authorization_class": "RELEASE_PIPELINE_AUTHORIZATION", "auto_advance_eligible": true},
+    {"step_id": "LINKAGE_A", "order": 4, "owner": "CONFORMANCE_LINKAGE_REVIEW", "mode": "LINKAGE_READ_ONLY", "requires": ["CONFORMANCE_PACK_DRAFT_READY"], "produces": ["LINKAGE_A_PASS"], "authorization_class": "LINKAGE_EXECUTION_AUTHORIZATION", "auto_advance_eligible": true},
+    {"step_id": "LINKAGE_B0", "order": 5, "owner": "CONFORMANCE_LINKAGE_REVIEW", "mode": "LINKAGE_READ_ONLY", "requires": ["LINKAGE_A_PASS"], "produces": ["PACK_B0_PASS"], "authorization_class": "LINKAGE_EXECUTION_AUTHORIZATION", "auto_advance_eligible": true},
+    {"step_id": "LINKAGE_C", "order": 6, "owner": "CONFORMANCE_LINKAGE_REVIEW", "mode": "LINKAGE_READ_ONLY", "requires": ["PACK_B0_PASS"], "produces": ["LINKAGE_C_PASS"], "authorization_class": "LINKAGE_EXECUTION_AUTHORIZATION", "auto_advance_eligible": true},
+    {"step_id": "PACKAGE_BUILD", "order": 7, "owner": "MAIN_HARNESS_BUILD", "mode": "PACKAGE_BUILD", "requires": ["P4_BUILD_INPUT_LOCK_VALID", "PACK_B0_PASS", "LINKAGE_C_PASS"], "produces": ["IMMUTABLE_RELEASE_ARTIFACT"], "authorization_class": "PACKAGE_BUILD_AUTHORIZATION", "auto_advance_eligible": true},
+    {"step_id": "LINKAGE_B1", "order": 8, "owner": "CONFORMANCE_LINKAGE_REVIEW", "mode": "LINKAGE_READ_ONLY", "requires": ["IMMUTABLE_RELEASE_ARTIFACT", "PACK_B0_PASS"], "produces": ["PACK_B1_PASS"], "authorization_class": "LINKAGE_EXECUTION_AUTHORIZATION", "auto_advance_eligible": true},
+    {"step_id": "P4_INSTALLABILITY", "order": 9, "owner": "CERTIFICATION_INSTALLER", "mode": "P4_INSTALLABILITY", "requires": ["IMMUTABLE_RELEASE_ARTIFACT", "PACK_B1_PASS"], "produces": ["P4_INSTALLABILITY_PASS"], "authorization_class": "INSTALLABILITY_AUTHORIZATION", "auto_advance_eligible": true},
+    {"step_id": "P4_RELEASE_CANDIDATE_LOCK", "order": 10, "owner": "BUILD_PROGRAM_DRIVER", "mode": "REGISTRATION_ONLY", "requires": ["P4_INSTALLABILITY_PASS", "PACK_B1_PASS"], "produces": ["P4_RELEASE_CANDIDATE_LOCK_VALID"], "authorization_class": "CANDIDATE_PROMOTION_AUTHORIZATION", "auto_advance_eligible": true},
+    {"step_id": "CERTIFICATION_INSTALL", "order": 11, "owner": "CERTIFICATION_INSTALLER", "mode": "CERTIFICATION_INSTALL", "requires": ["P4_RELEASE_CANDIDATE_LOCK_VALID"], "produces": ["INSTALLED_TARGET_DESCRIPTOR_VERIFIED"], "authorization_class": "CERTIFICATION_INSTALL_AUTHORIZATION", "auto_advance_eligible": true},
+    {"step_id": "LINKAGE_D", "order": 12, "owner": "CONFORMANCE_LINKAGE_REVIEW", "mode": "LINKAGE_READ_ONLY", "requires": ["INSTALLED_TARGET_DESCRIPTOR_VERIFIED", "P4_RELEASE_CANDIDATE_LOCK_VALID"], "produces": ["LINKAGE_D_PASS"], "authorization_class": "LINKAGE_EXECUTION_AUTHORIZATION", "auto_advance_eligible": true},
+    {"step_id": "LAB_C4", "order": 13, "owner": "EXTERNAL_CONFORMANCE_LAB", "mode": "LAB_CERTIFICATION", "requires": ["LINKAGE_D_PASS", "INSTALLED_TARGET_DESCRIPTOR_VERIFIED"], "produces": ["C4_CHECKPOINT_PASS"], "authorization_class": "LAB_CERTIFICATION_AUTHORIZATION", "auto_advance_eligible": true},
+    {"step_id": "CONFORMANCE_CERTIFICATE", "order": 14, "owner": "EXTERNAL_CONFORMANCE_LAB", "mode": "LAB_CERTIFICATION", "requires": ["C4_CHECKPOINT_PASS"], "produces": ["CONFORMANCE_CERTIFICATE_READY"], "authorization_class": "LAB_CERTIFICATION_AUTHORIZATION", "auto_advance_eligible": true},
+    {"step_id": "P4_CERTIFIED_RELEASE_LOCK", "order": 15, "owner": "BUILD_PROGRAM_DRIVER", "mode": "REGISTRATION_ONLY", "requires": ["C4_CHECKPOINT_PASS", "CONFORMANCE_CERTIFICATE_READY"], "produces": ["P4_CERTIFIED_RELEASE_LOCK_VALID"], "authorization_class": "CERTIFIED_RELEASE_PROMOTION_AUTHORIZATION", "auto_advance_eligible": true},
+    {"step_id": "WAIT_REAL_TARGET_INSTALL_AUTHORIZATION", "order": 16, "owner": "HUMAN_GATE_OWNER", "mode": "REGISTRATION_ONLY", "requires": ["P4_CERTIFIED_RELEASE_LOCK_VALID"], "produces": ["REAL_TARGET_INSTALL_AUTHORIZATION_GRANTED"], "authorization_class": "REAL_TARGET_INSTALL_AUTHORIZATION", "auto_advance_eligible": false},
+    {"step_id": "REAL_TARGET_INSTALL", "order": 17, "owner": "CERTIFICATION_INSTALLER", "mode": "REAL_TARGET_INSTALL", "requires": ["P4_CERTIFIED_RELEASE_LOCK_VALID", "REAL_TARGET_INSTALL_AUTHORIZATION_GRANTED"], "produces": ["REAL_TARGET_INSTALL_RECEIPT"], "authorization_class": "REAL_TARGET_INSTALL_AUTHORIZATION", "auto_advance_eligible": false}
+  ],
+  "ordering_invariants": [
+    "PACK_DRAFT_BEFORE_A_BEFORE_B0_BEFORE_C",
+    "ARTIFACT_ONLY_AFTER_A_B0_C",
+    "B1_ONLY_AFTER_IMMUTABLE_ARTIFACT",
+    "CANDIDATE_LOCK_ONLY_AFTER_B1_AND_INSTALLABILITY",
+    "CERTIFICATION_INSTALL_BEFORE_D_BEFORE_C4",
+    "CERTIFICATE_BEFORE_CERTIFIED_RELEASE_LOCK",
+    "REAL_TARGET_INSTALL_REQUIRES_SEPARATE_HUMAN_AUTHORIZATION"
+  ],
+  "failure_behavior": {
+    "stop_on_any_fail_blocked_or_unknown": true,
+    "finding_schema_ref": "FINDING_SCHEMA.json",
+    "repair_routing_rules_ref": "REPAIR_ROUTING_RULES.json",
+    "invalidation_dag_ref": "INVALIDATION_DAG.json",
+    "reentry_plan_ref": "REENTRY_PLAN.json"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "synthetic": true,
+  "target_date": "2026-09-01",
+  "timezone_offset_hours": 8,
+  "identity": "event_id",
+  "revision_rule": "先按 event_id 取最高 revision；同 ID/版本的完全相同行只保留一次，冲突则报告而非随意选择。",
+  "status": "paid",
+  "units_to_yuan": {
+    "yuan": "1",
+    "fen": "0.01"
+  },
+  "missing_amount": "保留为未知，计入有效已付款预约数，不计入已知金额小计及已知金额均值的分母。",
+  "non_negative_amounts": true,
+  "rounding": {
+    "display_decimal_places": 2,
+    "mode": "ROUND_HALF_UP",
+    "stage": "计算保留精度，只在最终显示时舍入。"
+  },
+  "comparison_period": null
+}

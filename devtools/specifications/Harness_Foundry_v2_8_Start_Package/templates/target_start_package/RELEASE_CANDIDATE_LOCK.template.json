@@ -1,0 +1,19 @@
+{
+  "schema_version": "2.8",
+  "lock_type": "P4_RELEASE_CANDIDATE_LOCK",
+  "lock_id": "<LOCK-ID>",
+  "charter_hash": "<SHA256>",
+  "profile_lock_hash": "<SHA256>",
+  "p3_lock_hash": "<SHA256>",
+  "c3_checkpoint_hash": "<SHA256>",
+  "build_lock_hash": "<SHA256>",
+  "release_artifact_hash": "<SHA256>",
+  "pack_b0_report_hash": "<SHA256>",
+  "pack_b1_report_hash": "<SHA256>",
+  "p4_installability_report_hash": "<SHA256>",
+  "linkage_tool_distribution_hash": "<SHA256>",
+  "lab_tool_distribution_hash": "<SHA256>",
+  "certification_plan_hash": "<SHA256>",
+  "may_install_real_target": false,
+  "may_claim_certified_release_ready": false
+}

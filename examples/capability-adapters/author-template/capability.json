@@ -1,0 +1,43 @@
+{
+  "name": "stack-example",
+  "version": "1",
+  "usage": "both",
+  "inputs": [
+    "selected tools and public configuration"
+  ],
+  "outputs": [
+    "explicit invocation and captured operation evidence"
+  ],
+  "materials": [
+    "guide.md"
+  ],
+  "tools": [
+    {
+      "id": "stack-example",
+      "path": "environment.py",
+      "interpreter": "stack-helper-python",
+      "interpreter_args": [
+        "-I",
+        "-B"
+      ]
+    }
+  ],
+  "runtime_files": [
+    "stack_runtime.py"
+  ],
+  "verification_files": [
+    "check_operation.py",
+    {
+      "path": "stack_runtime.py",
+      "shared": true
+    }
+  ],
+  "environment": [
+    {
+      "id": "stack-helper-python",
+      "kind": "executable",
+      "version_min": "3.11"
+    }
+  ],
+  "support": "Template only: replace with observed OS, architecture, tools and operation scope"
+}

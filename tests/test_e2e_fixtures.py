@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from harness_foundry_factory.constants import default_spec_root
+
 import json
 from pathlib import Path
 import tempfile
@@ -15,7 +17,7 @@ from tests.build_review_fixture import reviewed_document
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = ROOT.parent / "Harness_Foundry_v2_8_Start_Package"
+SPEC = default_spec_root()
 FIXTURES = ROOT / "tests/fixtures"
 
 

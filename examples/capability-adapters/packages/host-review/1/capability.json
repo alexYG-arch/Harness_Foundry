@@ -1,0 +1,12 @@
+{
+  "name": "host-review",
+  "version": "1",
+  "usage": "both",
+  "inputs": ["Project task, named inputs and outputs, selected workflow, actual independent host observations"],
+  "outputs": ["New byte snapshot for an independent check; no execution or acceptance identity"],
+  "materials": ["guide.md", "prd.md", "market.md"],
+  "tools": [{"id": "snapshot-host-review", "path": "snapshot.py", "interpreter": "python", "interpreter_args": ["-I", "-B"]}],
+  "environment": [{"id": "python", "kind": "executable", "version_min": "3.11"}],
+  "verification_files": ["check_review.py"],
+  "support": "The cooperating host performs the declared browser or search operations. This package preserves supplied observations and checks their binding, not their semantic truth or business acceptance."
+}

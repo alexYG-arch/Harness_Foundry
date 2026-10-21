@@ -38,6 +38,9 @@ ALLOWED_TOP_LEVEL_FILES = (
     "docs/ARCHITECTURE.md",
     "docs/CHAT_USAGE.md",
     "docs/GENERIC_BUILD_PLAN.md",
+    "docs/HARNESS_DESIGN_GUIDE.md",
+    "examples/harness-design/offline-naming.md",
+    "examples/harness-design/audio-handoff.md",
     "docs/GENERIC_BUILD_CLI.md",
     "docs/GENERIC_BUILD_RUNTIME.md",
     "docs/GENERIC_SOURCE_INTAKE.md",
@@ -547,11 +550,12 @@ def _declared_dependencies(root: Path) -> list[dict[str, Any]]:
         *_optional_python_dependencies(root),
         {
             "dependency_id": HF28_PACKAGE_ID,
-            "kind": "OPTIONAL_PHYSICAL_SIBLING_PACKAGE",
-            "physical_sibling_name": "Harness_Foundry_v2_8_Start_Package",
+            "kind": "SOURCE_DEVELOPMENT_SPECIFICATION",
+            "development_relative_path": "devtools/specifications/Harness_Foundry_v2_8_Start_Package",
             "required_for_core_startup": False,
-            "required_for_commands": ["verify-spec", "candidate-authoring"],
-            "discovery": "package_root.parent / physical_sibling_name",
+            "required_for_commands": ["verify-spec"],
+            "discovery": "declared development lock; absent from generic runtime",
+            "historical_sibling_binding": "read-only compatibility diagnostics only",
         },
     ]
 

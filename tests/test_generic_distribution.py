@@ -83,6 +83,46 @@ class GenericDistributionTests(unittest.TestCase):
             packager.package(self.archive)
         self.assertEqual(before, self.archive.read_bytes())
 
+    def test_design_guide_and_examples_load_from_relocated_skill(self):
+        # Resolve actual references from each entrypoint. A development file or
+        # private preparation directory must not silently fill a missing package.
+        entries = (
+            (ROOT, ROOT / ".agents/skills/harness-foundry-start-author/SKILL.md"),
+            (self.bundle, self.bundle / ".agents/skills/harness-foundry-build/SKILL.md"),
+        )
+        for base, skill in entries:
+            with self.subTest(root=str(base)):
+                links = re.findall(r"\]\(([^)]+)\)", skill.read_text())
+                references = [link for link in links if link.endswith("/HARNESS_DESIGN_GUIDE.md")]
+                self.assertEqual(len(references), 1)
+                guide = (skill.parent / references[0]).resolve(strict=True)
+                self.assertTrue(guide.is_relative_to(base))
+                self.assertEqual(guide.read_bytes(), (ROOT / "docs/HARNESS_DESIGN_GUIDE.md").read_bytes())
+                pending = [guide]
+                seen = set()
+                examples = set()
+                while pending:
+                    source = pending.pop()
+                    if source in seen:
+                        continue
+                    seen.add(source)
+                    for reference in re.findall(r"\]\(([^)]+)\)", source.read_text()):
+                        if "://" in reference or reference.startswith("#"):
+                            continue
+                        target = (source.parent / reference.split("#", 1)[0]).resolve(strict=True)
+                        self.assertTrue(target.is_relative_to(base) and target.is_file(), reference)
+                        relative = target.relative_to(base)
+                        if relative.parts[:2] == ("examples", "harness-design"):
+                            examples.add(target)
+                            pending.append(target)
+                        if base == self.bundle:
+                            self.assertEqual(target.read_bytes(), (ROOT / relative).read_bytes())
+                self.assertTrue(examples, "No actual method examples can be loaded from the guide")
+        manifest = json.loads((self.bundle / "PACKAGE_MANIFEST.json").read_text())
+        for relative in manifest["files"]:
+            self.assertNotIn("host-private", relative)
+            self.assertNotIn("FOUNDRY_BUILTIN_HARNESS_DESIGN_", relative)
+
     def test_relocated_human_output_and_shared_policy_are_shipped(self):
         policy = "docs/CLEAR_COMMUNICATION.md"
         self.assertEqual((self.bundle / policy).read_bytes(), (ROOT / policy).read_bytes())

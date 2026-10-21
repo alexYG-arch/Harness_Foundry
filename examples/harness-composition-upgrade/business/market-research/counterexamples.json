@@ -1,0 +1,60 @@
+[
+  {
+    "id": "MARKET-C1",
+    "description": "过时意愿调查冒充当期市场事实",
+    "claim": "当前居民付费转化率 35%",
+    "citations": [
+      "S01:P1"
+    ],
+    "violates": [
+      "M01",
+      "M04"
+    ]
+  },
+  {
+    "id": "MARKET-C2",
+    "description": "引用存在，但没有支持所称功能",
+    "claim": "排队盒支持离线自动确认",
+    "citations": [
+      "S03:P2"
+    ],
+    "violates": [
+      "M06"
+    ]
+  },
+  {
+    "id": "MARKET-C3",
+    "description": "只选择价格低的一方并隐藏冲突",
+    "claim": "当前标准套餐确定每月 29 元",
+    "citations": [
+      "S03:P1"
+    ],
+    "omitted_citations": [
+      "S04:P1"
+    ],
+    "violates": [
+      "M03"
+    ]
+  },
+  {
+    "id": "MARKET-C4",
+    "description": "把不同指标样本比例称为需求翻倍",
+    "claim": "需求从 35% 增至 70%，增长 100%",
+    "citations": [
+      "S01:P1",
+      "S02:P1"
+    ],
+    "violates": [
+      "M04"
+    ]
+  },
+  {
+    "id": "MARKET-C5",
+    "description": "固定包分析完成即宣称实际联网检索已验收",
+    "live_search_performed": false,
+    "claims_live_acceptance": true,
+    "violates": [
+      "live_branch_separate"
+    ]
+  }
+]

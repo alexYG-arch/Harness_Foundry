@@ -1,0 +1,108 @@
+{
+  "basis": [
+    "inputs/brief.md",
+    "inputs/interviews.md",
+    "inputs/user-customization.json"
+  ],
+  "requirements": [
+    {
+      "id": "R01",
+      "must": "选择、联系人、最终服务确认、可辨认凭证",
+      "evidence": [
+        "prd",
+        "traceability",
+        "interactive_success"
+      ]
+    },
+    {
+      "id": "R02",
+      "must": "空列表与换日期路径",
+      "evidence": [
+        "prd",
+        "traceability",
+        "render_empty"
+      ]
+    },
+    {
+      "id": "R03",
+      "must": "离线只保留草稿，恢复网络后用户确认重试，不能显示已预约",
+      "evidence": [
+        "prd",
+        "traceability",
+        "interactive_offline_retry"
+      ]
+    },
+    {
+      "id": "R04",
+      "must": "提交中抑制重复；失败保留输入；容量冲突区别于网络错误",
+      "evidence": [
+        "prd",
+        "traceability",
+        "interactive_failure_conflict"
+      ]
+    },
+    {
+      "id": "R05",
+      "must": "375/1280 宽度长文案可读、键盘可达、字段错误关联",
+      "evidence": [
+        "render_mobile_desktop",
+        "keyboard"
+      ]
+    },
+    {
+      "id": "R06",
+      "must": "不强制账号/定位/身份证；手机号使用范围与需求一致",
+      "evidence": [
+        "prd",
+        "interactive_form"
+      ]
+    },
+    {
+      "id": "R07",
+      "must": "品牌色、标题、服务时间及未变更决策保留",
+      "evidence": [
+        "user_customization_readback"
+      ]
+    },
+    {
+      "id": "R08",
+      "must": "明确销售/运营冲突、当前服务确认行为及待决事项",
+      "evidence": [
+        "prd",
+        "design_notes"
+      ]
+    }
+  ],
+  "required_states": [
+    "empty",
+    "offline_draft",
+    "submitting",
+    "network_error",
+    "capacity_conflict",
+    "confirmed"
+  ],
+  "required_views": [
+    {
+      "width_px": 375
+    },
+    {
+      "width_px": 1280
+    }
+  ],
+  "visual_example": "长场次名可通过换行完整阅读；不要求像素级匹配某张标准图。",
+  "v2_addition": {
+    "artifact": "state-transitions.json",
+    "must_trace": [
+      "offline_draft -> pending_user_retry -> submitting -> confirmed",
+      "submitting -> capacity_conflict -> selection"
+    ]
+  },
+  "not_proven_by": [
+    "文件存在",
+    "HTML 文本含状态名",
+    "PRD 与原型相互一致但共同漏项",
+    "静态 fixture 测试",
+    "生成方自评"
+  ],
+  "allowed_variation": "措辞、布局和交互实现可不同，只要原输入必需行为和可用性有真实证据。"
+}

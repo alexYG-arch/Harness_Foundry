@@ -1,0 +1,12 @@
+[
+  {
+    "id": "s1",
+    "title": "合成访谈",
+    "locator": "fixture://interview-01"
+  },
+  {
+    "id": "s2",
+    "title": "合成流程",
+    "locator": "fixture://workflow-01"
+  }
+]

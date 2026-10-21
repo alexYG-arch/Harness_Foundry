@@ -1,0 +1,7 @@
+{
+  "timezone_offset_hours": 8,
+  "display_currency": "CNY",
+  "label": "周末预约运营观察",
+  "sensitivity_missing_amount_cap_yuan": "40.00",
+  "sensitivity_cap_is": "用户情景假设，不是已观察金额上限，也不是完整收入估计。"
+}

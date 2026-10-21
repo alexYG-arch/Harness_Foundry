@@ -1,0 +1,12 @@
+{
+  "name": "doc-export",
+  "version": "1",
+  "usage": "both",
+  "inputs": ["Project-owned JSON document configuration, structured notes, and source references"],
+  "outputs": ["A new Markdown export preserving declared title, section order, note content and source mapping"],
+  "materials": ["guide.md"],
+  "tools": [{"id": "export-doc", "path": "export_doc.py", "interpreter": "python", "interpreter_args": ["-I", "-B"]}],
+  "environment": [{"id": "python", "kind": "executable", "version_min": "3.11"}],
+  "verification_files": ["check_doc.py"],
+  "support": "Structured-note Markdown export, based on the R3 DOC renderer. Project authors supply extraction rules and private complete expectations; this does not parse arbitrary WCT documents or accept real DOC use by itself."
+}

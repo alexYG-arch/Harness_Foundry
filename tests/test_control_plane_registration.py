@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from harness_foundry_factory.constants import default_spec_root
+
 import importlib.util
 import json
 from pathlib import Path
@@ -89,7 +91,7 @@ class ControlPlaneRegistrationTests(unittest.TestCase):
         ):
             compile_start_package(
                 fixture["snapshot"]["requirement_ir"],
-                spec_root=ROOT.parent / "Harness_Foundry_v2_8_Start_Package",
+                spec_root=default_spec_root(),
                 staging_root=cls.root / "staging",
                 candidate_root=cls.candidate,
                 created_at="2026-08-13T00:00:00Z",

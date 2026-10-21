@@ -1,0 +1,59 @@
+{
+  "schema_version": "2.8",
+  "dag_id": "<ENGINEERING-PROJECT-DAG-ID>",
+  "program_id": "<PROGRAM-ID>",
+  "dag_status": "PLANNED_NOT_EXECUTABLE",
+  "single_active_node": true,
+  "bootstrap_executor_boundary": "EXTERNAL_FOUNDRY_DRIVER_OR_HUMAN_UNTIL_PROGRAM_DRIVER_RUNTIME_VERIFIED",
+  "nodes": [
+    {"node_id": "START_PACKAGE_CANDIDATE_READY_FOR_HUMAN_REVIEW", "project_id": "PROGRAM_CONTROL", "status": "READY", "requires": [], "authorization_class": null, "human_gate_id": null, "auto_advance_eligible": false},
+    {"node_id": "START_PACKAGE_HUMAN_APPROVAL", "project_id": "PROGRAM_CONTROL", "status": "WAITING_HUMAN_GATE", "requires": ["START_PACKAGE_CANDIDATE_READY_FOR_HUMAN_REVIEW"], "authorization_class": null, "human_gate_id": "START_PACKAGE_HUMAN_APPROVAL", "auto_advance_eligible": false},
+    {"node_id": "SHARED_CONTROL_BASELINE_LOCK", "project_id": "PROGRAM_CONTROL", "status": "WAITING_PREDECESSOR", "requires": ["START_PACKAGE_HUMAN_APPROVAL"], "authorization_class": "REGISTRATION_AUTHORIZATION", "human_gate_id": null, "auto_advance_eligible": false},
+    {"node_id": "CONTROL_PLANE_REGISTRATION", "project_id": "PROGRAM_CONTROL", "status": "WAITING_PREDECESSOR", "requires": ["SHARED_CONTROL_BASELINE_LOCK"], "authorization_class": "REGISTRATION_AUTHORIZATION", "human_gate_id": null, "auto_advance_eligible": false},
+    {"node_id": "PROGRAM_DRIVER_RUNTIME_VERIFIED", "project_id": "PROGRAM_CONTROL", "status": "WAITING_PREDECESSOR", "requires": ["CONTROL_PLANE_REGISTRATION"], "authorization_class": "PROJECT_VALIDATION_AUTHORIZATION", "human_gate_id": null, "auto_advance_eligible": false},
+    {"node_id": "LAB_BOOTSTRAP", "project_id": "EXTERNAL_CONFORMANCE_LAB", "status": "WAITING_PREDECESSOR", "requires": ["PROGRAM_DRIVER_RUNTIME_VERIFIED", "VALID_EXECUTION_AUTHORIZATION"], "authorization_class": "PROJECT_BOOTSTRAP_AUTHORIZATION", "human_gate_id": null, "auto_advance_eligible": true},
+    {"node_id": "LAB_SELF_VALIDATION", "project_id": "EXTERNAL_CONFORMANCE_LAB", "status": "WAITING_PREDECESSOR", "requires": ["LAB_BOOTSTRAP"], "authorization_class": "PROJECT_VALIDATION_AUTHORIZATION", "human_gate_id": null, "auto_advance_eligible": true},
+    {"node_id": "LAB_RELEASE", "project_id": "EXTERNAL_CONFORMANCE_LAB", "status": "WAITING_PREDECESSOR", "requires": ["LAB_SELF_VALIDATION"], "authorization_class": "PACKAGE_BUILD_AUTHORIZATION", "human_gate_id": null, "auto_advance_eligible": true},
+    {"node_id": "LINKAGE_BOOTSTRAP", "project_id": "CONFORMANCE_LINKAGE_REVIEW", "status": "WAITING_PREDECESSOR", "requires": ["LAB_RELEASE"], "authorization_class": "PROJECT_BOOTSTRAP_AUTHORIZATION", "human_gate_id": null, "auto_advance_eligible": true},
+    {"node_id": "LINKAGE_SELF_VALIDATION", "project_id": "CONFORMANCE_LINKAGE_REVIEW", "status": "WAITING_PREDECESSOR", "requires": ["LINKAGE_BOOTSTRAP"], "authorization_class": "PROJECT_VALIDATION_AUTHORIZATION", "human_gate_id": null, "auto_advance_eligible": true},
+    {"node_id": "LINKAGE_RELEASE", "project_id": "CONFORMANCE_LINKAGE_REVIEW", "status": "WAITING_PREDECESSOR", "requires": ["LINKAGE_SELF_VALIDATION"], "authorization_class": "PACKAGE_BUILD_AUTHORIZATION", "human_gate_id": null, "auto_advance_eligible": true},
+    {"node_id": "MAIN_EXECUTION_PACKAGE_MATERIALIZED", "project_id": "MAIN_HARNESS_BUILD", "status": "WAITING_PREDECESSOR", "requires": ["LINKAGE_RELEASE"], "authorization_class": "PROJECT_BOOTSTRAP_AUTHORIZATION", "human_gate_id": null, "auto_advance_eligible": true},
+    {"node_id": "MAIN_EXECUTION_PACKAGE_VALIDATED", "project_id": "MAIN_HARNESS_BUILD", "status": "WAITING_PREDECESSOR", "requires": ["MAIN_EXECUTION_PACKAGE_MATERIALIZED"], "authorization_class": "PROJECT_VALIDATION_AUTHORIZATION", "human_gate_id": null, "auto_advance_eligible": true},
+    {"node_id": "MAIN_PROGRAM_REGISTRATION", "project_id": "MAIN_HARNESS_BUILD", "status": "WAITING_PREDECESSOR", "requires": ["MAIN_EXECUTION_PACKAGE_VALIDATED"], "authorization_class": "REGISTRATION_AUTHORIZATION", "human_gate_id": null, "auto_advance_eligible": true},
+    {"node_id": "MAIN_G0_P4_CONTROLLED_EXECUTION", "project_id": "MAIN_HARNESS_BUILD", "status": "WAITING_PREDECESSOR", "requires": ["MAIN_PROGRAM_REGISTRATION", "VALID_EXECUTION_AUTHORIZATION"], "authorization_class": "PROGRAM_EXECUTION_AUTHORIZATION", "human_gate_id": null, "auto_advance_eligible": true},
+    {"node_id": "RELEASE_PIPELINE_HANDOFF", "project_id": "PROGRAM_CONTROL", "status": "WAITING_PREDECESSOR", "requires": ["MAIN_G0_P4_CONTROLLED_EXECUTION", "P4_BUILD_INPUT_LOCK_VALID"], "authorization_class": "RELEASE_PIPELINE_AUTHORIZATION", "human_gate_id": null, "auto_advance_eligible": true}
+  ],
+  "edges": [
+    {"from": "START_PACKAGE_CANDIDATE_READY_FOR_HUMAN_REVIEW", "to": "START_PACKAGE_HUMAN_APPROVAL"},
+    {"from": "START_PACKAGE_HUMAN_APPROVAL", "to": "SHARED_CONTROL_BASELINE_LOCK"},
+    {"from": "SHARED_CONTROL_BASELINE_LOCK", "to": "CONTROL_PLANE_REGISTRATION"},
+    {"from": "CONTROL_PLANE_REGISTRATION", "to": "PROGRAM_DRIVER_RUNTIME_VERIFIED"},
+    {"from": "PROGRAM_DRIVER_RUNTIME_VERIFIED", "to": "LAB_BOOTSTRAP"},
+    {"from": "LAB_BOOTSTRAP", "to": "LAB_SELF_VALIDATION"},
+    {"from": "LAB_SELF_VALIDATION", "to": "LAB_RELEASE"},
+    {"from": "LAB_RELEASE", "to": "LINKAGE_BOOTSTRAP"},
+    {"from": "LINKAGE_BOOTSTRAP", "to": "LINKAGE_SELF_VALIDATION"},
+    {"from": "LINKAGE_SELF_VALIDATION", "to": "LINKAGE_RELEASE"},
+    {"from": "LINKAGE_RELEASE", "to": "MAIN_EXECUTION_PACKAGE_MATERIALIZED"},
+    {"from": "MAIN_EXECUTION_PACKAGE_MATERIALIZED", "to": "MAIN_EXECUTION_PACKAGE_VALIDATED"},
+    {"from": "MAIN_EXECUTION_PACKAGE_VALIDATED", "to": "MAIN_PROGRAM_REGISTRATION"},
+    {"from": "MAIN_PROGRAM_REGISTRATION", "to": "MAIN_G0_P4_CONTROLLED_EXECUTION"},
+    {"from": "MAIN_G0_P4_CONTROLLED_EXECUTION", "to": "RELEASE_PIPELINE_HANDOFF"}
+  ],
+  "forbidden_progressions": [
+    "ANY_PROJECT_BOOTSTRAP_BEFORE_START_PACKAGE_HUMAN_APPROVAL",
+    "PROGRAM_DRIVER_SIDE_EFFECT_BEFORE_RUNTIME_VERIFIED",
+    "MAIN_EXECUTION_BEFORE_LAB_AND_LINKAGE_SELF_VALIDATION",
+    "MAIN_EXECUTION_PACKAGE_BEFORE_LAB_AND_LINKAGE_RELEASE",
+    "MAIN_PROGRAM_REGISTRATION_BEFORE_EXECUTION_PACKAGE_VALIDATION",
+    "AUTO_START_FROM_AUTHORING",
+    "MULTIPLE_ACTIVE_NODES",
+    "RELEASE_HANDOFF_WITHOUT_P4_BUILD_INPUT_LOCK"
+  ],
+  "evidence_requirements": {
+    "node_result_ref_required": true,
+    "predecessor_hashes_required": true,
+    "authorization_ref_required_for_executable_nodes": true,
+    "promotion_event_required_before_successor_activation": true
+  }
+}

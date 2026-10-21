@@ -38,6 +38,10 @@ generic distribution does not require. Do not restore retired commands.
 ## Before every build
 
 Read [the build-document policy](../../../docs/GENERIC_BUILD_PLAN.md) completely.
+Before forming the design, load [the design guide](../../../docs/HARNESS_DESIGN_GUIDE.md)
+with the public source materials; follow its example links only when relevant.
+An already loaded, unchanged version can be reused. These design questions do not
+add mandatory stages, documents, model calls or approval gates.
 Natural-language requests, Q&A, PRDs, project briefs and existing-project changes
 all follow this boundary:
 

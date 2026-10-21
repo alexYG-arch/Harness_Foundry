@@ -1,0 +1,23 @@
+{
+  "schema_version": "2.8",
+  "target_id": "<TARGET-ID>",
+  "sources": [
+    {
+      "source_id": "SRC-001",
+      "path_or_uri": "<SOURCE-PATH-OR-URI>",
+      "sha256": "<SHA256>",
+      "authority_level": "<HUMAN_APPROVED|NORMATIVE|SUPPORTING|EXAMPLE>",
+      "scope": "<WHAT-THIS-SOURCE-GOVERNS>",
+      "loaded_completely": false
+    }
+  ],
+  "conflict_resolution_order": [
+    "HUMAN_APPROVED_CHARTER_LOCK",
+    "APPROVED_NORMATIVE_SOURCES",
+    "LOCKED_CONTRACTS_AND_RULES",
+    "WORKPACK",
+    "IMPLEMENTATION_NOTE",
+    "EXAMPLE"
+  ],
+  "unresolved_source_conflicts": []
+}

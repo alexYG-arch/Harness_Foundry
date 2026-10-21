@@ -1,0 +1,26 @@
+{
+  "schema_version": "2.8",
+  "policy_id": "<POLICY-ID>",
+  "trusted_issuer": "EXTERNAL_AUTHORIZED_RUNNER_OR_LAB_OBSERVER",
+  "self_reported_receipt_is_sufficient": false,
+  "required_bindings": [
+    "challenge_nonce",
+    "run_id",
+    "stage_id",
+    "release_candidate_hash",
+    "environment_id",
+    "executor_realpath_or_endpoint_identity",
+    "executor_version",
+    "invocation_id_or_session_id",
+    "input_hashes",
+    "prompt_hash_when_applicable",
+    "raw_event_log_hash",
+    "output_hashes",
+    "start_and_end_events",
+    "exit_status"
+  ],
+  "replay_protection_required": true,
+  "output_substitution_detection_required": true,
+  "missing_or_unverifiable_result": "INVOCATION_UNVERIFIED",
+  "unverified_invocation_may_complete_stage": false
+}

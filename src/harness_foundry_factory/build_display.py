@@ -14,6 +14,7 @@ ATTEMPT_LABELS = {
     "NOT_DISPATCHED": "该次尝试未派发，已用预算仍保留",
 }
 AUTHORIZATION_LABELS = {
+    "SUPERSEDED": "已由明确接续的新范围替代，不能继续派发；历史保留",
     "APPROVED": "已批准；派发前仍会核对有效范围和剩余预算",
     "APPROVAL_REQUIRED": "该范围尚待用户批准",
     "EXPIRED": "已到期，不能复用此范围继续执行",
@@ -78,6 +79,10 @@ def render_build_readback(result):
                      + AUTHORIZATION_LABELS.get(state, "未识别状态，请查看原始 JSON"))
         lines.append(f"  尝试次数：已用 {budget['attempts_consumed']}，剩余 {budget['attempts_remaining']}；"
                      f"到期时间：{_value(grant['scope']['expires_at'])}")
+        if grant.get("rebind_from"):
+            lines.append(f"  接续来源：{_value(grant['rebind_from'])}；累计预算不重置；本范围已用 {budget['this_preparation_attempts']}。")
+        if grant.get("superseded_by"):
+            lines.append(f"  后续范围：{_value(grant['superseded_by'])}")
         resources = grant["scope"].get("verification_resources")
         if resources:
             lines.append(f"  默认验收运行目录：{_value(grant['scope']['workspace_root'])}（产品只读）；"

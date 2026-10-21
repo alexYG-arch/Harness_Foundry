@@ -20,19 +20,152 @@ from harness_foundry_factory.portable import LOCAL_IDENTITY_RE, LOCAL_MACHINE_BI
 
 
 MODULES = (
-    "identity", "build_types", "build_cli", "build_display", "build_authoring", "build_plan", "build_review",
-    "build_runtime", "build_effects", "build_replan", "build_repair", "build_entrypoint", "source_intake", "acceptance_contract", "revision_store",
+    "identity", "python_startup", "build_capabilities", "build_observation", "build_types", "build_cli", "build_display", "build_authoring", "build_plan", "build_review",
+    "build_runtime", "build_check_protocol", "build_rebind", "build_resource_lifecycle", "build_state", "build_artifacts", "build_effects", "build_replan", "build_repair", "build_entrypoint", "source_intake", "acceptance_contract", "revision_store",
     "local_process", "coding_process", "coding_events", "process_observation", "verification_resources", "verification_snapshot", "resource_observation", "resource_network", "resource_credentials", "legacy_history", "test_execution",
 )
-DOCS = ("GENERIC_BUILD_PLAN", "GENERIC_BUILD_CLI", "GENERIC_BUILD_RUNTIME",
-        "GENERIC_SOURCE_INTAKE", "ACCEPTANCE_CONTRACT_ALIGNMENT", "FOUNDRY_UPGRADE_2026_10_10", "CLEAR_COMMUNICATION")
+DOCS = ("GENERIC_BUILD_PLAN", "HARNESS_DESIGN_GUIDE", "GENERIC_BUILD_CLI", "GENERIC_BUILD_RUNTIME",
+        "GENERIC_SOURCE_INTAKE", "CAPABILITY_REFERENCE", "ACCEPTANCE_CONTRACT_ALIGNMENT", "FOUNDRY_UPGRADE_2026_10_10", "CLEAR_COMMUNICATION")
 EXAMPLES = ("task-cli/PRD.md", "csv-increment/PROJECT_BRIEF.md",
+            "harness-design/offline-naming.md", "harness-design/audio-handoff.md",
+            "capability-adapters/prepare.py", "capability-adapters/environment.py",
+            "capability-adapters/consume.py", "capability-adapters/upgrade.py",
+            "capability-adapters/foundry_dashboard.py",
+            "capability-adapters/stack_runtime.py", "capability-adapters/stack_handoff.py",
+            "capability-adapters/native_dependencies.py", "capability-adapters/STACK_ENVIRONMENT.md",
+            "capability-adapters/author-template/capability.json", "capability-adapters/author-template/README.md",
             "csv-increment/starter/csv_tool.py", "csv-increment/starter/test_summary.py",
             "csv-increment/starter/USER_NOTES.md",
             "resource-check/README.md", "resource-check/PROJECT_BRIEF.md",
             "resource-check/request.template.json", "resource-check/scope.template.json",
             "resource-check/starter/tools/summarize.py", "resource-check/starter/fixtures/rows.json",
-            "resource-check/verifier/check_resources.py", "resource-check/verifier/expected.json")
+            "resource-check/verifier/check_resources.py", "resource-check/verifier/expected.json",
+            'harness-composition-upgrade/README.md',
+            'harness-composition-upgrade/business/OUTPUT_CONTRACTS.md',
+            'harness-composition-upgrade/business/README.md',
+            'harness-composition-upgrade/business/TOOL_PREPARATION.md',
+            'harness-composition-upgrade/business/data-reasoning/counterexamples.json',
+            'harness-composition-upgrade/business/data-reasoning/expected.json',
+            'harness-composition-upgrade/business/data-reasoning/inputs/metric-definition.json',
+            'harness-composition-upgrade/business/data-reasoning/inputs/orders.csv',
+            'harness-composition-upgrade/business/data-reasoning/inputs/user-customization.json',
+            'harness-composition-upgrade/business/data-reasoning/manifest.json',
+            'harness-composition-upgrade/business/data-reasoning/task.md',
+            'harness-composition-upgrade/business/data-reasoning/upgrade.md',
+            'harness-composition-upgrade/business/data-reasoning/workflows/v1.md',
+            'harness-composition-upgrade/business/data-reasoning/workflows/v2.md',
+            'harness-composition-upgrade/business/manifest.json',
+            'harness-composition-upgrade/business/market-research/counterexamples.json',
+            'harness-composition-upgrade/business/market-research/expected.json',
+            'harness-composition-upgrade/business/market-research/inputs/research-scope.json',
+            'harness-composition-upgrade/business/market-research/inputs/sources.json',
+            'harness-composition-upgrade/business/market-research/inputs/sources/S01-interest-2024.md',
+            'harness-composition-upgrade/business/market-research/inputs/sources/S02-pilot-2026.md',
+            'harness-composition-upgrade/business/market-research/inputs/sources/S03-vendor-price.md',
+            'harness-composition-upgrade/business/market-research/inputs/sources/S04-community-price.md',
+            'harness-composition-upgrade/business/market-research/live-task.md',
+            'harness-composition-upgrade/business/market-research/manifest.json',
+            'harness-composition-upgrade/business/market-research/task.md',
+            'harness-composition-upgrade/business/market-research/upgrade.md',
+            'harness-composition-upgrade/business/market-research/workflows/v1.md',
+            'harness-composition-upgrade/business/market-research/workflows/v2.md',
+            'harness-composition-upgrade/business/prd-design/counterexamples.json',
+            'harness-composition-upgrade/business/prd-design/expected.json',
+            'harness-composition-upgrade/business/prd-design/inputs/brief.md',
+            'harness-composition-upgrade/business/prd-design/inputs/interviews.md',
+            'harness-composition-upgrade/business/prd-design/inputs/user-customization.json',
+            'harness-composition-upgrade/business/prd-design/manifest.json',
+            'harness-composition-upgrade/business/prd-design/task.md',
+            'harness-composition-upgrade/business/prd-design/upgrade.md',
+            'harness-composition-upgrade/business/prd-design/workflows/v1.md',
+            'harness-composition-upgrade/business/prd-design/workflows/v2.md',
+            'harness-composition-upgrade/helpers/README.md',
+            'harness-composition-upgrade/helpers/apply.py',
+            'harness-composition-upgrade/helpers/file_states.py',
+            'harness-composition-upgrade/helpers/merge.py',
+            'harness-composition-upgrade/integration/HOST_WORKFLOW.md',
+            'harness-composition-upgrade/integration/README.md',
+            'harness-composition-upgrade/integration/business_requests.py',
+            'harness-composition-upgrade/integration/mechanism_requests.py',
+            'harness-composition-upgrade/integration/prepare_host_evidence.py',
+            'harness-composition-upgrade/mechanisms/README.md',
+            'harness-composition-upgrade/mechanisms/api/README.md',
+            'harness-composition-upgrade/mechanisms/api/custom/current/config.json',
+            'harness-composition-upgrade/mechanisms/api/custom/current/data/items.json',
+            'harness-composition-upgrade/mechanisms/api/custom/current/tools/client.py',
+            'harness-composition-upgrade/mechanisms/api/custom/current/tools/service.py',
+            'harness-composition-upgrade/mechanisms/api/expected/after-v2/config.json',
+            'harness-composition-upgrade/mechanisms/api/expected/after-v2/data/items.json',
+            'harness-composition-upgrade/mechanisms/api/expected/after-v2/tools/client.py',
+            'harness-composition-upgrade/mechanisms/api/expected/after-v2/tools/service.py',
+            'harness-composition-upgrade/mechanisms/api/expected/after-v3/config.json',
+            'harness-composition-upgrade/mechanisms/api/expected/after-v3/data/items.json',
+            'harness-composition-upgrade/mechanisms/api/expected/after-v3/tools/client.py',
+            'harness-composition-upgrade/mechanisms/api/expected/after-v3/tools/service.py',
+            'harness-composition-upgrade/mechanisms/api/harness-composition.json',
+            'harness-composition-upgrade/mechanisms/api/scenarios/upgrade-1/apply.json',
+            'harness-composition-upgrade/mechanisms/api/scenarios/upgrade-1/inputs.json',
+            'harness-composition-upgrade/mechanisms/api/scenarios/upgrade-1/upgrade-plan.json',
+            'harness-composition-upgrade/mechanisms/api/scenarios/upgrade-2/apply.json',
+            'harness-composition-upgrade/mechanisms/api/scenarios/upgrade-2/inputs.json',
+            'harness-composition-upgrade/mechanisms/api/scenarios/upgrade-2/upgrade-plan.json',
+            'harness-composition-upgrade/mechanisms/api/versions/v1/config.json',
+            'harness-composition-upgrade/mechanisms/api/versions/v1/tools/client.py',
+            'harness-composition-upgrade/mechanisms/api/versions/v1/tools/service.py',
+            'harness-composition-upgrade/mechanisms/api/versions/v2/config.json',
+            'harness-composition-upgrade/mechanisms/api/versions/v2/tools/client.py',
+            'harness-composition-upgrade/mechanisms/api/versions/v2/tools/service.py',
+            'harness-composition-upgrade/mechanisms/api/versions/v3/config.json',
+            'harness-composition-upgrade/mechanisms/api/versions/v3/tools/client.py',
+            'harness-composition-upgrade/mechanisms/api/versions/v3/tools/service.py',
+            'harness-composition-upgrade/mechanisms/doc/README.md',
+            'harness-composition-upgrade/mechanisms/doc/custom/current/USER_NOTES.md',
+            'harness-composition-upgrade/mechanisms/doc/custom/current/config.json',
+            'harness-composition-upgrade/mechanisms/doc/custom/current/data/notes.json',
+            'harness-composition-upgrade/mechanisms/doc/custom/current/data/sources.json',
+            'harness-composition-upgrade/mechanisms/doc/custom/current/tools/render.py',
+            'harness-composition-upgrade/mechanisms/doc/expected/after-incremental/USER_NOTES.md',
+            'harness-composition-upgrade/mechanisms/doc/expected/after-incremental/config.json',
+            'harness-composition-upgrade/mechanisms/doc/expected/after-incremental/data/notes.json',
+            'harness-composition-upgrade/mechanisms/doc/expected/after-incremental/data/sources.json',
+            'harness-composition-upgrade/mechanisms/doc/expected/after-incremental/tools/render.py',
+            'harness-composition-upgrade/mechanisms/doc/expected/after-v2/USER_NOTES.md',
+            'harness-composition-upgrade/mechanisms/doc/expected/after-v2/config.json',
+            'harness-composition-upgrade/mechanisms/doc/expected/after-v2/data/notes.json',
+            'harness-composition-upgrade/mechanisms/doc/expected/after-v2/data/sources.json',
+            'harness-composition-upgrade/mechanisms/doc/expected/after-v2/tools/render.py',
+            'harness-composition-upgrade/mechanisms/doc/expected/after-v3/USER_NOTES.md',
+            'harness-composition-upgrade/mechanisms/doc/expected/after-v3/config.json',
+            'harness-composition-upgrade/mechanisms/doc/expected/after-v3/data/notes.json',
+            'harness-composition-upgrade/mechanisms/doc/expected/after-v3/data/sources.json',
+            'harness-composition-upgrade/mechanisms/doc/expected/after-v3/tools/render.py',
+            'harness-composition-upgrade/mechanisms/doc/harness-composition.json',
+            'harness-composition-upgrade/mechanisms/doc/scenarios/incremental/apply.json',
+            'harness-composition-upgrade/mechanisms/doc/scenarios/incremental/inputs.json',
+            'harness-composition-upgrade/mechanisms/doc/scenarios/incremental/upgrade-plan.json',
+            'harness-composition-upgrade/mechanisms/doc/scenarios/upgrade-1/apply.json',
+            'harness-composition-upgrade/mechanisms/doc/scenarios/upgrade-1/inputs.json',
+            'harness-composition-upgrade/mechanisms/doc/scenarios/upgrade-1/upgrade-plan.json',
+            'harness-composition-upgrade/mechanisms/doc/scenarios/upgrade-2/apply.json',
+            'harness-composition-upgrade/mechanisms/doc/scenarios/upgrade-2/inputs.json',
+            'harness-composition-upgrade/mechanisms/doc/scenarios/upgrade-2/upgrade-plan.json',
+            'harness-composition-upgrade/mechanisms/doc/versions/v1/config.json',
+            'harness-composition-upgrade/mechanisms/doc/versions/v1/tools/render.py',
+            'harness-composition-upgrade/mechanisms/doc/versions/v2/config.json',
+            'harness-composition-upgrade/mechanisms/doc/versions/v2/tools/render.py',
+            'harness-composition-upgrade/mechanisms/doc/versions/v3/config.json',
+            'harness-composition-upgrade/mechanisms/doc/versions/v3/tools/render.py',
+            'harness-composition-upgrade/verifier/check_business.py',
+            'harness-composition-upgrade/verifier/check_mechanism_resource.py',
+            'harness-composition-upgrade/verifier/check_mechanisms.py',
+            'harness-composition-upgrade/verifier/expectations/api-v1.json',
+            'harness-composition-upgrade/verifier/expectations/api-v2.json',
+            'harness-composition-upgrade/verifier/expectations/api-v3.json',
+            'harness-composition-upgrade/verifier/expectations/doc-incremental.json',
+            'harness-composition-upgrade/verifier/expectations/doc-v1.json',
+            'harness-composition-upgrade/verifier/expectations/doc-v2.json',
+            'harness-composition-upgrade/verifier/expectations/doc-v3.json',
+)
 
 
 def literal_assignment(content, name, *, frozen_set=False):
@@ -58,6 +191,7 @@ def collect_files(source_root=ROOT):
     sources.update({f"docs/{name}.md": f"docs/{name}.md" for name in DOCS})
     sources.update({f"examples/{name}": f"examples/{name}" for name in EXAMPLES})
     sources.update({"LICENSE": "LICENSE", "AGENTS.md": "resources/generic_release/AGENTS.md",
+                    "examples/capability-adapters/README.md": "resources/generic_release/CAPABILITY_HELPERS.md",
                     "README.md": "resources/generic_release/README.md",
                     "tools/hffactory.py": "resources/generic_release/hffactory.py",
                     "src/harness_foundry_factory/__init__.py": "resources/generic_release/__init__.py",
@@ -113,12 +247,8 @@ def collect_files(source_root=ROOT):
     return files
 
 
-def package(output=None, *, source_root=ROOT):
-    files = collect_files(source_root)
-    result = {"status": "GENERIC_PACKAGE_PREFLIGHT_PASS", "file_count": len(files),
-              "files": sorted(files), "writes_performed": False, "release_accepted": False}
-    if output is None:
-        return result
+def write_archive(files, output):
+    """Write the selected byte snapshot once; shared by engineering candidates."""
     output = Path(output)
     if not output.is_absolute() or output.exists() or output.is_symlink() or not output.parent.is_dir():
         raise ValueError("output must be an absent absolute archive in an existing directory")
@@ -136,8 +266,16 @@ def package(output=None, *, source_root=ROOT):
         os.link(stream.name, output)
     with output.open("rb") as stream:
         digest = hashlib.file_digest(stream, "sha256").hexdigest()
-    return {**result, "status": "GENERIC_ENGINEERING_ARCHIVE_CREATED", "archive": str(output),
-            "archive_sha256": digest, "writes_performed": True}
+    return {"archive": str(output), "archive_sha256": digest, "writes_performed": True}
+
+
+def package(output=None, *, source_root=ROOT):
+    files = collect_files(source_root)
+    result = {"status": "GENERIC_PACKAGE_PREFLIGHT_PASS", "file_count": len(files),
+              "files": sorted(files), "writes_performed": False, "release_accepted": False}
+    if output is None:
+        return result
+    return {**result, **write_archive(files, output), "status": "GENERIC_ENGINEERING_ARCHIVE_CREATED"}
 
 
 def main():

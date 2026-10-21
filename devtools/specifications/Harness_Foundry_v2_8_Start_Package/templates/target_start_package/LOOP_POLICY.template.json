@@ -1,0 +1,48 @@
+{
+  "schema_version": "2.8",
+  "policy_id": "<LOOP-POLICY-ID>",
+  "program_id": "<PROGRAM-ID>",
+  "automatic_loops_default": false,
+  "authorization_required": true,
+  "loop_types": {
+    "WORKPACK_REVIEW_FIX": {"max_iterations": 3, "max_same_finding_repeats": 2, "max_oscillation_repeats": 2, "auto_retry_allowed": true},
+    "RELEASE_GATE_REPAIR": {"max_iterations": 2, "max_same_finding_repeats": 2, "max_oscillation_repeats": 2, "auto_retry_allowed": true},
+    "CROSS_PROJECT_REPAIR_REENTRY": {"max_iterations": 2, "max_same_finding_repeats": 1, "max_oscillation_repeats": 1, "auto_retry_allowed": true}
+  },
+  "iteration_requirements": [
+    "CURRENT_AUTHORIZATION_VALID",
+    "SINGLE_REPAIR_OWNER_ASSIGNED",
+    "REPAIR_WORKPACK_IN_SCOPE",
+    "COMMAND_HASH_ALLOWLIST_MATCH",
+    "PREVIOUS_RESULT_AND_FINDINGS_BOUND",
+    "INVALIDATION_PROPAGATED_BEFORE_REENTRY"
+  ],
+  "mandatory_stop_conditions": [
+    "HUMAN_GATE_REACHED",
+    "AUTHORIZATION_EXPIRED_REVOKED_OR_BUDGET_EXHAUSTED",
+    "NEW_SCOPE_OR_NEW_COMMAND_REQUIRED",
+    "AMBIGUOUS_OR_MULTIPLE_REPAIR_OWNER",
+    "SAME_FINDING_REPEAT_LIMIT_REACHED",
+    "OSCILLATION_DETECTED",
+    "NO_PROGRESS_DETECTED",
+    "HASH_OR_SCHEMA_DRIFT",
+    "UNEXPECTED_WRITE_OR_ENVIRONMENT_MUTATION",
+    "REAL_TARGET_INSTALL_REQUIRED"
+  ],
+  "convergence_rules": {
+    "all_blocking_findings_resolved": true,
+    "required_acceptance_checks_pass": true,
+    "evidence_hashes_current": true,
+    "invalidation_set_empty_or_fully_rebuilt": true,
+    "loop_converged_is_not_workpack_pass": true,
+    "separate_result_validation_and_promotion_required": true
+  },
+  "forbidden_loop_behavior": [
+    "BYPASS_PHASE_OR_RELEASE_STEP",
+    "EXPAND_SCOPE_WITHOUT_NEW_AUTHORIZATION",
+    "SELF_APPROVE_HUMAN_DECISION",
+    "EDIT_EVIDENCE_TO_FORCE_PASS",
+    "REUSE_STALE_RESULT_OR_RECEIPT",
+    "AUTO_INSTALL_REAL_TARGET"
+  ]
+}

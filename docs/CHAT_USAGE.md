@@ -8,6 +8,8 @@ by the user on 2026-09-20. They are not optional fallbacks. Natural language is
 the user interface; the CLI is the engineering interface.
 
 Before any build, read [the build-document policy](GENERIC_BUILD_PLAN.md).
+Use [the design guide](HARNESS_DESIGN_GUIDE.md) with the public source materials
+before forming the design; examples are optional and unchanged loaded material can be reused.
 Preserve clarification Q&A, save and display a versioned readable build document,
 and wait for actual human confirmation of that displayed scope. No Program or
 target directory before that decision. Background checks, old grants and complete

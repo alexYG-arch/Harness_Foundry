@@ -1,0 +1,35 @@
+{
+  "schema_version": "2.8",
+  "schema_id": "FINDING_RECORD_V2_8",
+  "record_type": "FINDING",
+  "finding": {
+    "finding_id": "<FINDING-ID>",
+    "program_id": "<PROGRAM-ID>",
+    "status": "OPEN",
+    "severity": "<BLOCKER|CRITICAL|MAJOR|MINOR>",
+    "category": "<NORMATIVE_INTENT|MAIN_IMPLEMENTATION|RUNTIME_ATTESTATION|PACK_BINDING|BUILD_ARTIFACT|INSTALL_ORIGIN|LAB_CHECKER|LINKAGE_TOOL|PHASE_ORDER|AUTHORIZATION|OTHER>",
+    "fingerprint": "<STABLE-FINDING-FINGERPRINT>",
+    "source_project_id": "<PROJECT-ID>",
+    "source_report_ref": "<REPORT-REF>",
+    "failed_gate": "<C0|C1|C2|C3|C4|A|B0|C|B1|P4_INSTALLABILITY|D|PROJECT_SELF_VALIDATION>",
+    "summary": "<SUMMARY>",
+    "evidence_refs": ["<EVIDENCE-REF>"],
+    "affected_atom_ids": [],
+    "affected_artifact_refs": [],
+    "repair_owner": "<MAIN_BUILD|EXTERNAL_LAB|LINKAGE_TOOL|DESIGN_AUTHORITY>",
+    "consulted_parties": [],
+    "repair_workpack_id": "<WP-ID>",
+    "invalidation_set": [],
+    "required_reentry_gate": "<G0|C0|P1|C1|P2|C2|P3|C3|P4|A|B0|C|B1|P4_INSTALLABILITY|CERTIFICATION_INSTALL|D|C4>",
+    "false_success_risk": false,
+    "opened_at": "<RFC3339>",
+    "resolved_at": null,
+    "resolution_result_ref": null
+  },
+  "invariants": {
+    "exactly_one_repair_owner": true,
+    "open_finding_blocks_affected_promotion": true,
+    "repair_owner_cannot_close_without_validated_result": true,
+    "invalidation_and_reentry_required": true
+  }
+}

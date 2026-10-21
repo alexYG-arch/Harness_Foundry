@@ -1,0 +1,32 @@
+{
+  "schema_version": "2.8",
+  "authorization_id": "<EXECUTION-AUTHORIZATION-ID>",
+  "authorization_class": "<PROJECT_BOOTSTRAP_AUTHORIZATION|PROJECT_VALIDATION_AUTHORIZATION|REGISTRATION_AUTHORIZATION|PROGRAM_EXECUTION_AUTHORIZATION|RELEASE_PIPELINE_AUTHORIZATION|PACKAGE_BUILD_AUTHORIZATION|LINKAGE_EXECUTION_AUTHORIZATION|INSTALLABILITY_AUTHORIZATION|CANDIDATE_PROMOTION_AUTHORIZATION|CERTIFICATION_INSTALL_AUTHORIZATION|LAB_CERTIFICATION_AUTHORIZATION|CERTIFIED_RELEASE_PROMOTION_AUTHORIZATION|REPAIR_EXECUTION_AUTHORIZATION>",
+  "status": "DRAFT_NOT_GRANTED",
+  "program_id": "<PROGRAM-ID>",
+  "issuer_role": "HUMAN_GATE_OWNER",
+  "issuer_id": "<ISSUER-ID>",
+  "issued_at": null,
+  "not_before": null,
+  "expires_at": null,
+  "scope": {
+    "project_ids": [],
+    "execution_modes": [],
+    "dag_node_ids": [],
+    "phase_ids": [],
+    "workpack_ids": [],
+    "release_step_ids": [],
+    "allowed_write_roots": [],
+    "allowed_environment_ids": []
+  },
+  "command_manifest_hashes": [],
+  "max_transitions": 0,
+  "max_loop_iterations": 0,
+  "may_auto_advance": false,
+  "may_promote_validated_results": false,
+  "real_target_install_allowed": false,
+  "revoked_at": null,
+  "revocation_ref": null,
+  "grant_reason": "<HUMAN-REVIEWED-REASON>",
+  "signature": null
+}

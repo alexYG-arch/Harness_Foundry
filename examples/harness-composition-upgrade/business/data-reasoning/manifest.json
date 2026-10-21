@@ -1,0 +1,32 @@
+{
+  "id": "data_reasoning",
+  "status": "EXECUTION_NOT_RUN",
+  "task": "task.md",
+  "inputs": [
+    "inputs/orders.csv",
+    "inputs/metric-definition.json",
+    "inputs/user-customization.json"
+  ],
+  "expected": "expected.json",
+  "counterexamples": "counterexamples.json",
+  "workflows": {
+    "v1": "workflows/v1.md",
+    "v2": "workflows/v2.md"
+  },
+  "upgrade": "upgrade.md",
+  "tool_preparation": "../TOOL_PREPARATION.md",
+  "outputs": [
+    "normalized-orders.csv",
+    "metrics.json",
+    "analysis.md"
+  ],
+  "v2_additional_outputs": [
+    "sensitivity.json"
+  ],
+  "runtime_evidence": [
+    "workflow-version-and-load-record",
+    "actual-computation-command-and-results",
+    "independent-recomputation-and-reasoning-review"
+  ],
+  "claim_boundary": "手算及 fixture 测试不等于交付业务已执行/已接受。"
+}

@@ -36,14 +36,26 @@ Review，再使用本入口；原始材料保留追溯角色。后台检查全�
 
 ## 调用
 
-全部命令通过 `python3 tools/hffactory.py COMMAND --json` 使用。下面的 FILE/DB
-为调用者提供的具体值，不是默认路径；`--control-db` 必须为绝对文件路径。
+宿主要求 Python 3.11 或以上；用已选环境的绝对解释器路径调用
+`/absolute/project/.venv/bin/python -B tools/hffactory.py COMMAND --json`。
+文档中的 `python3` 是满足此版本要求的解释器示意，不表示可以在运行或接续时重新搜索 PATH。
+错误版本会在核心导入前报告实际解释器、版本及显式重启示例；提示不会自动启动其他解释器、
+复制虚拟环境或改变权限，建议中的本项目 `.venv` 是否满足条件仍需确认。已支持的
+`python -m harness_foundry_factory.build_cli` 使用同一检查；源码方式须让 `src` 在模块读取路径中。
+下面的 FILE/DB 为调用者提供的具体值，不是默认路径；`--control-db` 必须为绝对文件路径。
+
+宿主读取和接续保持同一已绑定解释器，例如保存 `HOST_PYTHON=/absolute/project/.venv/bin/python` 后，
+以 `"$HOST_PYTHON" -B tools/hffactory.py read-build ...` 核对状态，再以同一
+`"$HOST_PYTHON" -B tools/hffactory.py advance-build --control-db DB --request NEXT_REQUEST --json`
+继续已批准范围。NEXT_REQUEST 使用当前 prepared/revision，不重建预算；LOCAL 与检查的
+子进程仍沿 `scope.executables`、`executable://python` 的现有绑定，不能从宿主 `sys.executable`
+或 PATH 偷换它们。启动诊断不新增业务授权，也不更改原进程恢复规则。
 
 | COMMAND | 额外参数 | request 的业务字段 |
 |---|---|---|
 | `record-build-plan` | `--control-db DB --request FILE` | `requirement_ir`, `plan`, `document_review` |
 | `capture-build-sources` | 同上 | `program_id`, `proposal_event_id`, `source_root`, `manifest` |
-| `prepare-build-authorization` | 同上 | `program_id`, `proposal_event_id`, `source_event_id`, `scope` |
+| `prepare-build-authorization` | 同上 | `program_id`, `proposal_event_id`, `source_event_id`, `scope`；可选 `rebind_from` |
 | `approve-build-authorization` | 同上 | `program_id`, `prepared_event_id`, `decision` |
 | `revoke-build-authorization` | 同上 | `program_id`, `prepared_event_id`, `decision`, `reason` |
 | `resolve-build-attempt` | 同上 | `program_id`, `prepared_event_id`, `attempt_id`, `decision`, `reason` |
@@ -176,6 +188,14 @@ attempt/workpack、revision 和预算，CLI 退出 0 只表示这次步进成功
 外层不再主动派发依赖已知未解决问题的后续工作；正常核实、修复和无关授权工作可通过已有
 适用入口继续。ONE_ATTEMPT 不新增任意任务选择器，不撤销批准、不停止在跑命令，也不控制
 其他调用者或连续模式。提示或报告不是机器停止协议，不能制造假合同冲突求停。
+
+## 宿主工具成果的后续独立检查
+
+需要浏览器、检索或其他宿主工具的业务，按真实工作流先取回已完成任务的产物和原命令记录，再由独立宿主调用工具并固定审阅证据。ONE_ATTEMPT 在整次尝试后返回；不存在默认的“生成后、检查前暂停”接口。
+
+后续检查继续准备普通 LOCAL 任务：只复制/读取明确的既有成果，把检查器、原始判定依据、所审成果/工作流版本和宿主证据逐文件列入 verification_resources.checker_files；argv 的 verifier:// 引用必须指向普通文件，不能用目录充当文件。保护检查器实际从副本读取依赖，以实际 FOUNDRY_CASE_ID/FOUNDRY_COMMAND_ID 写 STRUCTURED_V1 报告。不重新调用已完成生产者来填补报告。
+
+自动准备通过与业务完成分开。缺证或版本不适用按该检查合同保留 ERROR/未验收；有独立依据的业务失败沿 ASSERTION 原生修复分类。 此类固定复制的 LOCAL 复验用 `ONE_ATTEMPT` 单次交回并读回实际状态；它不能修复业务，不能因 ASSERTION 连续重派同一复制命令。外层携带真实失败证据回原生产者，沿其既有适用返修入口、授权和预算处理；宿主产出则回原宿主流程。修复后重新审阅受影响成果、固定新证据并准备新的复验，保留旧失败与消耗；不为取证重放生产者，正常缺陷修复所需的生产步骤仍可运行。只有控制器提交才能成为正式接受，宿主 JSON 不取得接受权。跨 Program 的控制库/Program/prepared/attempt/产物/readback_revision 用普通 handoff 关联，不将旧 ID 填入本任务 basis_attempt_ids，不另建计数或批准规则。
 
 ## 可选的人读状态摘要
 
@@ -461,6 +481,11 @@ JSON 格式或 actor 字符串不能认证人；模型文本、源文档和任�
 不重复已完成实施。已有命令意图却没有完整观测的结果保持 HELD，不盲目重放。
 若仅预留 attempt、还没有命令意图，则以控制 revision 仲裁为 `NOT_DISPATCHED`，
 可以在当前授权与剩余预算内推进；旧预留仍计费，迟到调度器不能覆盖结果或重复执行。
+无预检的 effects 基线准备失败，在完整原生事件证明尚无命令意图时，结清为
+`NOT_DISPATCHED` 并交回原诊断；旧 UNKNOWN 追加恢复结果，保留原异常和预算。
+本次 advance 不因同一准备错误连续派发；配置修正后的正常推进仍可继续。
+残缺、矛盾或存在未决命令的记录不适用无命令恢复。
+
 完整观测已证明实施结束但缺声明产物时，按正常业务失败进入范围内修复，而非永久停滞。
 
 启动/权限/接收器失败与产物检查失败分开处理：前者记录 `BLOCKED`，推进返回
@@ -521,3 +546,62 @@ JSONL 从原始字节增量读取，与每流 64 KiB 人读摘要分离。默认
 退出码沿用 CLI 错误分类；`advance-build` 的 `PLAN_CHECKS_ACCEPTED`，以及显式步进的
 `BUILD_CONTROL_RETURNED` 返回 0，其余推进状态仍返回 6。后者只表示控制交回，不表示业务接受。
 应阅读 JSON 的 status/reason，不把进程退出 0、编译通过或自报 PASS 当业务验收。
+
+
+## 显式同 Program 接续
+
+2026-10-16：现有 `prepare-build-authorization` 请求可选顶层 `rebind_from`，其值为同一
+Program、同一控制库的原 prepared_event_id。它不属于 scope，不新增命令或批准种类；
+未选该字段的普通准备仍按原范围工作，不隐式合并任意历史。
+
+本入口用于精确保留原额度的重新绑定：同 workspace，保持任务 ID、Job、产物声明及依赖，
+并保持原 `max_attempts`、`max_task_attempts` 上限。已用次数按关联链中唯一真实 attempt
+及原 budget_workpack_ids 累计；不是成功任务数或模型请求数。
+例如原总额 24、任务上限 3，WP-H 已用 1，接续仍传 24/3，余额为总额 23、WP-H 2、
+其他未开始任务各 3。不要先把总额改成 23 再扣旧消耗，也不要统一把其他任务减到 2。
+NOT_DISPATCHED 已发生的消耗保留；读取、恢复和同一原始请求幂等重试不重复计入。
+
+沿用原文档/来源准备、完整 Readback 和真实批准。在新批准的单次事务内记录旧新关联，
+关联旧范围进入 SUPERSEDED，不能再派发同一余额；旧事件、报告和批准原文保持。
+旧范围已撤销或自然失效可作为历史来源，不要求形式性重复撤销。
+原 UNKNOWN/IN_FLIGHT 必须先核实，不因重新绑定取得清除资格；旧已结束的 BLOCKED
+作为诊断历史交付，不直接成为新范围自动阻断。新范围的设施问题仍按原规则处理。
+
+原要求、相关来源、实施声明、检查绑定和产物身份均适用的 accepted，可保留实际来源；
+仅判定绑定变化时建立待复验项，advance 只执行必要检查，不伪造新的实施命令。
+待复验在多次明确接续中继续保留。每次真实复验按原 attempt 规则计费，记录
+`reverification_of_attempt_id`；恢复同一复验只补未派发检查。复验若发现业务断言失败，
+仍由原生产者按原生预算修复；设施错误不冒充产品返修。
+正常执行和恢复保存检查输入前，都核对声明产物与原接受字节；已有输入记录也须对应原接受。
+已完成预检或已有检查观察时，字节改变或缺失返回诊断，保留该尝试；还原原字节可续验，
+不重跑已完成预检或实施。无任何命令意图的预留仍按上述 NOT_DISPATCHED 规则处理。
+旧版本已记录的错误检查输入不改写，也不能靠恢复把新字节变成旧接受。
+实施要求或相关输入变化、产物字节不再适用时不复用旧 PASS。合法替换后已消费的旧物理版本
+继续按原规则处理；新检查确需不可用版本时保留缺口，不能重放旧生产动作假造历史。
+
+`read-build` 在接续范围展示 `rebind_from`、`reused_acceptance` 的原 prepared/proposal/attempt，
+以及 `reverification_pending`。budget 展示累计消耗与 `this_preparation_attempts`，并给出未开始
+原任务的余额。历史范围标明 `superseded_by`；不能从历史行选取新的可用余额。
+任务上下文的 repair_history、反馈、预算和合法 handoff basis 使用明确关联链；无关 prepared
+及跨 Program 的旧 basis 仍不接受。普通跨任务 handoff 规则、G1/G2 和同范围 replan 保持。
+
+该接口不迁移跨 Program/跨库状态、不为任务改名或扩展 G1 continuation 链；旧记录仍可读。
+数据关联不授予旧权限，当前绑定、来源、到期、读写域和真实批准在派发时继续核对。
+
+## 按实际 Case 交付检查协议
+
+实施上下文的 `verification_interfaces` 只投影本任务引用的公开接口：Case、resource_profile_ref、
+result_protocol、required_checks、report_files、符号环境变量和适用的附加报告义务。
+不复制完整 scope、保护预期、checker_files 内容或凭据/凭据引用，不扩大权限。
+资源模式输出已有 STRUCTURED_V1 summary；非资源检查沿用原 stdout 或退出码合同。
+公开开发 adapter 与私有独立检查器职责分别说明，实际独立执行须加载保护副本。
+
+
+## effects 与正常构建链接
+
+effects 观察已声明写根和具名保留文件，allowed 是精确允许变化的路径，不是扫描白名单。
+普通目录继续遍历；末级软链接用 lstat/readlink 记录链接自身及原始目标字符串，不跟随目标。
+正常 framework 链接、悬空或成环链接不会因递归跟随而阻塞，但链接目标是否有效仍由独立检查判定。
+链接创建、删除、重定向和类型替换仍按原 allowed 比较；required/must_preserve 的普通文件义务
+不能由链接冒充。末级链接不扩大读写根，通过软链接祖先访问子路径仍不允许。
+首次构建可创建缺失的正常父目录；不新增忽略 build、通配授权或额外预检要求。

@@ -1,0 +1,28 @@
+{
+  "schema_version": "2.8",
+  "project_id": "<MAIN-BUILD-PROJECT-ID>",
+  "program_id": "<PROGRAM-ID>",
+  "project_role": "MAIN_BUILD_PROJECT",
+  "state": "START_PACKAGE_CANDIDATE_READY_FOR_HUMAN_REVIEW",
+  "current_phase": "G0",
+  "current_workpack_id": null,
+  "auto_advance_enabled": false,
+  "execution_authorization_ref": null,
+  "next_eligible_transition": "HUMAN_REVIEW_AND_REGISTRATION",
+  "required_predecessors": [
+    "SHARED_PROTOCOL_LOCK_VALID",
+    "EXTERNAL_LAB_INTERFACE_REGISTERED",
+    "LINKAGE_REVIEW_INTERFACE_REGISTERED"
+  ],
+  "valid_locks": [],
+  "invalidated_locks": [],
+  "blockers": ["HUMAN_REVIEW_REQUIRED"],
+  "artifact_status": "NOT_BUILT",
+  "certification_status": "NOT_CERTIFIED",
+  "real_target_install": {
+    "status": "NOT_STARTED",
+    "authorization_ref": null,
+    "separate_authorization_required": true
+  },
+  "evidence_refs": []
+}

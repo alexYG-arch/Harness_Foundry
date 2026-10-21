@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from harness_foundry_factory.constants import default_spec_root
+
 from copy import deepcopy
 import json
 from pathlib import Path
@@ -326,7 +328,7 @@ class GenerationReadinessTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "prewrite readiness binding"):
             compile_start_package(
                 self.snapshot["requirement_ir"],
-                spec_root=ROOT.parent / "Harness_Foundry_v2_8_Start_Package",
+                spec_root=default_spec_root(),
                 staging_root=staging,
                 candidate_root=candidate,
                 created_at="2026-08-12T00:00:00Z",
@@ -363,7 +365,7 @@ class GenerationReadinessTests(unittest.TestCase):
             with self.assertRaises(OrderingObserved):
                 compile_start_package(
                     self.snapshot["requirement_ir"],
-                    spec_root=ROOT.parent / "Harness_Foundry_v2_8_Start_Package",
+                    spec_root=default_spec_root(),
                     staging_root=staging,
                     candidate_root=candidate,
                     created_at="2026-08-12T00:00:00Z",
@@ -415,7 +417,7 @@ class GenerationReadinessTests(unittest.TestCase):
         ):
             compile_start_package(
                 fixture["snapshot"]["requirement_ir"],
-                spec_root=ROOT.parent / "Harness_Foundry_v2_8_Start_Package",
+                spec_root=default_spec_root(),
                 staging_root=staging,
                 candidate_root=candidate,
                 created_at="2026-08-27T00:00:00Z",
@@ -520,7 +522,7 @@ class GenerationReadinessTests(unittest.TestCase):
         ):
             compile_start_package(
                 fixture["snapshot"]["requirement_ir"],
-                spec_root=ROOT.parent / "Harness_Foundry_v2_8_Start_Package",
+                spec_root=default_spec_root(),
                 staging_root=staging,
                 candidate_root=candidate,
                 created_at="2026-08-12T00:00:00Z",
@@ -624,7 +626,7 @@ class GenerationReadinessTests(unittest.TestCase):
             with self.assertRaises(PortableIdentityObserved):
                 compile_start_package(
                     self.snapshot["requirement_ir"],
-                    spec_root=ROOT.parent / "Harness_Foundry_v2_8_Start_Package",
+                    spec_root=default_spec_root(),
                     staging_root=staging,
                     candidate_root=candidate,
                     created_at="2026-08-12T00:00:00Z",
@@ -655,8 +657,7 @@ class GenerationReadinessTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "identity already exists"):
                     compile_start_package(
                         self.snapshot["requirement_ir"],
-                        spec_root=ROOT.parent
-                        / "Harness_Foundry_v2_8_Start_Package",
+                        spec_root=default_spec_root(),
                         staging_root=staging,
                         candidate_root=candidate,
                         created_at="2026-08-12T00:00:00Z",
@@ -740,7 +741,7 @@ class GenerationReadinessTests(unittest.TestCase):
             with self.assertRaises(RuntimeStoreClosureObserved):
                 compile_start_package(
                     self.snapshot["requirement_ir"],
-                    spec_root=ROOT.parent / "Harness_Foundry_v2_8_Start_Package",
+                    spec_root=default_spec_root(),
                     staging_root=staging,
                     candidate_root=candidate,
                     created_at="2026-08-12T00:00:00Z",
@@ -933,7 +934,7 @@ class GenerationReadinessTests(unittest.TestCase):
             with self.assertRaises(LocalReceiptObserved):
                 compile_start_package(
                     self.snapshot["requirement_ir"],
-                    spec_root=ROOT.parent / "Harness_Foundry_v2_8_Start_Package",
+                    spec_root=default_spec_root(),
                     staging_root=staging,
                     candidate_root=candidate,
                     created_at="2026-08-12T00:00:00Z",
@@ -1221,7 +1222,7 @@ class GenerationReadinessTests(unittest.TestCase):
             with self.assertRaises(DefaultRouteClosureObserved):
                 compile_start_package(
                     self.snapshot["requirement_ir"],
-                    spec_root=ROOT.parent / "Harness_Foundry_v2_8_Start_Package",
+                    spec_root=default_spec_root(),
                     staging_root=staging,
                     candidate_root=candidate,
                     created_at="2026-08-12T00:00:00Z",

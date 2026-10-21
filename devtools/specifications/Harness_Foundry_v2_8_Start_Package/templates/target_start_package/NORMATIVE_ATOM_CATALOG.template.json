@@ -1,0 +1,31 @@
+{
+  "schema_version": "2.8",
+  "catalog_id": "<CATALOG-ID>",
+  "source_manifest_sha256": "<SHA256>",
+  "atoms": [
+    {
+      "atom_id": "ATOM-001",
+      "source_id": "SRC-001",
+      "source_locator": "<PAGE-SECTION-OR-LINE>",
+      "text_or_lossless_paraphrase": "<REQUIREMENT>",
+      "modality": "<MUST|MUST_NOT|SHOULD|MAY>",
+      "qualifiers": [],
+      "order_constraints": [],
+      "units": [],
+      "defaults": [],
+      "error_semantics": [],
+      "cancel_retry_timeout": [],
+      "compatibility_constraints": [],
+      "explicit_non_goals": [],
+      "owner": "<OWNER>",
+      "verification_mode": "<SCHEMA|TEST|SCENARIO|HUMAN_REVIEW|RUNTIME_EVIDENCE>",
+      "status": "UNMAPPED"
+    }
+  ],
+  "release_blocking_counts": {
+    "missing": 0,
+    "distorted": 0,
+    "unknown": 0,
+    "unmapped": 1
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "schema_version": "2.8",
+  "ruleset_id": "<REPAIR-ROUTING-RULESET-ID>",
+  "program_id": "<PROGRAM-ID>",
+  "default_disposition": "BLOCK_AND_REQUEST_HUMAN_ROUTING",
+  "single_repair_owner_required": true,
+  "rules": [
+    {"rule_id": "ROUTE-NORMATIVE", "categories": ["NORMATIVE_INTENT"], "repair_owner": "DESIGN_AUTHORITY", "consulted_parties": ["MAIN_BUILD", "EXTERNAL_LAB", "LINKAGE_TOOL"], "earliest_reentry_gate": "G0"},
+    {"rule_id": "ROUTE-MAIN", "categories": ["MAIN_IMPLEMENTATION", "RUNTIME_ATTESTATION", "PACK_BINDING", "BUILD_ARTIFACT", "PHASE_ORDER", "AUTHORIZATION"], "repair_owner": "MAIN_BUILD", "consulted_parties": ["LINKAGE_TOOL", "EXTERNAL_LAB"], "earliest_reentry_gate": "<OWNING-PHASE-OR-A-B0-B1>"},
+    {"rule_id": "ROUTE-INSTALL-ORIGIN", "categories": ["INSTALL_ORIGIN"], "repair_owner": "MAIN_BUILD", "consulted_parties": ["CERTIFICATION_INSTALLER", "LINKAGE_TOOL", "EXTERNAL_LAB"], "earliest_reentry_gate": "P4_INSTALLABILITY"},
+    {"rule_id": "ROUTE-LAB", "categories": ["LAB_CHECKER"], "repair_owner": "EXTERNAL_LAB", "consulted_parties": ["DESIGN_AUTHORITY"], "earliest_reentry_gate": "PROJECT_SELF_VALIDATION"},
+    {"rule_id": "ROUTE-LINKAGE", "categories": ["LINKAGE_TOOL"], "repair_owner": "LINKAGE_TOOL", "consulted_parties": ["DESIGN_AUTHORITY"], "earliest_reentry_gate": "PROJECT_SELF_VALIDATION"}
+  ],
+  "routing_algorithm": [
+    "CLASSIFY_FINDING_FROM_EVIDENCE_NOT_REPORTING_PROJECT",
+    "SELECT_EXACTLY_ONE_MOST_SPECIFIC_RULE",
+    "ASSIGN_ONE_REPAIR_OWNER_AND_ZERO_OR_MORE_CONSULTED_PARTIES",
+    "COMPUTE_INVALIDATION_SET_FROM_INVALIDATION_DAG",
+    "CREATE_BOUNDED_REPAIR_WORKPACK",
+    "CREATE_REENTRY_PLAN",
+    "REQUIRE_REPAIR_EXECUTION_AUTHORIZATION"
+  ],
+  "forbidden_routing": [
+    "REPORTING_PROJECT_AUTOMATICALLY_BECOMES_REPAIR_OWNER",
+    "MULTIPLE_REPAIR_OWNERS",
+    "LINKAGE_TOOL_REPAIRS_MAIN_TARGET",
+    "EXTERNAL_LAB_REPAIRS_MAIN_TARGET",
+    "CERTIFICATION_INSTALLER_REPLACES_FAILED_ARTIFACT",
+    "REPAIR_WITHOUT_INVALIDATION_PROPAGATION"
+  ]
+}

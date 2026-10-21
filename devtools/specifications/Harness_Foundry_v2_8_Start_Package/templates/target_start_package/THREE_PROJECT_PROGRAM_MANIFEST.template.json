@@ -1,0 +1,106 @@
+{
+  "schema_version": "2.8",
+  "manifest_id": "<THREE-PROJECT-MANIFEST-ID>",
+  "program_id": "<PROGRAM-ID>",
+  "target_id": "<TARGET-ID>",
+  "program_status": "AUTHORING_ONLY_NOT_REGISTERED",
+  "engineering_project_count": 3,
+  "start_package_gate": {
+    "candidate_state": "START_PACKAGE_CANDIDATE_READY_FOR_HUMAN_REVIEW",
+    "approval_status": "PENDING_HUMAN_APPROVAL",
+    "approval_ref": null,
+    "must_precede_all_project_bootstrap": true
+  },
+  "shared_control_baseline": {
+    "status": "WAITING_START_PACKAGE_HUMAN_APPROVAL",
+    "protocol_ref": "<SHARED-PROTOCOL-REF>",
+    "schema_bundle_ref": "<SHARED-SCHEMA-BUNDLE-REF>",
+    "protocol_sha256": null,
+    "schema_bundle_sha256": null,
+    "required_before_project_construction": true,
+    "control_plane_registration_ref": null,
+    "program_driver_runtime_attestation_ref": null,
+    "program_driver_runtime_verified": false
+  },
+  "projects": [
+    {
+      "project_id": "EXTERNAL_CONFORMANCE_LAB",
+      "project_kind": "CERTIFICATION_AUTHORITY",
+      "construction_order": 1,
+      "root_abs": "<ABSOLUTE-LAB-PROJECT-ROOT>",
+      "start_package_ref": "<LAB-START-PACKAGE-REF>",
+      "entrypoint_ref": "<LAB-ENTRYPOINT-REF>",
+      "self_validation_ref": "<LAB-SELF-VALIDATION-REF>",
+      "status": "PLANNED_NOT_STARTED",
+      "may_modify_main_target": false,
+      "may_issue_certificate": true
+    },
+    {
+      "project_id": "CONFORMANCE_LINKAGE_REVIEW",
+      "project_kind": "READ_ONLY_LINKAGE_AND_REPAIR_ROUTING",
+      "construction_order": 2,
+      "root_abs": "<ABSOLUTE-LINKAGE-PROJECT-ROOT>",
+      "start_package_ref": "<LINKAGE-START-PACKAGE-REF>",
+      "entrypoint_ref": "<LINKAGE-ENTRYPOINT-REF>",
+      "self_validation_ref": "<LINKAGE-SELF-VALIDATION-REF>",
+      "status": "PLANNED_NOT_STARTED",
+      "may_modify_main_target": false,
+      "may_issue_certificate": false
+    },
+    {
+      "project_id": "MAIN_HARNESS_BUILD",
+      "project_kind": "TARGET_BUILD_AND_PACKAGING",
+      "construction_order": 3,
+      "root_abs": "<ABSOLUTE-MAIN-PROJECT-ROOT>",
+      "start_package_ref": ".",
+      "entrypoint_ref": "<FINAL-RUNTIME-ENTRYPOINT-REF>",
+      "build_driver_ref": "<BUILD-PROGRAM-DRIVER-REF>",
+      "status": "START_PACKAGE_AUTHORING_CANDIDATE",
+      "may_self_certify": false,
+      "may_issue_certificate": false
+    }
+  ],
+  "construction_sequence": [
+    "START_PACKAGE_CANDIDATE_READY_FOR_HUMAN_REVIEW",
+    "START_PACKAGE_HUMAN_APPROVAL",
+    "SHARED_CONTROL_BASELINE_LOCKED",
+    "CONTROL_PLANE_REGISTRATION",
+    "PROGRAM_DRIVER_RUNTIME_VERIFIED",
+    "EXTERNAL_CONFORMANCE_LAB_BOOTSTRAP",
+    "EXTERNAL_CONFORMANCE_LAB_SELF_VALIDATION",
+    "EXTERNAL_CONFORMANCE_LAB_RELEASE",
+    "CONFORMANCE_LINKAGE_REVIEW_BOOTSTRAP",
+    "CONFORMANCE_LINKAGE_REVIEW_SELF_VALIDATION",
+    "CONFORMANCE_LINKAGE_REVIEW_RELEASE",
+    "MAIN_EXECUTION_PACKAGE_MATERIALIZED",
+    "MAIN_EXECUTION_PACKAGE_VALIDATED",
+    "MAIN_HARNESS_PROGRAM_REGISTRATION",
+    "G0_THROUGH_P4_CONTROLLED_EXECUTION",
+    "RELEASE_PIPELINE"
+  ],
+  "coordination": {
+    "control_plane_role": "BUILD_PROGRAM_DRIVER",
+    "control_plane_is_not_fourth_engineering_project": true,
+    "engineering_dag_ref": "ENGINEERING_PROJECT_DAG.json",
+    "release_pipeline_ref": "RELEASE_PIPELINE_MANIFEST.json",
+    "driver_contract_ref": "PROGRAM_DRIVER_CONTRACT.json",
+    "driver_state_ref": "PROGRAM_DRIVER_STATE.json"
+  },
+  "cross_project_bindings": {
+    "conformance_interface_ref": "build_program/conformance/CONFORMANCE_INTERFACE.json",
+    "protocol_hash_must_match_all_projects": true,
+    "schema_bundle_hash_must_match_all_projects": true,
+    "tool_distribution_hashes_required_before_release_candidate": true
+  },
+  "automatic_progress": {
+    "enabled": false,
+    "activation_requires": [
+      "START_PACKAGE_HUMAN_APPROVAL",
+      "SHARED_CONTROL_BASELINE_LOCKED",
+      "CONTROL_PLANE_REGISTRATION_COMPLETE",
+      "PROGRAM_DRIVER_RUNTIME_VERIFIED",
+      "VALID_EXECUTION_AUTHORIZATION"
+    ],
+    "real_target_install_excluded": true
+  }
+}

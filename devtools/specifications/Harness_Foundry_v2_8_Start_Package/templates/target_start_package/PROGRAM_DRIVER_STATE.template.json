@@ -1,0 +1,65 @@
+{
+  "schema_version": "2.8",
+  "state_id": "<PROGRAM-DRIVER-STATE-ID>",
+  "program_id": "<PROGRAM-ID>",
+  "state_revision": 0,
+  "control_plane_epoch": 0,
+  "state_hash": null,
+  "last_ledger_event_hash": null,
+  "driver_status": "NOT_STARTED_AUTHORING_ONLY",
+  "driver_started": false,
+  "runtime_verification_status": "NOT_VERIFIED",
+  "runtime_attestation_ref": null,
+  "side_effects_allowed": false,
+  "controlled_auto_advance_enabled": false,
+  "active_execution_authorization_ref": null,
+  "active_project_id": null,
+  "active_dag_node_id": null,
+  "active_phase": null,
+  "active_workpack_id": null,
+  "active_release_step_id": null,
+  "active_loop_id": null,
+  "next_eligible_transition": "START_PACKAGE_HUMAN_APPROVAL",
+  "waiting_human_gate": "START_PACKAGE_HUMAN_APPROVAL",
+  "transition_budget": {
+    "authorized_max": 0,
+    "used": 0,
+    "remaining": 0
+  },
+  "lease": {
+    "lease_id": null,
+    "owner": null,
+    "fencing_token": null,
+    "expires_at": null
+  },
+  "transition_intent": {
+    "id": null,
+    "status": null
+  },
+  "active_attempt": {
+    "id": null,
+    "idempotency_key": null,
+    "command_id": null,
+    "status": null,
+    "side_effect_class": null,
+    "result_ref": null
+  },
+  "recovery": {
+    "required": false,
+    "last_readback_ref": null,
+    "resume_authorization_ref": null
+  },
+  "projects": {
+    "EXTERNAL_CONFORMANCE_LAB": {"status": "PLANNED_NOT_STARTED", "last_valid_result_ref": null},
+    "CONFORMANCE_LINKAGE_REVIEW": {"status": "PLANNED_NOT_STARTED", "last_valid_result_ref": null},
+    "MAIN_HARNESS_BUILD": {"status": "START_PACKAGE_AUTHORING_CANDIDATE", "last_valid_result_ref": null}
+  },
+  "open_blocker_ids": ["<BLOCKER-ID>"],
+  "open_finding_ids": [],
+  "unpropagated_invalidation_ids": [],
+  "last_transition_event_ref": null,
+  "last_promotion_event_ref": null,
+  "last_revocation_event_ref": null,
+  "last_readback_ref": "validation/START_PACKAGE_VALIDATION_REPORT.json",
+  "updated_at": "<RFC3339>"
+}

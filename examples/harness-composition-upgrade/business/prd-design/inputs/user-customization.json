@@ -1,0 +1,7 @@
+{
+  "brand_color": "#245B76",
+  "title": "社区周末预约",
+  "service_hours": "周六、周日 09:00–17:00",
+  "reservation_authority": "server_confirmation",
+  "preserve_contact_draft_on_retry": true
+}

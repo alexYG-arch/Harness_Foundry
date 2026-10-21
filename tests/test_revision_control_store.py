@@ -55,7 +55,7 @@ class RevisionControlStoreTests(unittest.TestCase):
         self.assertEqual(len(self.store.list_events("DATA")), 2)
 
     def test_idempotent_lookup_is_readonly_scoped_and_returns_original_events(self):
-        self.assertIsNone(self.store._idempotent_events("DATA", "request-1"))
+        self.assertIsNone(self.store.idempotent_events("DATA", "request-1"))
         first = self.append()
         self.append(1, "request-2")
         readonly = ControlEventStore(self.path, storage_format="REVISION_V1", read_only=True)

@@ -1,0 +1,38 @@
+{
+  "schema_version": "2.8",
+  "contract_id": "<CONTRACT-ID>",
+  "target_id": "<TARGET-ID>",
+  "selected_profile": "<FULL|STANDARD|LITE>",
+  "profile_lock_sha256": "<SHA256>",
+  "required_bindings": [
+    "CHARTER_HASH",
+    "CANONICAL_SOURCE_MANIFEST_HASH",
+    "NORMATIVE_ATOM_CATALOG_HASH",
+    "ATOM_COVERAGE_MATRIX_HASH",
+    "PHASE_DEPENDENCY_MANIFEST_HASH",
+    "WORKPACK_DAG_HASH",
+    "STAGE_SPEC_HASH",
+    "RUN_PATH_HASH",
+    "RUNTIME_OWNERSHIP_HASH",
+    "RECEIPT_MATRIX_HASH"
+  ],
+  "required_checks": [
+    "DETAIL_FIDELITY",
+    "INTENT_ATOM_COVERAGE",
+    "PHASE_ORDER_AND_LOCK_LINEAGE",
+    "PLAN_IS_NOT_EXECUTION",
+    "RUNTIME_EXECUTION_ATTESTATION",
+    "STAGE_RECEIPT_CHAIN",
+    "PROGRAM_OUTCOME_COVERAGE",
+    "RUNTIME_CLOSURE",
+    "INSTALLED_ENTRYPOINT_ORIGIN",
+    "NO_RELEASE_BY_PLAN",
+    "NEGATIVE_FALSE_SUCCESS_REJECTION"
+  ],
+  "pack_binding_stages": [
+    "B0_NORMATIVE_BINDING",
+    "B1_RELEASE_ARTIFACT_BINDING"
+  ],
+  "certificate_required_for_certified_release_lock": true,
+  "release_blocking": true
+}

@@ -1,0 +1,40 @@
+{
+  "id": "market_research",
+  "status": "EXECUTION_NOT_RUN",
+  "task": "task.md",
+  "live_task": "live-task.md",
+  "inputs": [
+    "inputs/research-scope.json",
+    "inputs/sources.json",
+    "inputs/sources/S01-interest-2024.md",
+    "inputs/sources/S02-pilot-2026.md",
+    "inputs/sources/S03-vendor-price.md",
+    "inputs/sources/S04-community-price.md"
+  ],
+  "expected": "expected.json",
+  "counterexamples": "counterexamples.json",
+  "workflows": {
+    "v1": "workflows/v1.md",
+    "v2": "workflows/v2.md"
+  },
+  "upgrade": "upgrade.md",
+  "tool_preparation": "../TOOL_PREPARATION.md",
+  "outputs": [
+    "research.md",
+    "claims.json",
+    "source-register.json"
+  ],
+  "v2_additional_outputs": [
+    "evidence-gaps.md"
+  ],
+  "live_outputs": [
+    "live-source-register.json",
+    "live-research.md"
+  ],
+  "runtime_evidence": [
+    "workflow-version-and-load-record",
+    "independent-claim-source-review",
+    "actual-search-open-results-and-date"
+  ],
+  "claim_boundary": "固定来源全部合成；固定分析不证明真实市场或实际联网检索。"
+}

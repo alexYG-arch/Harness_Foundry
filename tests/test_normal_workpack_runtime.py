@@ -13,6 +13,7 @@ import sys
 import unittest
 
 from harness_foundry_factory import workpack_runtime as runtime
+from harness_foundry_factory.constants import default_spec_root
 from harness_foundry_factory.coding_protocol import plan_coding_command
 from harness_foundry_factory.compiler import compile_start_package
 from harness_foundry_factory.local_runtime import bind_local_workpack_transition
@@ -35,7 +36,7 @@ class NormalWorkpackRuntimeTests(unittest.TestCase):
         ir = semantic_support.semantic_ir(cls.semantic_candidate, cls.root / "coding-planned-execution")
         ir["target"].update(cls.target_overrides)
         compile_start_package(
-            ir, spec_root=startup.ROOT.parent / "Harness_Foundry_v2_8_Start_Package",
+            ir, spec_root=default_spec_root(),
             staging_root=cls.root / "coding-semantic-staging", candidate_root=cls.semantic_candidate,
             created_at="2026-09-07T00:00:00Z",
         )
@@ -308,7 +309,7 @@ class NormalWorkpackRuntimeTests(unittest.TestCase):
                             portability_mode="LOGICAL_RESOURCE_URI", **self.target_overrides)
         provenance = {"requirement_epoch": 73, "requirement_ir_sha256": content_sha256(ir)}
         compile_start_package(
-            ir, spec_root=startup.ROOT.parent / "Harness_Foundry_v2_8_Start_Package",
+            ir, spec_root=default_spec_root(),
             staging_root=self.root / "another-staging", candidate_root=candidate,
             created_at="2026-09-07T00:00:00Z", active_requirement_epoch=73,
             authority_provenance=provenance,
@@ -325,7 +326,7 @@ class NormalWorkpackRuntimeTests(unittest.TestCase):
         ir = semantic_support.semantic_ir(semantic, self.root / "semantic-planned-execution")
         ir["target"].update(self.target_overrides)
         compile_start_package(
-            ir, spec_root=startup.ROOT.parent / "Harness_Foundry_v2_8_Start_Package",
+            ir, spec_root=default_spec_root(),
             staging_root=self.root / "semantic-staging", candidate_root=semantic,
             created_at="2026-09-07T00:00:00Z",
         )

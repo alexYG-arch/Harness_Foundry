@@ -1,0 +1,28 @@
+{
+  "schema_version": "2.8",
+  "project_id": "<EXTERNAL-LAB-PROJECT-ID>",
+  "default_disposition": "DECLARE_ONLY",
+  "commands": [
+    {
+      "command_id": "LAB-SELFTEST",
+      "executable": "/absolute/path/to/python",
+      "argv": ["-m", "external_lab", "self-test", "--include-negative-fixtures"],
+      "cwd_absolute": "/absolute/path/to/external-lab-project",
+      "authorization_ref": "<LAB-SELFTEST-AUTHORIZATION-ID>",
+      "allowed_modes": ["LAB_CERTIFICATION"],
+      "expected_exit_codes": [0],
+      "stdout_stderr_evidence_required": true
+    },
+    {
+      "command_id": "LAB-CERTIFY",
+      "executable": "/absolute/path/to/python",
+      "argv": ["-m", "external_lab", "certify", "--candidate", "<ABSOLUTE-CANDIDATE-DESCRIPTOR-PATH>"],
+      "cwd_absolute": "/absolute/path/to/external-lab-project",
+      "authorization_ref": "<LAB-CERTIFICATION-AUTHORIZATION-ID>",
+      "allowed_modes": ["LAB_CERTIFICATION"],
+      "expected_exit_codes": [0, 2],
+      "stdout_stderr_evidence_required": true
+    }
+  ],
+  "real_target_install_command_present": false
+}

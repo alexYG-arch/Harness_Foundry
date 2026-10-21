@@ -5,41 +5,70 @@ the baseline and verdict in its existing revision event stream before acceptance
 """
 
 import hashlib
-from pathlib import Path
+import os
+from pathlib import Path, PurePosixPath
+import stat
 
 from .build_types import RequestValidationError
+
+
+def effect_path(workspace, value):
+    """Name an observed directory entry without granting its link target."""
+    if not isinstance(value, str) or not value:
+        raise RequestValidationError("relative path must be text")
+    relative = PurePosixPath(value)
+    if (relative.is_absolute() or ".." in relative.parts or "\\" in value
+            or relative.as_posix() != value):
+        raise RequestValidationError("path must be canonical and relative")
+    workspace = Path(workspace)
+    path = workspace / value
+    for parent in reversed(path.parents):
+        if parent == workspace or not parent.is_relative_to(workspace):
+            continue
+        try:
+            mode = parent.lstat().st_mode
+        except FileNotFoundError:
+            # A normal first build may create missing parent directories.
+            break
+        if stat.S_ISLNK(mode):
+            raise RequestValidationError("effect observation cannot follow symlink ancestors: " + value)
+        if not stat.S_ISDIR(mode):
+            raise RequestValidationError("effect ancestor must be a directory: " + value)
+    return path
 
 
 def snapshot_effects(workspace, write_roots, contract):
     workspace = Path(workspace).resolve()
     rows = {}
 
-    def visit(path):
-        # Do not follow symlinked ancestors or recursively inspect other roots.
-        relative = path.relative_to(workspace)
-        if any(parent.is_symlink() for parent in [path, *path.parents] if parent != workspace and parent.is_relative_to(workspace)):
-            raise RequestValidationError("effect observation cannot follow symlinks: " + str(relative))
-        if not path.exists():
-            rows[str(relative)] = {"kind": "absent"}
-        elif path.is_dir():
-            rows[str(relative)] = {"kind": "directory"}
+    def visit(path, *, preserved=False):
+        relative = str(path.relative_to(workspace))
+        path = effect_path(workspace, relative)
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            rows[relative] = {"kind": "absent"}
+            return
+        if stat.S_ISLNK(info.st_mode):
+            rows[relative] = {"kind": "symlink", "target": os.readlink(path)}
+        elif stat.S_ISDIR(info.st_mode):
+            if preserved:
+                raise RequestValidationError("must_preserve requires named files, not directories")
+            rows[relative] = {"kind": "directory"}
             for child in sorted(path.iterdir()):
                 visit(child)
-        elif path.is_file():
+        elif stat.S_ISREG(info.st_mode):
             with path.open("rb") as stream:
                 digest = hashlib.file_digest(stream, "sha256").hexdigest()
-            rows[str(relative)] = {"kind": "file", "size": path.stat().st_size,
-                                   "sha256": digest, "mode": path.stat().st_mode & 0o777}
+            rows[relative] = {"kind": "file", "size": info.st_size,
+                              "sha256": digest, "mode": info.st_mode & 0o777}
         else:
-            raise RequestValidationError("unsupported effect object: " + str(relative))
+            raise RequestValidationError("unsupported effect object: " + relative)
 
     for relative in write_roots:
         visit(workspace / relative)
     for relative in contract["must_preserve"]:
-        path = workspace / relative
-        if path.is_dir():
-            raise RequestValidationError("must_preserve requires named files, not directories")
-        visit(path)
+        visit(workspace / relative, preserved=True)
     return rows
 
 

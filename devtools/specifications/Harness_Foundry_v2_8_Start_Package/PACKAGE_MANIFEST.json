@@ -1,0 +1,78 @@
+{
+  "package_id": "HARNESS_FOUNDRY_V2_8_START_PACKAGE",
+  "version": "2.8.0",
+  "created_on": "2026-07-10",
+  "status": "DOCUMENTATION_ONLY_CONTROLLED_PROGRESSION_GUIDE",
+  "purpose": "Guide a model to author a target-specific charter start package with a machine-readable three-project control plane for authorized automatic engineering progression.",
+  "package_is_not": [
+    "TARGET_HARNESS",
+    "TARGET_AGENT",
+    "TARGET_START_EXECUTION_PACKAGE",
+    "RUNNING_PROGRAM_DRIVER",
+    "CONFORMANCE_CERTIFICATE",
+    "INSTALLABLE_RELEASE"
+  ],
+  "source_documents": [
+    {
+      "path": "../Harness_Foundry_v2_7_Start_Package/PACKAGE_MANIFEST.json",
+      "sha256": "478eed32175f8b0e020fb36f4b99312130326858579a097c8208255f328f0426"
+    },
+    {
+      "path": "../Harness_Foundry_v2_7_Start_Package/PACKAGE_VALIDATION_REPORT.json",
+      "sha256": "82bfdf0e1cb7005c376ddd5ca988d5d198bc9bc652b8ed0eaf6b3a69bb7f2b4f"
+    },
+    {
+      "path": "../Harness_Foundry_v2_6_Conformance_Package/Harness_Foundry_Protocol_v2_6.md",
+      "sha256": "b84be9e1546bef560ce33335039e8dcdef806766f7bf968e0671292975145c0e"
+    },
+    {
+      "path": "../Harness_Foundry_v2_6_Conformance_Package/Foundry_Conformance_Lab_Start_Package_v1_0.md",
+      "sha256": "b457d4f4b02fcd6a6d8eff3a26e322acc3cd8509ef52cd7fde0bf678d18fa764"
+    },
+    {
+      "path": "../Harness_Foundry_v2_6_Conformance_Package/Conformance_Linkage_Review_Start_Package_v1_0.md",
+      "sha256": "7f9e19dace865d5a44e4fd512249aba5ac40787c36e13d804748e994da5efe1e"
+    },
+    {
+      "path": "../Harness_Foundry_v2_6_Conformance_Package/07_v2_6_corrected_order_main_conformance_linkage_install.md",
+      "sha256": "f395ae8c35cdf24a9777f135155aee6e41dacc13b04bf8e38a9ed6fe3b362db8"
+    }
+  ],
+  "entrypoints": {
+    "human": "README.md",
+    "model": "START_HERE.md",
+    "document_index": "DOC_INDEX.md",
+    "authoring_prompt": "prompts/AUTHOR_TARGET_START_PACKAGE.md",
+    "controlled_program_prompt": "prompts/EXECUTE_CONTROLLED_BUILD_PROGRAM.md",
+    "acceptance_checklist": "checklists/START_PACKAGE_ACCEPTANCE.md",
+    "validator": "tools/validate_package.py",
+    "package_validation_report": "PACKAGE_VALIDATION_REPORT.json"
+  },
+  "modules": [
+    {"id": "HF28-00", "path": "docs/00_package_purpose_and_authority.md", "load_when": "ALWAYS"},
+    {"id": "HF28-01", "path": "docs/01_user_adjustment_policy.md", "load_when": "USER_ADJUSTMENT_OR_CUSTOMIZATION"},
+    {"id": "HF28-02", "path": "docs/02_authoring_workflow.md", "load_when": "AUTHOR_TARGET_START_PACKAGE"},
+    {"id": "HF28-03", "path": "docs/03_target_start_package_contract.md", "load_when": "ALWAYS"},
+    {"id": "HF28-04", "path": "docs/04_phase_state_machine.md", "load_when": "PHASE_GATE_OR_STATUS_DESIGN"},
+    {"id": "HF28-05", "path": "docs/05_workpack_and_execution_modes.md", "load_when": "WORKPACK_OR_COMMAND_DESIGN"},
+    {"id": "HF28-06", "path": "docs/06_agent_and_runtime_ownership.md", "load_when": "AGENT_OR_RUNTIME_DESIGN"},
+    {"id": "HF28-07", "path": "docs/07_intent_fidelity_and_traceability.md", "load_when": "REQUIREMENT_OR_DETAIL_PRESERVATION"},
+    {"id": "HF28-08", "path": "docs/08_conformance_architecture.md", "load_when": "CONFORMANCE_PROJECT_DESIGN"},
+    {"id": "HF28-09", "path": "docs/09_build_release_install.md", "load_when": "BUILD_RELEASE_OR_INSTALL_DESIGN"},
+    {"id": "HF28-10", "path": "docs/10_linkage_repair_and_invalidation.md", "load_when": "LINKAGE_REPAIR_OR_CHANGE"},
+    {"id": "HF28-11", "path": "docs/11_acceptance_and_negative_tests.md", "load_when": "ACCEPTANCE_OR_FALSE_SUCCESS_TEST_DESIGN"},
+    {"id": "HF28-12", "path": "docs/12_reference_project_layout.md", "load_when": "TARGET_LAYOUT_DESIGN"},
+    {"id": "HF28-13", "path": "docs/13_controlled_auto_progression.md", "load_when": "AUTO_PROGRESS_OR_ORCHESTRATION_DESIGN"},
+    {"id": "HF28-14", "path": "docs/14_three_project_program_dag.md", "load_when": "THREE_PROJECT_BOOTSTRAP_OR_BARRIER_DESIGN"},
+    {"id": "HF28-15", "path": "docs/15_program_driver_loop_and_recovery.md", "load_when": "DRIVER_LOOP_RETRY_OR_RECOVERY_DESIGN"},
+    {"id": "HF28-16", "path": "docs/16_authorization_and_hard_stops.md", "load_when": "AUTHORIZATION_OR_HARD_STOP_DESIGN"}
+  ],
+  "template_roots": {
+    "target_start_package": "templates/target_start_package",
+    "three_project_start_packages": "templates/project_start_packages"
+  },
+  "module_loading_policy": "ALWAYS_LOAD_HF28_00_AND_HF28_03_THEN_LOAD_ONLY_TASK_RELEVANT_MODULES",
+  "recommended_max_markdown_lines": 350,
+  "user_adjustment_policy_ref": "docs/01_user_adjustment_policy.md",
+  "migration_map_ref": "MIGRATION_MAP_v2_7_to_v2_8.md"
+}

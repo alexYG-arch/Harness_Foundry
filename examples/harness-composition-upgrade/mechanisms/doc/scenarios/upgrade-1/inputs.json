@@ -1,0 +1,41 @@
+{
+  "format_version": 1,
+  "files": [
+    {
+      "path": "config.json",
+      "C": {
+        "file": "../../custom/current/config.json",
+        "executable": false
+      },
+      "G": {
+        "file": "../../versions/v1/config.json",
+        "executable": false
+      },
+      "N": {
+        "file": "../../versions/v2/config.json",
+        "executable": false
+      },
+      "owners": [
+        "doc"
+      ]
+    },
+    {
+      "path": "tools/render.py",
+      "C": {
+        "file": "../../custom/current/tools/render.py",
+        "executable": false
+      },
+      "G": {
+        "file": "../../versions/v1/tools/render.py",
+        "executable": false
+      },
+      "N": {
+        "file": "../../versions/v2/tools/render.py",
+        "executable": false
+      },
+      "owners": [
+        "doc"
+      ]
+    }
+  ]
+}

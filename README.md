@@ -1,5 +1,7 @@
 # Harness Foundry
 
+> 本分支包含 v0.5.0 之后的未发布源码更新。变更与验证边界见[实现摘要](docs/V2_9_IMPLEMENTATION_TRACKER.md)；下列 v0.5.0 链接仍指向原稳定发布。
+
 **Harness Foundry 帮你用 Codex 搭建项目专属的 Harness。** Harness 是项目的开发规则、
 任务计划、检查入口和进度记录，让 Codex 按明确需求实施、检查、修复和继续工作。
 
@@ -133,6 +135,7 @@ Release 下载复验确认 **53 文件**，ZIP SHA-256 与已验收原包一致�
 ## 更新记录与支持
 
 - [使用指南](docs/USER_GUIDE.md)：接入、依赖、案例、继续工作和常见问题。
+- [源码回归规范依赖](docs/DEVELOPMENT_SPECIFICATION.md)：维护者使用的固定开发资料，不属于运行包依赖。
 - [v0.5.0 发布说明](docs/releases/v0.5.0.md)：资源接入、续修、下载与检查依据。
 - [v0.4.0 发布说明](docs/releases/v0.4.0.md)：上一稳定版的增量、下载和检查依据。
 - [v0.3.0 历史说明](docs/releases/v0.3.0.md)：保留上一版及其下载包。

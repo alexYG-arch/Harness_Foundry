@@ -1,0 +1,13 @@
+{
+  "schema_version": "2.8",
+  "lock_type": "PROFILE_LOCK_CANDIDATE",
+  "program_id": "<PROGRAM-ID>",
+  "selected_profile": "<FULL|STANDARD|LITE>",
+  "selection_reason": "<REASON>",
+  "required_phases": ["G0", "P1", "P2", "P3", "P4"],
+  "required_external_checkpoints": ["C0", "C1", "C2", "C3", "C4"],
+  "downgrade_after_g0_forbidden": true,
+  "status": "PENDING_HUMAN_APPROVAL",
+  "approved_by": null,
+  "sha256": null
+}

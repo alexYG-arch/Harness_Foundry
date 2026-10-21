@@ -1,0 +1,12 @@
+event_id,revision,occurred_at,status,amount,unit,channel
+b001,1,2026-08-31T16:30:00Z,paid,1200,fen,web
+b001,1,2026-08-31T16:30:00Z,paid,1200,fen,web
+b002,1,2026-09-01T10:00:00+08:00,paid,20,yuan,desk
+b002,2,2026-09-01T10:00:00+08:00,paid,25,yuan,desk
+b003,1,2026-09-01T12:00:00+08:00,cancelled,500,fen,web
+b004,1,2026-09-01T15:00:00+08:00,paid,,fen,desk
+b005,1,2026-09-01T23:50:00+08:00,paid,3500,fen,web
+b006,1,2026-09-02T00:10:00+08:00,paid,100,yuan,web
+b007,1,2026-08-31T23:55:00+08:00,paid,700,fen,desk
+b008,1,2026-09-01T22:20:00+08:00,paid,8.50,yuan,web
+b009,1,2026-09-01T16:30:00Z,paid,999,fen,web

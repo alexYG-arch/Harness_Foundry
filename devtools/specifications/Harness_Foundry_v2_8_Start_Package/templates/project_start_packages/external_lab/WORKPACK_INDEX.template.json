@@ -1,0 +1,14 @@
+{
+  "schema_version": "2.8",
+  "project_id": "<EXTERNAL-LAB-PROJECT-ID>",
+  "project_role": "EXTERNAL_CONFORMANCE_LAB",
+  "single_active_workpack": true,
+  "auto_start_next_workpack": false,
+  "workpacks": [
+    {"workpack_id": "LAB-PROTOCOL", "status": "PLANNED", "requires": ["SHARED_PROTOCOL_LOCK_VALID"]},
+    {"workpack_id": "LAB-CLI", "status": "PLANNED", "requires": ["LAB_PROTOCOL_SCHEMA_PASS"]},
+    {"workpack_id": "LAB-FIXTURES", "status": "PLANNED", "requires": ["LAB_CLI_READY"]},
+    {"workpack_id": "LAB-SELFTEST", "status": "PLANNED", "requires": ["POSITIVE_AND_NEGATIVE_FIXTURES_READY"]},
+    {"workpack_id": "LAB-CERTIFICATION", "status": "PLANNED", "requires": ["LAB_SELFTEST_PASS", "RELEASE_CANDIDATE_LOCK_VALID", "CERTIFICATION_INSTALL_RECEIPT_VALID"]}
+  ]
+}

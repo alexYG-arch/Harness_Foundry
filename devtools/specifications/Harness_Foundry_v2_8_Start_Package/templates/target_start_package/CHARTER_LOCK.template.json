@@ -1,0 +1,16 @@
+{
+  "schema_version": "2.8",
+  "lock_type": "PROGRAM_CHARTER_LOCK_CANDIDATE",
+  "program_id": "<PROGRAM-ID>",
+  "charter_ref": "PROGRAM_CHARTER.md",
+  "charter_sha256": "<SHA256>",
+  "profile_lock_ref": "PROFILE_LOCK.json",
+  "profile_lock_sha256": "<SHA256>",
+  "source_manifest_sha256": "<SHA256>",
+  "normative_atom_catalog_sha256": "<SHA256>",
+  "blocking_open_decisions": ["<DECISION-ID>"],
+  "status": "PENDING_HUMAN_APPROVAL",
+  "approved_by": null,
+  "approved_at": null,
+  "lock_sha256": null
+}

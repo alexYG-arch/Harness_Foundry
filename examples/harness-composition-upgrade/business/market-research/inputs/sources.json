@@ -1,0 +1,45 @@
+{
+  "all_sources_synthetic": true,
+  "sources": [
+    {
+      "source_id": "S01",
+      "filename": "sources/S01-interest-2024.md",
+      "published": "2024-05-15",
+      "kind": "合成便利抽样问卷",
+      "paragraph_ids": [
+        "P1",
+        "P2"
+      ]
+    },
+    {
+      "source_id": "S02",
+      "filename": "sources/S02-pilot-2026.md",
+      "published": "2026-09-20",
+      "kind": "合成试点观察",
+      "paragraph_ids": [
+        "P1",
+        "P2"
+      ]
+    },
+    {
+      "source_id": "S03",
+      "filename": "sources/S03-vendor-price.md",
+      "published": "2026-09-25",
+      "kind": "合成供应方价目",
+      "paragraph_ids": [
+        "P1",
+        "P2"
+      ]
+    },
+    {
+      "source_id": "S04",
+      "filename": "sources/S04-community-price.md",
+      "published": "2026-09-26",
+      "kind": "合成社区采购记录摘录",
+      "paragraph_ids": [
+        "P1",
+        "P2"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "schema_version": "2.8",
+  "project_id": "<EXTERNAL-LAB-PROJECT-ID>",
+  "program_id": "<PROGRAM-ID>",
+  "project_role": "EXTERNAL_CONFORMANCE_LAB",
+  "state": "START_PACKAGE_CANDIDATE_READY_FOR_HUMAN_REVIEW",
+  "current_workpack_id": null,
+  "auto_advance_enabled": false,
+  "execution_authorization_ref": null,
+  "next_eligible_transition": "HUMAN_REVIEW_AND_REGISTRATION",
+  "required_predecessors": ["SHARED_PROTOCOL_LOCK_VALID"],
+  "valid_locks": [],
+  "invalidated_locks": [],
+  "blockers": ["HUMAN_REVIEW_REQUIRED"],
+  "lab_cli_status": "NOT_BUILT",
+  "negative_fixture_status": "NOT_RUN",
+  "certificate_authority_status": "NOT_ACTIVE",
+  "real_target_install_authority": false,
+  "evidence_refs": []
+}

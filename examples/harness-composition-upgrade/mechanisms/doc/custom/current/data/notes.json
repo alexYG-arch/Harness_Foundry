@@ -1,0 +1,14 @@
+[
+  {
+    "section": "summary",
+    "text": "团队需要每周离线汇总。",
+    "source": "s1",
+    "priority": "high"
+  },
+  {
+    "section": "actions",
+    "text": "先核对来源，再导出报告。",
+    "source": "s2",
+    "priority": "normal"
+  }
+]

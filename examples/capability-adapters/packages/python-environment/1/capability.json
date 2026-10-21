@@ -1,0 +1,13 @@
+{
+  "name": "python-environment",
+  "version": "1",
+  "usage": "both",
+  "inputs": ["Explicit project Python invocation and declared project/module paths", "Public probe inputs and separately maintained independent expectation"],
+  "outputs": ["Versioned external environment profile", "Single-command capture, actual interpreter/module observations and native calculation", "Explicit project script or module invocation with the selected venv"],
+  "materials": ["guide.md"],
+  "tools": [{"id": "python-environment", "path": "python_environment.py", "interpreter": "project-python", "interpreter_args": ["-I", "-B"]}],
+  "runtime_files": ["stack_runtime.py", "native_dependencies.py", "python_inspect.py", "python_probe.py", "python_run.py"],
+  "verification_files": ["check_python.py", {"path": "stack_runtime.py", "shared": true}, {"path": "python_probe.py", "shared": true}],
+  "environment": [{"id": "project-python", "kind": "executable", "version_min": "3.11"}],
+  "support": "Selected CPython environment and venv with actual imports, Decimal and SQLite native-extension probes. Host owns permissions, budgets and business acceptance. No installer, network grant, hidden retry or module dependency resolver. GPU/third-party native ABI and other operating-system combinations require their own actual selected tests."
+}

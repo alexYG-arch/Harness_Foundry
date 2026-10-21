@@ -22,6 +22,10 @@ style. Do not rewrite reviewed/accepted history or block tasks without guidance
 artifacts. The runtime embeds the policy; it grants no extra reads or approval.
 
 Before a build, read the [build-document policy](../../../docs/GENERIC_BUILD_PLAN.md).
+Before forming the design, load [the design guide](../../../docs/HARNESS_DESIGN_GUIDE.md)
+with the public source materials; follow its example links only when relevant.
+An already loaded, unchanged version can be reused. These design questions do not
+add mandatory stages, documents, model calls or approval gates.
 Read complete source materials as data, clarify outcome-changing ambiguities, and
 save and show a versioned build document with scope, inputs/outputs, constraints,
 failure/recovery behavior and observable acceptance. For Coding Harnesses include
@@ -130,6 +134,14 @@ implementation record; keep protocol 2.9, Plan 1.2 and resources 1.0, without re
 Do not add these optional resources, credentials, probes or approvals to unrelated
 offline tasks, and do not extend G1/G2 or introduce general restrictions.
 
+## Composition, upgrades, and host-tool handoff
+
+Choose components from the task's necessary behavior. For an upgrade, keep actual old generated component bytes G separate from accepted product A, current user content C, and new component N. Without reliable G, use ordinary project incremental work. Prepare a candidate separately, apply only declared affected files, and preserve customization. Record lineage only after actual acceptance; do not rewrite accepted artifacts or create another authority ledger.
+
+CODEX subprocesses do not inherit the chat's browser or search tools. ONE_ATTEMPT returns after implementation and verification, not at a mid-attempt review pause. When the agreed workflow uses host tools, a first task may cover explicitly limited automatic preparation; the outer host then performs actual tool calls and independent review; a later LOCAL verification reuses the declared outputs and reads protected evidence. Do not rerun an already completed producer to recreate evidence. For this fixed LOCAL reuse workflow, explicitly select ONE_ATTEMPT and read back the actual attempt after each return. A real host FAIL stays ASSERTION, but the copier cannot repair it: return the evidence to the original producer through its applicable existing repair entry, or to the original host. After a legitimate repair, independently review the affected results and prepare fresh evidence and verification; retain prior records and actual usage. Do not repeatedly dispatch the unchanged copier. Necessary production steps for a real repair remain allowed.
+
+Bind host observations to the reviewed output and workflow bytes. Keep visual/semantic judgment independent from the producer; a reviewer name or a self-reported PASS does not authenticate a review. Preserve missing, unknown, or stale evidence as unverified. Use existing verifier snapshots, structured reports, recovery and controller acceptance. Carry cross-Program history in a read-only handoff with real identities, not foreign basis_attempt_ids. This optional workflow adds no requirements to tasks that do not need host tools; G1/G2 and budget rules are unchanged.
+
 ## Outer Codex review and repair
 
 The outer delivery session owns one scoped review of the agreed delivery; reuse an
@@ -201,3 +213,31 @@ PLAN_CHECKS_ACCEPTED is not whole-PRD, installed-Harness or release acceptance.
 All new builds use this route. Never fall back to retired Candidate/epoch workflows
 or old authorization. Use read-history only for a named closed legacy authoring
 database; it exposes historical data without migration or current permission.
+
+
+## Public checker interfaces and explicit rebinding
+
+Use the task's per-Case verification_interfaces and public acceptance_contracts.
+Resource STRUCTURED_V1 writes FOUNDRY_REPORT_DIR/summary.json with actual identity,
+all required checks and applicable service-stop/remote-effect accounting. Existing
+non-resource exit-code or structured stdout interfaces remain valid. Reuse an
+existing workdir/interpreter interface or resource environment; add only missing
+bindings. Keep cwd and venv; a working sys.executable need not be replaced. The
+optional test_execution adapter's parameter/environment names are not universal.
+Public development adapters and host-owned independent checkers have distinct
+responsibilities; private verifier:// references do not grant implementer reads.
+The independent checker actually loads its declared frozen dependencies.
+
+For explicit same-Program/same-database continuation, prepare may supply top-level
+rebind_from. Preserve original budget ceilings and task/output/Job/dependency
+identities; cumulative unique attempts retain old usage, including NOT_DISPATCHED.
+Show this relationship in the existing Readback/approval flow. Fresh approval
+supersedes the linked old scopes atomically, without inheriting old authority.
+Unknown/in-flight effects still require reconciliation. Qualified unchanged
+acceptance retains its original basis; changed checks reverify unchanged bytes
+without rerunning implementation, counting real new attempts normally. Pending
+reverification survives another explicit rebind. Real assertion failures retain
+native product repair; old BLOCKED diagnostics do not automatically reblock the
+new repaired scope. Readback separates cumulative and current-preparation usage,
+reused_acceptance and reverification_pending. This is not cross-database migration,
+arbitrary task renaming or a G1/G2 extension; ordinary preparation stays unchanged.

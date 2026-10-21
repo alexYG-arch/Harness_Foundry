@@ -1,0 +1,31 @@
+{
+  "schema_version": "2.8",
+  "project_id": "<LINKAGE-REVIEW-PROJECT-ID>",
+  "default_disposition": "DECLARE_ONLY",
+  "commands": [
+    {
+      "command_id": "LINK-SELFTEST",
+      "executable": "/absolute/path/to/python",
+      "argv": ["-m", "linkage_review", "self-test", "--assert-read-only"],
+      "cwd_absolute": "/absolute/path/to/linkage-review-project",
+      "authorization_ref": "<LINKAGE-SELFTEST-AUTHORIZATION-ID>",
+      "allowed_modes": ["LINKAGE_READ_ONLY"],
+      "expected_exit_codes": [0],
+      "stdout_stderr_evidence_required": true,
+      "allowed_write_roots": ["/absolute/path/to/linkage-review-evidence"]
+    },
+    {
+      "command_id": "LINK-D",
+      "executable": "/absolute/path/to/python",
+      "argv": ["-m", "linkage_review", "check", "--candidate", "<ABSOLUTE-CANDIDATE-DESCRIPTOR-PATH>"],
+      "cwd_absolute": "/absolute/path/to/linkage-review-project",
+      "authorization_ref": "<LINKAGE-D-AUTHORIZATION-ID>",
+      "allowed_modes": ["LINKAGE_READ_ONLY"],
+      "expected_exit_codes": [0, 2],
+      "stdout_stderr_evidence_required": true,
+      "allowed_write_roots": ["/absolute/path/to/linkage-review-evidence"]
+    }
+  ],
+  "candidate_mutation_allowed": false,
+  "real_target_install_command_present": false
+}

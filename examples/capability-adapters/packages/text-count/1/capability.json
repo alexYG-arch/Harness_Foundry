@@ -1,0 +1,11 @@
+{
+  "name": "text-count",
+  "version": "1",
+  "usage": "both",
+  "inputs": ["A UTF-8 file passed as an explicit command argument"],
+  "outputs": ["JSON character and nonempty-line counts on stdout"],
+  "materials": ["guide.md"],
+  "tools": [{"id": "count-text", "path": "count_text.py", "interpreter": "python", "interpreter_args": ["-I", "-B"]}],
+  "environment": [{"id": "python", "kind": "executable", "version_min": "3.11"}],
+  "support": "Single-file standard-library example; not the DATA or DOC business adapter."
+}

@@ -1,0 +1,42 @@
+{
+  "schema_version": "2.8",
+  "result_id": "<WORKPACK-RESULT-ID>",
+  "program_id": "<PROGRAM-ID>",
+  "project_id": "<PROJECT-ID>",
+  "workpack_id": "<WORKPACK-ID>",
+  "attempt": 0,
+  "status": "NOT_RUN",
+  "execution_mode": "<MODE>",
+  "authorization_ref": null,
+  "capsule_ref": "<CAPSULE-REF>",
+  "capsule_sha256": "<SHA256>",
+  "command_manifest_ref": "<COMMAND-MANIFEST-REF>",
+  "command_manifest_sha256": "<SHA256>",
+  "command_results": [],
+  "acceptance_checks": {
+    "positive": [],
+    "negative": [],
+    "boundary": []
+  },
+  "runtime_attestation_refs": [],
+  "evidence_refs": [],
+  "output_artifacts": [],
+  "finding_ids": [],
+  "changed_input_or_output_hashes": [],
+  "invalidation_required": false,
+  "invalidation_event_refs": [],
+  "loop_state_ref": null,
+  "postflight_status": "NOT_RUN",
+  "result_validation_status": "NOT_VALIDATED",
+  "promotion_eligible": false,
+  "promotion_status": "NOT_PROMOTED",
+  "promotion_event_ref": null,
+  "forbidden_claims": [
+    "PASS_FROM_EXIT_CODE_ONLY",
+    "PASS_FROM_FILE_PRESENCE_ONLY",
+    "NEXT_WORKPACK_AUTO_ACTIVE_FROM_RESULT_ONLY",
+    "CERTIFIED_FROM_LOCAL_RESULT"
+  ],
+  "started_at": null,
+  "completed_at": null
+}

@@ -1,0 +1,19 @@
+{
+  "status": "FIXTURES_READY_EXECUTION_NOT_RUN",
+  "protocol_version": "2.9",
+  "groups": [
+    {
+      "id": "prd_design",
+      "manifest": "prd-design/manifest.json"
+    },
+    {
+      "id": "data_reasoning",
+      "manifest": "data-reasoning/manifest.json"
+    },
+    {
+      "id": "market_research",
+      "manifest": "market-research/manifest.json"
+    }
+  ],
+  "tool_preparation": "TOOL_PREPARATION.md"
+}

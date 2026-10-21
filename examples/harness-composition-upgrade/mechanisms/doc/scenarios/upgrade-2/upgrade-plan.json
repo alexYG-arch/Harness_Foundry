@@ -1,0 +1,32 @@
+{
+  "format_version": 1,
+  "status": "FIXTURE_NOT_RUN",
+  "route": "component-upgrade",
+  "from_component": "v2",
+  "to_component": "v3",
+  "requirements": [
+    "../../README.md"
+  ],
+  "rename_map": {},
+  "shared_dependencies": [
+    "Python standard library"
+  ],
+  "leave_unmanaged": [
+    "USER_NOTES.md",
+    "data/notes.json",
+    "data/sources.json"
+  ],
+  "conflicts_requiring_semantic_review": [
+    "config.json"
+  ],
+  "preserve": [
+    "customized headings and section order",
+    "USER_NOTES.md"
+  ],
+  "acceptance_refs": [
+    "../../../../verifier/expectations/doc-v3.json"
+  ],
+  "expected_candidate": "../../expected/after-v3",
+  "accepted_A": null,
+  "A_note": "After a real accepted apply, record actual A identity in external lineage. This static expected candidate is not A."
+}

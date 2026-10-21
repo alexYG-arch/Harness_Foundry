@@ -1,0 +1,21 @@
+{
+  "format_version": 1,
+  "timeout": 20,
+  "health": {
+    "status": "ok",
+    "api_version": 2
+  },
+  "items": [
+    {
+      "id": "fixture-1",
+      "name": "Notebook"
+    },
+    {
+      "id": "fixture-2",
+      "name": "Pencil"
+    }
+  ],
+  "not_found": {
+    "error": "not_found"
+  }
+}

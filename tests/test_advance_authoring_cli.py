@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from harness_foundry_factory.constants import default_spec_root
+
 import hashlib
 import json
 import os
@@ -24,7 +26,7 @@ class AdvanceAuthoringCliTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
-        self.spec_root = ROOT.parent / "Harness_Foundry_v2_8_Start_Package"
+        self.spec_root = default_spec_root()
         self.runs_root = self.root / "runs"
         self.program_id = "PROGRAM-SLICE-04"
         self.store = SQLiteEventStore(

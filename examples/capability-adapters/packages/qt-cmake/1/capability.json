@@ -1,0 +1,17 @@
+{
+  "name": "qt-cmake",
+  "version": "1",
+  "usage": "both",
+  "inputs": ["A project-owned CMake source directory and explicit isolated build/report paths", "Resolved CMake/CTest tools, project definitions and an independently maintained required-test list"],
+  "outputs": ["Configured and built project files in the declared build directory", "One command record, stdout/stderr and CTest JUnit evidence per explicit invocation"],
+  "materials": ["guide.md"],
+  "tools": [{"id": "qt-cmake", "path": "qt_cmake.py", "interpreter": "python", "interpreter_args": ["-I", "-B"]}],
+  "verification_files": ["check_ctest.py"],
+  "environment": [
+    {"id": "python", "kind": "executable", "version_min": "3.11"},
+    {"id": "cmake", "kind": "executable", "version_min": "3.21"},
+    {"id": "ctest", "kind": "executable", "version_min": "3.21"},
+    {"id": "qt-sdk", "kind": "directory"}
+  ],
+  "support": "Project-parameterized CMake/CTest bridge, including Qt projects. SDK selection, target expectations and actual sandbox permissions belong to the project/host; no installer, scheduler or acceptance authority."
+}

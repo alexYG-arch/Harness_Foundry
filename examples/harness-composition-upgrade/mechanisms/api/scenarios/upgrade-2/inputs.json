@@ -1,0 +1,41 @@
+{
+  "format_version": 1,
+  "files": [
+    {
+      "path": "config.json",
+      "C": {
+        "file": "../../expected/after-v2/config.json",
+        "executable": false
+      },
+      "G": {
+        "file": "../../versions/v2/config.json",
+        "executable": false
+      },
+      "N": {
+        "file": "../../versions/v3/config.json",
+        "executable": false
+      },
+      "owners": [
+        "api"
+      ]
+    },
+    {
+      "path": "tools/service.py",
+      "C": {
+        "file": "../../expected/after-v2/tools/service.py",
+        "executable": false
+      },
+      "G": {
+        "file": "../../versions/v2/tools/service.py",
+        "executable": false
+      },
+      "N": {
+        "file": "../../versions/v3/tools/service.py",
+        "executable": false
+      },
+      "owners": [
+        "api"
+      ]
+    }
+  ]
+}

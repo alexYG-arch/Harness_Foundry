@@ -1,0 +1,9 @@
+{
+  "name": "reference-notes",
+  "version": "1",
+  "usage": "build",
+  "inputs": ["Project-provided document requirements"],
+  "outputs": ["Reference material for the existing build document"],
+  "materials": ["guide.md"],
+  "support": "Preparation example only; does not decide project acceptance."
+}

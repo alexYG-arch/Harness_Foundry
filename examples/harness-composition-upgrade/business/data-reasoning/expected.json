@@ -1,0 +1,84 @@
+{
+  "basis": [
+    "inputs/orders.csv",
+    "inputs/metric-definition.json",
+    "inputs/user-customization.json"
+  ],
+  "hand_calculation": {
+    "scoped_paid_ids": [
+      "b001",
+      "b002",
+      "b004",
+      "b005",
+      "b008"
+    ],
+    "known_amounts_yuan": {
+      "b001": "12.00",
+      "b002": "25.00",
+      "b005": "35.00",
+      "b008": "8.50"
+    },
+    "unknown_amount_ids": [
+      "b004"
+    ],
+    "excluded": {
+      "cancelled": [
+        "b003"
+      ],
+      "outside_local_date": [
+        "b006",
+        "b007",
+        "b009"
+      ]
+    },
+    "deduplication": "b001 重复行去一次；b002 最高 revision=2 的 25 元替代 20 元。",
+    "local_time_checks": {
+      "b001": "2026-09-01T00:30:00+08:00",
+      "b009": "2026-09-02T00:30:00+08:00"
+    },
+    "sum_expression": "12 + 25 + 35 + 8.50 = 80.50",
+    "mean_expression": "80.50 / 4 = 20.125，最终 ROUND_HALF_UP 显示 20.13",
+    "coverage_expression": "4 / 5 = 0.8"
+  },
+  "metrics": {
+    "eligible_paid_count": 5,
+    "known_amount_count": 4,
+    "unknown_amount_count": 1,
+    "known_revenue_yuan": "80.50",
+    "amount_coverage": "0.8",
+    "known_amount_mean_exact_yuan": "20.125",
+    "known_amount_mean_display_yuan": "20.13",
+    "complete_revenue_yuan": null,
+    "complete_mean_yuan": null,
+    "growth_rate": null
+  },
+  "v2": {
+    "groups": {
+      "web": {
+        "eligible_paid_count": 3,
+        "known_amount_count": 3,
+        "known_revenue_yuan": "55.50"
+      },
+      "desk": {
+        "eligible_paid_count": 2,
+        "known_amount_count": 1,
+        "known_revenue_yuan": "25.00"
+      }
+    },
+    "conditional_sensitivity": {
+      "assumption": "每笔未知金额在 0 到用户假设 40.00 元之间；此假设不是观察事实。",
+      "revenue_min_yuan": "80.50",
+      "revenue_max_yuan": "120.50",
+      "all_paid_mean_min_yuan": "16.10",
+      "all_paid_mean_max_yuan": "24.10",
+      "is_actual_complete_revenue": false
+    }
+  },
+  "reasoning_boundaries": [
+    "80.50 是 4 笔已知金额的小计，不能写成 5 笔完整收入。",
+    "20.13 是已知金额订单均值，分母为 4；不能与全部 5 笔的均值混淆。",
+    "非负约束仅支持完整收入至少 80.50；没有无条件有限上界。",
+    "没有对比期/随机样本，不能计算增长率或断言促销导致增长。",
+    "V2 条件范围不补齐缺失值，不消除原始未知。"
+  ]
+}
