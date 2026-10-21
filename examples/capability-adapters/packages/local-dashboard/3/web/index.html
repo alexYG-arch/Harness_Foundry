@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <title>运行观察</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="page-header">
+        <p class="eyebrow">本地只读看板</p>
+        <h1>运行观察</h1>
+        <p class="intro">查看已选运行的状态、待处理事项与证据引用。</p>
+      </header>
+      <section class="controls" aria-label="运行与显示方式">
+        <label class="run-label" for="run-selector">当前运行</label>
+        <select id="run-selector" disabled><option>正在读取运行列表…</option></select>
+        <div class="view-actions">
+          <button id="pip-button" type="button">画中画查看</button>
+          <button id="sidebar-button" type="button" class="secondary">使用侧栏</button>
+          <button id="reconnect-button" type="button" class="quiet">重新连接</button>
+        </div>
+        <p id="view-notice" class="view-notice" role="status"></p>
+      </section>
+      <div id="dashboard" aria-label="当前运行状态"></div>
+      <footer class="page-footer">此页面只观察已有记录。关闭页面或浮窗不会停止业务运行。</footer>
+    </main>
+  </body>
+</html>

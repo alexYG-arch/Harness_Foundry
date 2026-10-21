@@ -115,6 +115,8 @@ FACTORY_IMPLEMENTATION_PATHS = (
     "src/harness_foundry_factory/workpack_runtime.py",
     "src/harness_foundry_factory/coding_protocol.py",
     "src/harness_foundry_factory/coding_process.py",
+    "src/harness_foundry_factory/coding_defaults.py",
+    "src/harness_foundry_factory/resource_credentials.py",
     "src/harness_foundry_factory/coding_runtime.py",
     "src/harness_foundry_factory/workpack_acceptance.py",
     "src/harness_foundry_factory/workpack_evidence.py",
@@ -12492,7 +12494,7 @@ def _write_common_runtime_dependencies(runtime_root: Path, *, coding: bool = Fal
     """
     names = ["build_types.py", "revision_store.py", "identity.py", "resource_network.py"]
     if coding:
-        names.append("coding_events.py")
+        names.extend(("coding_events.py", "coding_defaults.py", "resource_credentials.py"))
     for filename in names:
         _write_text(runtime_root / filename, (Path(__file__).parent / filename).read_text(encoding="utf-8"))
 

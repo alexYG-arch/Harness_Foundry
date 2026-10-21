@@ -1,0 +1,51 @@
+{
+  "name": "local-dashboard",
+  "version": "4",
+  "usage": "both",
+  "inputs": [
+    "Explicit selected run identities and read-only sanitized display projections supplied by the host adapter",
+    "Optional external theme preference: system, light or dark; omitted preserves system behavior",
+    "Optional cumulative work progress and named workflow steps with sanitized history; current valid acceptance remains separate"
+  ],
+  "outputs": [
+    "A loopback-only observer URL plus embedded/browser view URLs, cached snapshots, SSE and shared page/PiP presentation"
+  ],
+  "materials": [
+    "guide.md",
+    "target-guide.md"
+  ],
+  "tools": [
+    {
+      "id": "local-dashboard",
+      "path": "dashboard.py",
+      "interpreter": "python",
+      "interpreter_args": [
+        "-I",
+        "-B"
+      ]
+    },
+    {
+      "id": "target-dashboard",
+      "path": "target.py",
+      "interpreter": "python",
+      "interpreter_args": [
+        "-I",
+        "-B"
+      ]
+    }
+  ],
+  "runtime_files": [
+    "capability.json",
+    "web/index.html",
+    "web/app.js",
+    "web/style.css"
+  ],
+  "environment": [
+    {
+      "id": "python",
+      "kind": "executable",
+      "version_min": "3.11"
+    }
+  ],
+  "support": "Optional host-owned observer with explicit Foundry or target-native adapters. No business dispatch, acceptance, budget or recovery authority. Real task, device and browser acceptance remain separately scoped."
+}

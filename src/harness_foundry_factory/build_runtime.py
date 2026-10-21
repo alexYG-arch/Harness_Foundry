@@ -142,7 +142,7 @@ def _validate_scope(store, plan, scope):
     required = {"workspace_root", "source_read_roots", "verification_root", "task_write_roots", "executables",
                 "codex_executable", "model", "allow_model_service", "max_attempts", "max_task_attempts",
                 "command_timeout_seconds", "expires_at"}
-    _check(isinstance(scope, dict) and required <= set(scope) <= required | {"verification_resources", "model_reasoning_effort"}, "build scope has missing or unsupported fields")
+    _check(isinstance(scope, dict) and required <= set(scope) <= required | {"verification_resources", "model_reasoning_effort", "model_policy", "model_service"}, "build scope has missing or unsupported fields")
     if "model_reasoning_effort" in scope:
         _check(isinstance(scope["model_reasoning_effort"], str) and scope["model_reasoning_effort"].strip(),
                "model_reasoning_effort must be a nonempty string")
@@ -167,8 +167,20 @@ def _validate_scope(store, plan, scope):
     _check(scope["command_timeout_seconds"] <= 86400, "command timeout cannot exceed one day")
     _check(type(scope["allow_model_service"]) is bool, "model-service permission must be explicit")
     has_codex = any(task["executor"] == "CODEX" for task in plan["workpacks"])
-    _check(not has_codex or (scope["allow_model_service"] and isinstance(scope["model"], str) and bool(scope["model"])),
-           "CODEX tasks need explicit model and model-service permission; there is no fallback")
+    policy = scope.get("model_policy", "FIXED")
+    _check(isinstance(policy, str) and policy in {"FIXED", "CODEX_GLOBAL_DEFAULTS"}, "unsupported model selection policy")
+    _check(policy != "CODEX_GLOBAL_DEFAULTS" or (scope["model"] is None and "model_reasoning_effort" not in scope),
+           "dynamic defaults cannot be combined with a fixed model or reasoning effort")
+    if "model_service" in scope:
+        from .coding_defaults import validate_model_service
+        from .local_process import LocalProcessError
+        try:
+            validate_model_service(scope["model_service"])
+        except LocalProcessError as exc:
+            raise RequestValidationError(str(exc)) from exc
+    _check(not has_codex or (scope["allow_model_service"] and (policy == "CODEX_GLOBAL_DEFAULTS"
+           or isinstance(scope["model"], str) and bool(scope["model"]))),
+           "CODEX tasks need an explicit model selection and model-service permission; there is no fallback")
     _utc(scope["expires_at"])
     tasks = {task["workpack_id"]: task for task in plan["workpacks"]}
     _check(isinstance(scope["task_write_roots"], dict) and set(scope["task_write_roots"]) == set(tasks),
@@ -232,7 +244,8 @@ def prepare_build_authorization(store, program_id, proposal_event_id, source_eve
                          "scope": deepcopy(scope), "expected_revision": expected_revision,
                          **({"follow_codex_defaults": True} if follow_codex_defaults else {}),
                          **({"rebind_from": rebind_from} if rebind_from is not None else {})}
-                        if "verification_resources" in scope or rebind_from is not None or follow_codex_defaults else None)
+                        if "verification_resources" in scope or rebind_from is not None or follow_codex_defaults
+                        or "model_policy" in scope or "model_service" in scope else None)
     if resource_request is not None:
         replay = store.idempotent_events(program_id, idempotency_key)
         if replay is not None:
@@ -252,20 +265,40 @@ def prepare_build_authorization(store, program_id, proposal_event_id, source_eve
     contracts = validate_acceptance_contracts(ir, snapshot=source["payload"]["snapshot"], required=True)
     scope = deepcopy(scope)
     model_defaults_source = None
-    if follow_codex_defaults:
+    dynamic_defaults = scope.get("model_policy") == "CODEX_GLOBAL_DEFAULTS"
+    _check(not (follow_codex_defaults and dynamic_defaults), "frozen and per-command default selection cannot be combined")
+    if follow_codex_defaults or dynamic_defaults:
         _check(scope.get("model") is None and "model_reasoning_effort" not in scope,
-               "follow_codex_defaults selects both fields; omit explicit effort and set model to null")
+               "default selection requires model null and no explicit reasoning effort")
         _check(scope.get("allow_model_service") is True and any(t["executor"] == "CODEX" for t in plan["workpacks"]),
                "follow_codex_defaults requires a declared CODEX task and model service")
         from .coding_defaults import resolve_codex_defaults
         from .local_process import LocalProcessError
         try:
-            selected = resolve_codex_defaults(scope["codex_executable"])
+            selected = (resolve_codex_defaults(scope["codex_executable"], require_explicit=False) if dynamic_defaults
+                        else resolve_codex_defaults(scope["codex_executable"]))
         except LocalProcessError as exc:
             raise RequestValidationError(str(exc)) from exc
-        scope["model"] = selected["model"]
-        scope["model_reasoning_effort"] = selected["model_reasoning_effort"]
+        from .coding_defaults import validate_model_service
+        service = selected.get("model_service", {"provider": "openai", "config": {}})
+        if "model_service" in scope:
+            try:
+                _check(validate_model_service(scope["model_service"]) == service,
+                       "selected model service differs from the requested service binding")
+            except LocalProcessError as exc:
+                raise RequestValidationError(str(exc)) from exc
+        scope["model_service"] = service
+        if not dynamic_defaults:
+            scope["model"] = selected["model"]
+            scope["model_reasoning_effort"] = selected["model_reasoning_effort"]
         model_defaults_source = selected["model_defaults_source"]
+    elif "model_service" in scope:
+        from .coding_defaults import validate_model_service
+        from .local_process import LocalProcessError
+        try:
+            scope["model_service"] = validate_model_service(scope["model_service"])
+        except LocalProcessError as exc:
+            raise RequestValidationError(str(exc)) from exc
     if rebind_from is not None:
         validate_rebind(events, rebind_from, proposal["payload"], scope)
     verifier_source = None
@@ -479,7 +512,10 @@ class NativeBuildRunner:
                 from .coding_process import CodingCommand, CodexCodingRunner
                 result = CodexCodingRunner(scope["codex_executable"]).run(
                     CodingCommand(command, invocation["prompt"], model=scope["model"],
-                                  reasoning_effort=scope.get("model_reasoning_effort")),
+                                  reasoning_effort=scope.get("model_reasoning_effort"),
+                                  model_policy=scope.get("model_policy", "FIXED"),
+                                  model_service=scope.get("model_service"),
+                                  model_defaults_source=invocation.get("model_defaults_source")),
                     before_dispatch=before_dispatch, **hooks)
             else:
                 result = CodexSandboxRunner(scope["codex_executable"]).run(command, before_dispatch=before_dispatch, **hooks)
@@ -699,6 +735,8 @@ class BuildController:
                     "command_timeout_seconds", "max_attempts", "max_task_attempts")},
                 **({"model_reasoning_effort": prepared["scope"]["model_reasoning_effort"]}
                    if "model_reasoning_effort" in prepared["scope"] else {}),
+                **{key: deepcopy(prepared["scope"][key]) for key in ("model_policy", "model_service")
+                   if key in prepared["scope"]},
             }
         scope = prepared["scope"]
         workspace = Path(scope["workspace_root"]).resolve()
@@ -842,6 +880,7 @@ class BuildController:
         return {"executor": executor, "argv": command, "cwd": str(workspace), "read_roots": reads,
                 "write_roots": writes, "timeout_seconds": min(scope["command_timeout_seconds"], remaining),
                 "scope": scope, "prompt": prompt, "workpack_id": task["workpack_id"], "job_id": task["job_id"],
+                **({"model_defaults_source": prepared["model_defaults_source"]} if "model_defaults_source" in prepared else {}),
                 "case_id": case_id, "phase": "VERIFICATION" if verification else "IMPLEMENTATION",
                 **({"resource_profile_ref": next(check["resource_profile_ref"] for check in task["verification"]
                     if check["case_id"] == case_id)} if verification and any(check["case_id"] == case_id
@@ -1011,9 +1050,15 @@ class BuildController:
                 feedback = prior[-1].get("verification", []) if prior else None
                 if prior and prior[-1]["status"] == "INVALIDATED":
                     feedback = [{"invalidation": prior[-1]["invalidation"], "previous_verification": feedback}]
+                reverify = reverification_candidates(events, prepared_id).get(task["workpack_id"])
+                # Legacy dynamic observations and accepted products remain recoverable.
+                # Only a new model dispatch needs a previously approved service binding.
+                if task["executor"] == "CODEX" and reverify is None:
+                    _check(scope.get("model_policy") != "CODEX_GLOBAL_DEFAULTS" or "model_service" in scope,
+                           "MODEL_SERVICE_BINDING_REQUIRED: prepare with rebind_from to bind the approved "
+                           "service and preserve cumulative usage; existing observations remain recoverable")
                 attempt_id = self._attempt(prepared_id, task, prepared, events, feedback,
-                                           codex_handoff=codex_handoff,
-                                           reverify=reverification_candidates(events, prepared_id).get(task["workpack_id"]))
+                                           codex_handoff=codex_handoff, reverify=reverify)
                 rows = self.store.list_events(self.program_id)
                 attempts, accepted = self._state(rows, prepared_id)
                 if (advance_mode == "ONE_ATTEMPT"

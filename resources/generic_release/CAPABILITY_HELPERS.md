@@ -70,6 +70,24 @@ The package guides describe actual tool inputs and the remaining acceptance
 boundaries. Candidate preparation and relocated engineering checks do not prove
 real new-task, second-device, browser, model or whole-Harness acceptance.
 
+`local-dashboard@3` optionally adds cumulative work, individual implementation/check
+steps and their history. For Foundry, a work unit is an original Workpack in the
+selected prepared scope's displayed plan, plus each Workpack affected by a distinct
+confirmed extra-defect repair root. Retries and continuations of that repair do
+not add units. Current valid acceptance remains separate: historical completion
+does not restore invalidated acceptance, and stage/history counts do not enlarge
+the acceptance denominator. There is no cross-prepared aggregation or change to
+scheduling or budgets.
+
+The default raw Foundry reader interface stays unchanged; the host opts in only
+when the selected component supports the new fields. Target-owned sources without
+those fields retain their previous display. Versions 1 and 2, existing installations
+and fixed older archives do not switch automatically. Select version 3 through
+the existing prepare/consume and upgrade flow with its complete new file binding.
+This source update does not deploy to the original device, push or publish a
+release, replace a fixed older archive, or change R3. Engineering and browser
+evidence remain separate from actual target acceptance.
+
 ## Optional stack environment profiles
 
 See [STACK_ENVIRONMENT.md](STACK_ENVIRONMENT.md) for format 1, full Qt/Python
@@ -84,3 +102,13 @@ retrieval; native dependencies are observed only when selected.
 Keep private checks separate and rebind local tools in the delivered directory.
 The current environment acceptance is local clean execution plus selected
 environment variations, not a mandatory second-device test.
+
+
+`local-dashboard@4` additionally returns `view_urls.embedded` and
+`view_urls.browser` in its startup response. The Chat host opens the selected URL
+in the Codex browser panel or external Chrome using available host tools. No
+browser launch is performed by the observer. Embedded presentation hides PiP and
+fullscreen; external/unspecified presentation detects each API independently.
+Version 4 is an explicitly selected capability package, not an implicit upgrade
+of older deployments or a new generic-runtime requirement. Counts, current
+acceptance, source isolation and business budgets are unchanged.

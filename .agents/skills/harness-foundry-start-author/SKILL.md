@@ -35,6 +35,19 @@ Do not create a Program or target merely to answer a question or validate Foundr
 acceptance. `verify-spec` checks the read-only historical sibling, which the
 generic distribution does not require. Do not restore retired commands.
 
+## Optional dashboard display
+
+When the user asks to show an existing run, use its explicitly selected observer
+configuration and bound interpreter. Reuse an existing matching observer when
+available; viewing is not a build or business dispatch. With local-dashboard@4,
+open the startup response's `view_urls.embedded` in the Codex browser panel or
+`view_urls.browser` in external Chrome according to the request, using available
+host tools. Do not infer the host from a user-agent string, silently replace an
+older component, or claim the webpage itself can move into the Codex sidebar.
+If the browser tool is unavailable, give the local URL and explain the limitation.
+PiP/fullscreen require an actual user gesture and supported browser APIs; closing
+a display does not stop the business. Keep source identity and acceptance limits.
+
 ## Before every build
 
 Read [the build-document policy](../../../docs/GENERIC_BUILD_PLAN.md) completely.
@@ -96,6 +109,13 @@ dispatching or recovering.
 6. Report actual per-Case independent results and remaining gaps. Model completion,
    files, test counts and `PLAN_CHECKS_ACCEPTED` do not prove full-PRD acceptance,
    installed-Harness usability or release readiness.
+
+Model selection and service binding are separate. Follow the public CLI for
+frozen defaults or explicitly approved per-command defaults; only the selected
+provider configuration is carried into the isolated receiver. Credential values
+stay in the client environment, never the public scope or model tools. Preserve
+the original per-command configuration when recovering; missing old metadata is
+not permission to replay or reset usage.
 
 Use actual behavior to check changed, required mechanisms, not just their names
 in code. Repair at the smallest responsible layer: project-specific fixes stay

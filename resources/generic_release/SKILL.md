@@ -246,9 +246,19 @@ arbitrary task renaming or a G1/G2 extension; ordinary preparation stays unchang
 
 When requested, prepare with `follow_codex_defaults: true`, `scope.model: null`
 and no explicit effort. The native global config reader resolves model and
-reasoning effort before approval. Show the frozen pair and returned source;
-do not inherit global permissions, tools or provider configuration. Existing
-prepared scopes keep their frozen values and cumulative budgets.
+reasoning effort and the selected `model_service` before approval. Show the
+frozen values, service and returned source; never inherit global tool permissions,
+MCPs or hooks. Existing prepared scopes keep their values and cumulative budgets.
+Explicit `model_service` supports native authentication or declared environment
+credential references, resolved only for the client and redacted from observations.
+Do not claim static headers/query parameters or command-based authentication are supported.
+For explicitly requested per-command model/effort selection, use
+`model_policy: CODEX_GLOBAL_DEFAULTS` instead of the freezing switch. Preparation
+still binds the service. Old dynamic scopes without that binding remain readable
+and recoverable; use the existing same-Program rebind to prepare the actual service,
+retain usage and obtain approval. Each command saves its actual non-secret config
+before startup. Recovery retains that original binding, never rereads current
+settings to reconstruct history, and never substitutes configuration evidence for completion.
 
 For an interrupted host, read first. `reconcile-build-observations` records
 complete durable results without dispatch, acceptance or cleanup, even after

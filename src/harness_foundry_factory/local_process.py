@@ -178,7 +178,8 @@ class CodexSandboxRunner:
         previews = {name: bytearray() for name in ("stdout", "stderr")}
         counts = dict.fromkeys(previews, 0)
         raw_counts = dict.fromkeys(previews, 0)
-        filters = {name: redactor.stream() for name in previews} if redactor is not None else {}
+        filters = {name: (redactor.stream_for(name) if hasattr(redactor, "stream_for") else redactor.stream())
+                   for name in previews} if redactor is not None else {}
         safe_text = redactor.text if redactor is not None else str
         capture_error = None
 

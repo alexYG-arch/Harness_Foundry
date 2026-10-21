@@ -16,7 +16,8 @@ class CommandObservation:
         self.root.mkdir(parents=True, exist_ok=False)
         self.streams = {}
         self.on_started = on_started
-        self._save("binding.json", {"command_id": command_id, "executor": executor})
+        self.binding = {"command_id": command_id, "executor": executor}
+        self._save("binding.json", self.binding)
 
     def _save(self, name, value):
         pending = self.root / (name + ".pending")
@@ -31,6 +32,39 @@ class CommandObservation:
         finally:
             os.close(directory)
 
+    def model_configuration(self, configuration):
+        """Persist the non-secret dispatch selection before a client can start."""
+        if self.binding["executor"] != "CODEX" or not isinstance(configuration, dict):
+            raise ValueError("model configuration requires a CODEX command")
+        receipt = {"binding": self.binding, "configuration": configuration}
+        path = self.root / "model-configuration.json"
+        if path.exists():
+            if json.loads(path.read_text()) != receipt:
+                raise ValueError("command model configuration is already bound")
+            return
+        self._save("model-configuration.json", receipt)
+
+    @staticmethod
+    def _checked_configuration(root, binding, result):
+        path = root / "model-configuration.json"
+        present = "model_configuration" in result
+        capture = result.get("capture")
+        nested = isinstance(capture, dict) and "model_configuration" in capture
+        if not path.exists():
+            if present or nested:
+                raise ValueError("model configuration has no bound receipt")
+            return result  # Legacy commands remain recoverable without invented configuration.
+        receipt = json.loads(path.read_text())
+        if (binding["executor"] != "CODEX" or not isinstance(receipt, dict)
+                or receipt.get("binding") != binding or not isinstance(receipt.get("configuration"), dict)):
+            raise ValueError("model configuration receipt binding differs from the dispatch")
+        configuration = receipt["configuration"]
+        if not present or result["model_configuration"] != configuration:
+            raise ValueError("command model configuration differs from its receipt")
+        if isinstance(capture, dict) and (not nested or capture["model_configuration"] != configuration):
+            raise ValueError("captured model configuration differs from its receipt")
+        return result
+
     def started(self, pid):
         self._save("started.json", {"pid": pid, "started_at": datetime.now(timezone.utc).isoformat()})
         if self.on_started:
@@ -43,12 +77,14 @@ class CommandObservation:
         self.streams[name].flush()  # Visible progress, not durable completion/acceptance.
 
     def captured(self, result):
+        self._checked_configuration(self.root, self.binding, result)
         for stream in self.streams.values():
             stream.flush()
             os.fsync(stream.fileno())
         self._save("capture.json", result)
 
     def finished(self, result):
+        self._checked_configuration(self.root, self.binding, result)
         self._save("result.json", result)
 
     def close(self):
@@ -109,10 +145,10 @@ class CommandObservation:
         if binding != {"command_id": command_id, "executor": executor}:
             raise ValueError("command observation binding differs from the dispatch")
         if (root / "result.json").exists():
-            return json.loads((root / "result.json").read_text())
+            return CommandObservation._checked_configuration(root, binding, json.loads((root / "result.json").read_text()))
         if not (root / "capture.json").exists():
             return None  # May be running or effects may be unknown. Never rerun.
-        capture = json.loads((root / "capture.json").read_text())
+        capture = CommandObservation._checked_configuration(root, binding, json.loads((root / "capture.json").read_text()))
         if executor == "CODEX":
             from .coding_process import classify_coding_capture
             from .coding_events import CodingEventObserver

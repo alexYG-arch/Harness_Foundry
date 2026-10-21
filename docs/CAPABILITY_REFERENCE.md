@@ -37,3 +37,10 @@ WP06 的主源码入口为 `examples/capability-adapters/foundry_dashboard.py`�
 本机 Chrome 已有本轮工程夹具原生 PiP、紧凑布局、后台更新与窄侧栏观察；IAB 本次打开后立即关闭的原因尚未确定。两类看板的完整 D0/D1/D2、真实新任务、目标独立接入及效果验收仍未关闭；不把工程夹具等同于真实业务验收。
 
 可选的 `local-dashboard@2` 提供外部 `system/light/dark` 主题偏好并保留 @1，侧栏和 PiP 共享同一状态。按[能力接入说明](../examples/capability-adapters/README.md)显式选择新版完整文件绑定，组件及其使用指南随所选能力包单独交付，不静默替换已固定版本。本说明描述公开接口与职责，不包含本地实施记录，也不代表具体目标已验收或已经发布。
+
+可选的 `local-dashboard@3`（使用指南 `guide.md` 随选定的独立能力包交付，不属于通用运行包）增加累计工作进度、实施与逐项独立检查步骤、可查看的历史记录。累计单位为当前 prepared 所展示计划中的原 Workpack，加上每个已确认额外缺陷的修复根事件所影响的 Workpack；同一修复链的重试与 continuation 不增加总量。当前有效接受仍独立显示，已完成历史不恢复失效接受；步骤和历史数量不加入验收分母。没有跨 prepared 汇总，也不改变调度或预算。
+
+默认 `read_build_scope()`／`read_foundry_projection()` 原始接口保持；Foundry 宿主仅在选定支持新字段的组件时启用扩展投影。目标 Harness 来源未提供新字段时保留旧展示。旧 @1/@2、现有安装及固定旧包不自动切换或覆盖，选择 @3 仍沿原能力接入和完整文件绑定升级。工程验证与浏览器观察范围见公开源码中的实现摘要 `docs/V2_9_IMPLEMENTATION_TRACKER.md`（不属于通用运行包）；本地原始证据不随源码提交。旧部署未自动升级，未合并 main 或发布，原 R3 不变。
+
+
+可选 `local-dashboard@4` 的使用指南随独立能力包交付，具体选版见[能力接入说明](../examples/capability-adapters/README.md)。它区分内嵌／外置显示地址，外置页按实际支持提供画中画和全屏；Chat 使用宿主浏览器工具打开相应地址。页面不能自行移入 Codex 侧栏，不通过 User-Agent 承诺识别所有宿主。文案简化不改变 @3 的累计进度与当前有效验收口径，旧版及旧部署保留。

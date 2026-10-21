@@ -26,13 +26,14 @@ class CodingDefaultsTests(unittest.TestCase):
             "origins": {"model": {"name": {"type": "user", "file": "/user/.codex/config.toml", "token": "DO-NOT-EXPORT"},
                 "version": "sha256:example", "config": {"secret": "DO-NOT-EXPORT"}}}}
 
-    def resolve(self, reply=None):
+    def resolve(self, reply=None, **kwargs):
         with patch("harness_foundry_factory.coding_defaults._configuration_read", return_value=self.reply if reply is None else reply):
-            return resolve_codex_defaults(self.executable)
+            return resolve_codex_defaults(self.executable, **kwargs)
 
     def test_exports_only_selection_and_source_and_keeps_unknown_legal_effort(self):
         result = self.resolve()
-        self.assertEqual(set(result), {"model", "model_reasoning_effort", "model_defaults_source"})
+        self.assertEqual(set(result), {"model", "model_reasoning_effort", "model_defaults_source", "model_service"})
+        self.assertEqual(result["model_service"], {"provider": "openai", "config": {}})
         self.assertEqual(result["model"], "example-model")
         self.assertEqual(result["model_reasoning_effort"], "custom-effort")
         self.assertNotIn("DO-NOT-EXPORT", json.dumps(result))
@@ -50,8 +51,49 @@ class CodingDefaultsTests(unittest.TestCase):
 
     def test_custom_provider_is_not_silently_dispatched_to_openai(self):
         self.reply["config"]["model_provider"] = "private-provider"
-        with self.assertRaisesRegex(LocalProcessError, "CODEX_DEFAULTS_PROVIDER_UNSUPPORTED"):
+        with self.assertRaisesRegex(LocalProcessError, "CODEX_DEFAULTS_PROVIDER_DEFINITION_MISSING"):
             self.resolve()
+
+    def test_optional_native_nulls_are_not_invented_or_replaced(self):
+        for config in ({}, {"model": None, "model_reasoning_effort": None}):
+            result = self.resolve({"config": config}, require_explicit=False)
+            self.assertIsNone(result["model"])
+            self.assertIsNone(result["model_reasoning_effort"])
+            self.assertEqual(result["model_service"], {"provider": "openai", "config": {}})
+        for key in ("model", "model_reasoning_effort"):
+            for value in ("", " ", 1, True, [], "bad\x00value"):
+                with self.subTest(key=key, value=value), self.assertRaisesRegex(LocalProcessError, "CODEX_DEFAULTS_NOT_EXPLICIT"):
+                    self.resolve({"config": {key: value}}, require_explicit=False)
+
+    def test_native_custom_provider_and_profile_selection_are_preserved(self):
+        self.reply["config"].update(model="profile-model", model_provider="local-proxy",
+            model_providers={"local-proxy": {"name": "Local proxy", "base_url": "http://127.0.0.1:15721/v1",
+                "wire_api": "responses", "requires_openai_auth": True, "auth": None,
+                "http_headers": None, "supports_standalone_web_search": False},
+                "unused": {"experimental_bearer_token": "DO-NOT-EXPORT"}})
+        self.reply["origins"]["model"] = {"name": {"type": "user", "profile": "selected"}}
+        self.reply["origins"]["model_provider"] = {"name": {"type": "user", "profile": "selected"}}
+        result = self.resolve()
+        self.assertEqual(result["model"], "profile-model")
+        self.assertEqual(result["model_service"], {"provider": "local-proxy", "config": {
+            "name": "Local proxy", "base_url": "http://127.0.0.1:15721/v1", "wire_api": "responses",
+            "requires_openai_auth": True}})
+        self.assertEqual(result["model_defaults_source"]["provider_source"]["name"]["profile"], "selected")
+        self.assertNotIn("DO-NOT-EXPORT", json.dumps(result))
+
+    def test_invalid_selected_provider_never_falls_back(self):
+        for provider, definitions in (("custom", None), ("custom", {}), ("custom", {"custom": None}),
+                                      ("custom", {"custom": {}}), (12, {}), ("openai", [])):
+            with self.subTest(provider=provider, definitions=definitions), self.assertRaises(LocalProcessError):
+                self.resolve({"config": {**self.reply["config"], "model_provider": provider,
+                                         "model_providers": definitions}})
+
+    def test_unsupported_selected_auth_reports_no_secret_or_silent_substitution(self):
+        self.reply["config"].update(model_provider="custom", model_providers={"custom": {
+            "name": "Custom", "experimental_bearer_token": "DO-NOT-EXPORT"}})
+        with self.assertRaises(LocalProcessError) as caught:
+            self.resolve()
+        self.assertNotIn("DO-NOT-EXPORT", str(caught.exception))
 
     def test_executable_change_during_read_does_not_bind_stale_selection(self):
         def changed(*args):
@@ -114,11 +156,17 @@ with (root/'received.jsonl').open('w') as received:
         for mode in ("malformed", "error", "timeout"):
             with self.subTest(mode=mode):
                 self.fixture(mode)
+                for name in ("pid", "received.jsonl"):
+                    (self.root / name).unlink(missing_ok=True)
                 started = time.monotonic()
                 with self.assertRaises(LocalProcessError) as caught:
-                    resolve_codex_defaults(self.executable, timeout_seconds=0.2)
+                    # Allow interpreter startup before exercising the chosen
+                    # failure; a startup timeout must not impersonate it.
+                    resolve_codex_defaults(self.executable, timeout_seconds=2)
                 self.assertNotIn("DO-NOT-EXPORT", str(caught.exception))
-                self.assertLess(time.monotonic() - started, 3)
+                self.assertLess(time.monotonic() - started, 5)
+                records = [json.loads(line) for line in (self.root / "received.jsonl").read_text().splitlines()]
+                self.assertEqual(records[-1]["method"], "config/read")
                 self.assert_dead()
 
     def test_invalid_request_never_starts_native_reader(self):
@@ -128,4 +176,7 @@ with (root/'received.jsonl').open('w') as received:
                     resolve_codex_defaults(self.executable, timeout_seconds=value)
             with self.assertRaises(LocalProcessError):
                 resolve_codex_defaults("relative-codex")
+            for value in (None, 1, "false"):
+                with self.assertRaises(LocalProcessError):
+                    resolve_codex_defaults(self.executable, require_explicit=value)
             read.assert_not_called()

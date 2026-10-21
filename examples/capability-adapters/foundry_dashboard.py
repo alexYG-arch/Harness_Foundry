@@ -60,7 +60,8 @@ def observer_from_config(config_path, **options):
         sources[local_id] = {
             "selection": selection,
             "reader": lambda database=database, selection=selection:
-                read_foundry_projection(database, selection),
+                read_foundry_projection(database, selection, **({"include_workflow": True}
+                    if getattr(dashboard, "SUPPORTS_WORK_PROGRESS", False) else {})),
         }
     if "theme" in config:
         if not hasattr(dashboard, "validate_theme"):
@@ -89,8 +90,12 @@ def main(argv=None):
         for signum in (signal.SIGINT, signal.SIGTERM):
             previous[signum] = signal.signal(signum, stop)
         observer.start()
-        print(json.dumps({"url": observer.url, "component": observer.component,
-                          "session_id": observer.session_id}), flush=True)
+        launch = {"url": observer.url, "component": observer.component,
+                  "session_id": observer.session_id}
+        # Older selected components keep their original launch response.
+        if hasattr(observer, "view_urls"):
+            launch["view_urls"] = observer.view_urls
+        print(json.dumps(launch), flush=True)
         while not observer.wait(0.1):
             if interrupted.is_set():
                 observer.stop()

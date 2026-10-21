@@ -228,23 +228,43 @@ scope 必须完整列出以下基础字段；可另提供 `model_reasoning_effor
 - `verification_root`：已存在的检查器源码目录。旧 scope 要求位于实施区外；资源模式准备时复制声明文件到宿主保护区，源码可在同仓库维护，Readback 展示源码与运行副本两个位置。
 - `executables`：逻辑程序名到绝对程序文件的映射；LOCAL 与检查的 argv 首项引用它。
 - `codex_executable`：原生 Codex receiver 的绝对程序路径。
-- `model`, `allow_model_service`：CODEX 任务必须显式绑定模型并允许模型服务；
+- `model`, `allow_model_service`：CODEX 任务必须显式声明模型选择方式并允许模型服务；
   不自动换模型或要求另配 API key。纯 LOCAL 可不授予模型服务。
 - `model_reasoning_effort`：可选的明确推理强度，由已绑定 Codex/模型支持；不自行映射到另一强度。
 - `max_attempts`, `max_task_attempts`：本范围总计及每任务的有限尝试预算。
 - `command_timeout_seconds`：每个有限命令的超时（不超过一天，也不越过到期时间）。
 - `expires_at`：带时区的 ISO 时间。
 
-要沿用 Codex **全局默认模型与推理强度**，在 prepare request 顶层加入
+要沿用 Codex **全局默认模型与推理强度并在准备时冻结**，在 prepare request 顶层加入
 `"follow_codex_defaults": true`，scope 中 `model` 为 null，且不同时填写推理强度。
-准备阶段通过声明的 Codex `app-server config/read`（不提供项目 cwd）读取具体值，
-保存到实际 scope，Readback 同时返回 `model_defaults_source`。这不是模型 turn，
-不创建目标任务；Codex 可能初始化自己的本机状态。读取失败或没有具体默认值时报告原因，
-可修复宿主读取条件，或改用明确模型/强度重新准备；不猜测默认值。
-同一 prepare 幂等键返回首次冻结值。以后全局配置变化不改写既有 scope，
-需要换模型时另行准备并沿原累计消耗接续。正式派发仍显式传递冻结值，保留
-`--ignore-user-config` 与原读写、网络和授权检查，不导入用户权限、MCP、hooks 或 provider。
-此选项只支持现有 OpenAI receiver；不是其他服务商接入。已有显式模型请求保持原语义。
+准备通过声明的 Codex `app-server config/read`（无项目 cwd）取得原生有效配置，
+保存具体模型、强度和选定 `model_service`，Readback 返回 `model_defaults_source`。
+读取失败或缺少具体模型/强度时明确诊断，不猜测默认值。此读取没有模型 turn，
+不创建目标任务；Codex 可能初始化自己的本机状态。同一 prepare 幂等键复用首次选择。
+后续配置变化不改已批准 scope；改用服务或冻结值时沿原 `rebind_from` 接续并保留累计消耗。
+
+`model_service` 是可选的公开服务绑定：`{"provider": "example", "config": {...}}`。
+未提供的既有固定模型请求仍用原 OpenAI receiver，不读取全局默认；显式提供时使用该服务。
+`config` 只接入所选 provider 的声明字段，例如 `name`、`base_url`、`wire_api`、
+`requires_openai_auth`、`env_key`、`env_http_headers` 及重试/流参数；绝不导入用户工具权限、
+MCP、hooks 或任意启动命令。具体字段以校验器诊断为准。原生认证仍由 Codex 处理；
+环境凭据只保存变量引用，在实际模型派发前取值并仅交给客户端，不进入 Plan、prompt、
+Readback、命令行或日志，不让模型工具继承。日志中的已知凭据回显按内容脱敏；CODEX 的 JSONL 仍保留事件类型、退出状态和使用量等协议事实，相同数字或协议词不因此被改写。阻断报告仅保留合法 `failure_kind="CONTRACT_GAP"` 枚举，其他值仍脱敏，且原无效报告不会因此变为有效。缺少凭据明确报告未启动，不自动反复派发。
+本次未接入内联凭据、静态 HTTP headers/query 参数或命令式认证；这些不能被写成已经支持。
+不对凭据内容附加业务格式要求，也不修改宿主环境或全局配置。
+
+若明确需要**每次命令跟随默认模型/强度**，使用 scope 的
+`"model_policy": "CODEX_GLOBAL_DEFAULTS"`、`"model": null`，不填写推理强度，
+不与 `follow_codex_defaults` 混用。准备仍读取一次原生配置并固定 `model_service`；
+实际派发只重选模型/强度，服务身份、端点或认证声明变化时按原范围变更处理，
+不能由 `allow_model_service: true` 推定批准了任意新服务。原生未明确的动态默认值如实保留 null，
+不声称已经冻结具体选择。每条命令在启动前保存实际选择及来源，恢复只读原绑定。
+旧动态 scope 没有服务绑定时仍可读取、取回报告和处置未决尝试；新派发需通过同 Program 的
+`rebind_from` 补齐服务范围及真实批准，不新建预算、不改旧 prepared，也不重跑已接受任务。
+已有服务绑定且仍在批准条件内的正常动态模型选择，不增加逐命令审批。
+
+正式派发保留 `--ignore-user-config`、原授权校验、读写及网络边界。配置读取和参数记录
+不等于服务端实际模型认证，更不等于业务验收；工程接收器测试和真实模型验证分别报告。
 
 LOCAL/独立验证命令的后续 argv 元素可以显式使用 `executable://NAME`，例如
 `["python", "-B", "verifier://check.py", "--python-executable", "executable://python"]`。
