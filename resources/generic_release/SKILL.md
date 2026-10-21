@@ -241,3 +241,19 @@ native product repair; old BLOCKED diagnostics do not automatically reblock the
 new repaired scope. Readback separates cumulative and current-preparation usage,
 reused_acceptance and reverification_pending. This is not cross-database migration,
 arbitrary task renaming or a G1/G2 extension; ordinary preparation stays unchanged.
+
+## Global model defaults and interrupted observations
+
+When requested, prepare with `follow_codex_defaults: true`, `scope.model: null`
+and no explicit effort. The native global config reader resolves model and
+reasoning effort before approval. Show the frozen pair and returned source;
+do not inherit global permissions, tools or provider configuration. Existing
+prepared scopes keep their frozen values and cumulative budgets.
+
+For an interrupted host, read first. `reconcile-build-observations` records
+complete durable results without dispatch, acceptance or cleanup, even after
+expiry/revocation. Missing captures remain missing. Only a trusted host's actual
+termination/effects evidence plus a real user decision may use the existing
+`resolve-build-attempt` route with `host_reconciliation`. Never infer safe replay
+from a missing PID, elapsed time or partial stdout. Follow the CLI documentation;
+this is not a new per-task approval gate.

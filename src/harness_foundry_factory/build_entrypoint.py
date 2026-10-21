@@ -30,6 +30,7 @@ MUTATIONS = {
     "prepare-build-authorization": {"program_id", "proposal_event_id", "source_event_id", "scope"},
     "approve-build-authorization": {"program_id", "prepared_event_id", "decision"},
     "revoke-build-authorization": {"program_id", "prepared_event_id", "decision", "reason"},
+    "reconcile-build-observations": {"program_id", "prepared_event_id"},
     "resolve-build-attempt": {"program_id", "prepared_event_id", "attempt_id", "decision", "reason"},
     "request-build-repair": {"program_id", "prepared_event_id", "targets", "finding"},
 }
@@ -103,6 +104,7 @@ def _scope_readback(event, events):
     return {"prepared_event_id": prepared_id, "proposal_event_id": payload["proposal_event_id"],
             "requirement_ir": proposal["payload"]["requirement_ir"], "plan": proposal["payload"]["plan"],
             "scope": payload["scope"], "source_binding": _source_summary(source),
+            **({"model_defaults_source": payload["model_defaults_source"]} if "model_defaults_source" in payload else {}),
             "verification_files": sorted(payload["verifier_files"]), "state": state,
             **({"verifier_source": payload["verifier_source"]} if "verifier_source" in payload else {}),
             "coding_instruction_preflight": payload.get("coding_instruction_preflight"),
@@ -168,7 +170,8 @@ def apply_build_request(command, request, control_db):
     else:
         required = MUTATIONS.get(command, set()) | {"expected_revision", "idempotency_key"}
         optional = ({"continuation_of"} if command == "request-build-repair" else
-                    {"rebind_from"} if command == "prepare-build-authorization" else set())
+                    {"rebind_from", "follow_codex_defaults"} if command == "prepare-build-authorization" else
+                    {"host_reconciliation"} if command == "resolve-build-attempt" else set())
         _require(command in MUTATIONS and required <= set(request) <= required | optional,
                  "build request has missing or unsupported fields")
         _require(isinstance(request["idempotency_key"], str) and request["idempotency_key"].strip(), "idempotency_key is required")
@@ -217,7 +220,8 @@ def apply_build_request(command, request, control_db):
         status = "BUILD_SOURCES_CAPTURED_NOT_SEMANTICALLY_ACCEPTED"
     elif command == "prepare-build-authorization":
         event = prepare_build_authorization(store, program, request["proposal_event_id"], request["source_event_id"], request["scope"],
-                                             rebind_from=request.get("rebind_from"), **kwargs)
+                                             rebind_from=request.get("rebind_from"),
+                                             follow_codex_defaults=request.get("follow_codex_defaults", False), **kwargs)
         status = "BUILD_SCOPE_APPROVAL_REQUIRED"
     elif command == "approve-build-authorization":
         event = approve_build_authorization(store, program, request["prepared_event_id"], human_message_ref=human_ref, **kwargs)
@@ -230,9 +234,17 @@ def apply_build_request(command, request, control_db):
                 "finding": event["payload"]["finding"], "budget_reset": False, "files_deleted": False,
                 "control_state_write": True, "target_write": False, "execution_started": False,
                 "harness_e2e_verified": False}
+    elif command == "reconcile-build-observations":
+        from .build_reconciliation import reconcile_build_observations
+        event = reconcile_build_observations(store, program, request["prepared_event_id"], **kwargs)
+        return {"status": "BUILD_COMMAND_OBSERVATIONS_RECONCILED", "program_id": program,
+                "event_id": event["event_id"], "stream_revision": event["stream_revision"],
+                **event["payload"], "control_state_write": True, "target_write": False,
+                "execution_started": False, "harness_e2e_verified": False}
     elif command == "resolve-build-attempt":
         event = resolve_build_attempt(store, program, request["prepared_event_id"], request["attempt_id"],
-                                      reason=request["reason"], human_message_ref=human_ref, **kwargs)
+                                      reason=request["reason"], human_message_ref=human_ref,
+                                      host_reconciliation=request.get("host_reconciliation"), **kwargs)
         status = "BUILD_ATTEMPT_RESOLVED_NOT_EXECUTED"
     else:
         event = revoke_build_authorization(store, program, request["prepared_event_id"], human_message_ref=human_ref,

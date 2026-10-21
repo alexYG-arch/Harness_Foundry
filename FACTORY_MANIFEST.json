@@ -12,7 +12,7 @@
   "new_build_route": "GENERIC_REVIEWED_BUILD_ONLY",
   "legacy_new_build_status": "RETIRED_NO_FALLBACK",
   "historical_capability_scope": "BASELINE_REGRESSION_NOT_CURRENT_PRODUCT_ACCEPTANCE",
-  "public_cli": ["version", "compile-build-plan", "record-build-plan", "capture-build-sources", "prepare-build-authorization", "approve-build-authorization", "revoke-build-authorization", "resolve-build-attempt", "request-build-repair", "advance-build", "read-build", "read-history"],
+  "public_cli": ["version", "compile-build-plan", "record-build-plan", "capture-build-sources", "prepare-build-authorization", "approve-build-authorization", "revoke-build-authorization", "reconcile-build-observations", "resolve-build-attempt", "request-build-repair", "advance-build", "read-build", "read-history"],
   "source_diagnostic_cli": ["verify-spec", "validate-core", "project-core-evidence", "self-check-diagnostic"],
   "public_python_api": ["harness_foundry_factory.build_plan.compile_build_plan", "harness_foundry_factory.build_plan.validate_compiled_build_plan", "harness_foundry_factory.build_entrypoint.apply_build_request", "harness_foundry_factory.build_entrypoint.read_build", "harness_foundry_factory.legacy_history.read_history"],
   "generic_build_update": {
@@ -24,6 +24,7 @@
       "prepare-build-authorization",
       "approve-build-authorization",
       "revoke-build-authorization",
+      "reconcile-build-observations",
       "resolve-build-attempt",
       "request-build-repair",
       "advance-build",

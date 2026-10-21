@@ -90,12 +90,15 @@ class CodingCommand:
     scope: LocalCommand
     prompt: str
     model: str | None = None
+    reasoning_effort: str | None = None
 
     def validate(self):
         if (len(self.scope.argv) != 1 or not isinstance(self.prompt, str) or not self.prompt
                 or "\x00" in self.prompt or self.model is not None
-                and (not isinstance(self.model, str) or not self.model or "\x00" in self.model)):
-            raise LocalProcessError("coding needs one executable, a full prompt and an optional explicit model")
+                and (not isinstance(self.model, str) or not self.model or "\x00" in self.model)
+                or self.reasoning_effort is not None and (not isinstance(self.reasoning_effort, str)
+                    or not self.reasoning_effort.strip() or "\x00" in self.reasoning_effort)):
+            raise LocalProcessError("coding needs one executable, a full prompt and optional explicit model/reasoning effort")
         current = LocalCommand.prepare(argv=self.scope.argv, cwd=self.scope.cwd,
             read_roots=self.scope.read_roots, write_roots=self.scope.write_roots, timeout_seconds=self.scope.timeout_seconds)
         if current != self.scope:
@@ -125,6 +128,8 @@ class CodingCommand:
         }
         argv = [self.scope.argv[0], "exec", "--ignore-user-config", "--strict-config", "--ephemeral",
                 "--json", "--color", "never", "--skip-git-repo-check", "--cd", str(self.scope.cwd)]
+        if self.reasoning_effort is not None:
+            settings["model_reasoning_effort"] = self.reasoning_effort
         for key, value in settings.items():
             argv += ["-c", key + "=" + _toml_inline(value)]
         if self.model is not None:

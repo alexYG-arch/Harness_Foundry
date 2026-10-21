@@ -55,10 +55,11 @@ Review，再使用本入口；原始材料保留追溯角色。后台检查全�
 |---|---|---|
 | `record-build-plan` | `--control-db DB --request FILE` | `requirement_ir`, `plan`, `document_review` |
 | `capture-build-sources` | 同上 | `program_id`, `proposal_event_id`, `source_root`, `manifest` |
-| `prepare-build-authorization` | 同上 | `program_id`, `proposal_event_id`, `source_event_id`, `scope`；可选 `rebind_from` |
+| `prepare-build-authorization` | 同上 | `program_id`, `proposal_event_id`, `source_event_id`, `scope`；可选 `rebind_from`, `follow_codex_defaults` |
 | `approve-build-authorization` | 同上 | `program_id`, `prepared_event_id`, `decision` |
 | `revoke-build-authorization` | 同上 | `program_id`, `prepared_event_id`, `decision`, `reason` |
-| `resolve-build-attempt` | 同上 | `program_id`, `prepared_event_id`, `attempt_id`, `decision`, `reason` |
+| `reconcile-build-observations` | 同上 | `program_id`, `prepared_event_id` |
+| `resolve-build-attempt` | 同上 | `program_id`, `prepared_event_id`, `attempt_id`, `decision`, `reason`；可选 `host_reconciliation` |
 | `request-build-repair` | 同上 | `program_id`, `prepared_event_id`, `targets`, `finding`；可选 `continuation_of` |
 | `advance-build` | 同上 | `program_id`, `prepared_event_id`, `expected_revision`；可选 `advance_mode`, `codex_handoff` |
 | `read-build` | `--control-db DB --program-id ID` | 无 request 文件 |
@@ -217,7 +218,7 @@ DB 替换为已有控制库的绝对路径，ID 替换为真实 Program ID。此
 
 ## Scope
 
-scope 必须完整列出以下基础字段；Plan 1.2 可另外提供下述 `verification_resources`，其他字段仍不接受：
+scope 必须完整列出以下基础字段；可另提供 `model_reasoning_effort`，Plan 1.2 可提供下述 `verification_resources`：
 
 - `workspace_root`：绝对目标目录，可尚不存在；不使用 Foundry 自身源码目录。
 - `task_write_roots`：每个 Workpack 的规范相对目录数组，覆盖其声明输出。
@@ -229,9 +230,21 @@ scope 必须完整列出以下基础字段；Plan 1.2 可另外提供下述 `ver
 - `codex_executable`：原生 Codex receiver 的绝对程序路径。
 - `model`, `allow_model_service`：CODEX 任务必须显式绑定模型并允许模型服务；
   不自动换模型或要求另配 API key。纯 LOCAL 可不授予模型服务。
+- `model_reasoning_effort`：可选的明确推理强度，由已绑定 Codex/模型支持；不自行映射到另一强度。
 - `max_attempts`, `max_task_attempts`：本范围总计及每任务的有限尝试预算。
 - `command_timeout_seconds`：每个有限命令的超时（不超过一天，也不越过到期时间）。
 - `expires_at`：带时区的 ISO 时间。
+
+要沿用 Codex **全局默认模型与推理强度**，在 prepare request 顶层加入
+`"follow_codex_defaults": true`，scope 中 `model` 为 null，且不同时填写推理强度。
+准备阶段通过声明的 Codex `app-server config/read`（不提供项目 cwd）读取具体值，
+保存到实际 scope，Readback 同时返回 `model_defaults_source`。这不是模型 turn，
+不创建目标任务；Codex 可能初始化自己的本机状态。读取失败或没有具体默认值时报告原因，
+可修复宿主读取条件，或改用明确模型/强度重新准备；不猜测默认值。
+同一 prepare 幂等键返回首次冻结值。以后全局配置变化不改写既有 scope，
+需要换模型时另行准备并沿原累计消耗接续。正式派发仍显式传递冻结值，保留
+`--ignore-user-config` 与原读写、网络和授权检查，不导入用户权限、MCP、hooks 或 provider。
+此选项只支持现有 OpenAI receiver；不是其他服务商接入。已有显式模型请求保持原语义。
 
 LOCAL/独立验证命令的后续 argv 元素可以显式使用 `executable://NAME`，例如
 `["python", "-B", "verifier://check.py", "--python-executable", "executable://python"]`。
@@ -518,8 +531,24 @@ JSON 格式或 actor 字符串不能认证人；模型文本、源文档和任�
 
 `resolve-build-attempt` 仅供宿主记录真实用户对具体未决效果的处置，decision.action
 为 `RESOLVE_BUILD_ATTEMPT`，actor/user_message 形状同上，reason 说明核对事实与决定。
-它要求已观测到进程退出或明确未启动，且该任务没有更新尝试、没有未观测命令。
-无法确认进程结果时仍先核对；不能靠这个入口声明“其实没执行”。
+它要求该任务没有更新尝试，且每条已观测命令已有退出/明确未启动事实。
+仍为 IN_FLIGHT 但退出结果已完整取回的尝试也可处置；这不证明旧产物已验收。
+
+先用 `reconcile-build-observations` 取回原命令附件。该入口只追加已有完整结果及取回摘要，
+不启动业务/检查器、不接受产物、不加 attempt、不清理资源，可在原授权过期或撤销后使用。
+无完整结果就保持缺失；资源检查只取已完成归档与清理的收据，尚需资源收尾的留待有效授权处理。
+取回后的继续执行仍走原 `advance-build` 授权校验，不能借取回恢复权限。
+
+原退出附件永久缺失时，可信宿主可在真实用户处置之外提供 `host_reconciliation`：
+`prepared_event_id`、`attempt_id`，以及恰好覆盖所有未观测命令的 `commands` 数组。
+每项包含原 `command_id`、`executor`、`observation_root`；`termination` 包含
+`status`（`PROCESS_TREE_TERMINATED` 或 `NOT_STARTED`）、`detail`、非空 `evidence_refs`；
+`effects` 包含 `status: RECONCILED_FOR_RETRY`、`detail`、非空 `evidence_refs`。
+有 STARTED 事实的命令不能申报 NOT_STARTED。宿主须实际核实整个命令进程树停止，以及
+既有效果如何保留/处置；引用可以指向宿主观察和接收端核对记录。接口校验身份与完整性，
+无法凭 JSON 认证这些事实，必须由可信宿主负责，不能由产品模型自报。
+它保留原缺失观察和宿主处置记录，不伪造 exit_code、OBSERVED 或 PASS。
+PID 消失、等待时间、部分 stdout 和“没看到成功”均不足以证明可重试；证据不足仍保持未决。
 
 结果为 `BUILD_ATTEMPT_RESOLVED_NOT_EXECUTED`；派生状态 `RETRY_ALLOWED` 不改历史
 UNKNOWN/失败事件、不验收旧输出、不退还预算、不创建新批准或执行目标。

@@ -204,6 +204,7 @@ class CodexSandboxRunner:
                         "stderr": safe_text(str(exc)), "output_truncated": False, "process_started": False}
             timed_out = False
             cancelled = None
+            host_interruption = None
             next_authority_check = 0
             deadline = time.monotonic() + timeout
             killed_at = None
@@ -257,6 +258,12 @@ class CodexSandboxRunner:
                             capture_error = "PROCESS_STREAM_LIMIT_EXCEEDED"
                             kill_group()
                         emit(name, filters[name].feed(chunk) if filters else chunk)
+            except (KeyboardInterrupt, SystemExit) as exc:
+                # Cleanup must finish and leave a durable cancellation before
+                # propagating a catchable host interruption. This is observed
+                # termination, not proof that the workload had no effects.
+                host_interruption = exc
+                cancelled = "HOST_PROCESS_INTERRUPTED"
             except Exception as exc:
                 capture_error = "PROCESS_CAPTURE_FAILED: " + safe_text(str(exc))[:1000]
             finally:
@@ -286,6 +293,7 @@ class CodexSandboxRunner:
                     "output_truncated": any(raw_counts[name] > limit or counts[name] > limit for name in counts),
                     "stream_bytes": counts, "capture_error": capture_error,
                     **({"cancellation_reason": safe_text(cancelled)} if cancelled else {}),
+                    **({"host_interruption": type(host_interruption).__name__} if host_interruption is not None else {}),
                     **({"encoding_error": True} if encoding_error else {}), **captured}
             if network_policy is not None:
                 # Persist before the controller can disappear. Recovery must
@@ -296,6 +304,8 @@ class CodexSandboxRunner:
                     on_capture(result)
                 except Exception as exc:
                     result["capture_error"] = "CAPTURE_PERSISTENCE_FAILED: " + safe_text(str(exc))[:1000]
+            if host_interruption is not None:
+                raise host_interruption
             return result
 
     def run(self, command: LocalCommand, *, before_dispatch: Callable[[], None] | None = None,

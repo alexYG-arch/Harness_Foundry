@@ -142,7 +142,10 @@ def _validate_scope(store, plan, scope):
     required = {"workspace_root", "source_read_roots", "verification_root", "task_write_roots", "executables",
                 "codex_executable", "model", "allow_model_service", "max_attempts", "max_task_attempts",
                 "command_timeout_seconds", "expires_at"}
-    _check(isinstance(scope, dict) and required <= set(scope) <= required | {"verification_resources"}, "build scope has missing or unsupported fields")
+    _check(isinstance(scope, dict) and required <= set(scope) <= required | {"verification_resources", "model_reasoning_effort"}, "build scope has missing or unsupported fields")
+    if "model_reasoning_effort" in scope:
+        _check(isinstance(scope["model_reasoning_effort"], str) and scope["model_reasoning_effort"].strip(),
+               "model_reasoning_effort must be a nonempty string")
     workspace = _directory(scope["workspace_root"], allow_missing=True)
     _check(workspace.parent.is_dir(), "workspace parent must already exist; approval creates only the target root")
     verifier = _directory(scope["verification_root"])
@@ -222,12 +225,14 @@ def _validate_scope(store, plan, scope):
 
 
 def prepare_build_authorization(store, program_id, proposal_event_id, source_event_id, scope, *,
-                                expected_revision, idempotency_key, created_at, rebind_from=None):
+                                expected_revision, idempotency_key, created_at, rebind_from=None, follow_codex_defaults=False):
     """Save a readable scope challenge, not authority. Creates no target paths."""
+    _check(type(follow_codex_defaults) is bool, "follow_codex_defaults must be boolean")
     resource_request = ({"proposal_event_id": proposal_event_id, "source_event_id": source_event_id,
                          "scope": deepcopy(scope), "expected_revision": expected_revision,
+                         **({"follow_codex_defaults": True} if follow_codex_defaults else {}),
                          **({"rebind_from": rebind_from} if rebind_from is not None else {})}
-                        if "verification_resources" in scope or rebind_from is not None else None)
+                        if "verification_resources" in scope or rebind_from is not None or follow_codex_defaults else None)
     if resource_request is not None:
         replay = store.idempotent_events(program_id, idempotency_key)
         if replay is not None:
@@ -246,6 +251,21 @@ def prepare_build_authorization(store, program_id, proposal_event_id, source_eve
     validate_requirement_source_bindings(ir, source["payload"]["snapshot"])
     contracts = validate_acceptance_contracts(ir, snapshot=source["payload"]["snapshot"], required=True)
     scope = deepcopy(scope)
+    model_defaults_source = None
+    if follow_codex_defaults:
+        _check(scope.get("model") is None and "model_reasoning_effort" not in scope,
+               "follow_codex_defaults selects both fields; omit explicit effort and set model to null")
+        _check(scope.get("allow_model_service") is True and any(t["executor"] == "CODEX" for t in plan["workpacks"]),
+               "follow_codex_defaults requires a declared CODEX task and model service")
+        from .coding_defaults import resolve_codex_defaults
+        from .local_process import LocalProcessError
+        try:
+            selected = resolve_codex_defaults(scope["codex_executable"])
+        except LocalProcessError as exc:
+            raise RequestValidationError(str(exc)) from exc
+        scope["model"] = selected["model"]
+        scope["model_reasoning_effort"] = selected["model_reasoning_effort"]
+        model_defaults_source = selected["model_defaults_source"]
     if rebind_from is not None:
         validate_rebind(events, rebind_from, proposal["payload"], scope)
     verifier_source = None
@@ -284,6 +304,7 @@ def prepare_build_authorization(store, program_id, proposal_event_id, source_eve
     return store.append_batch(program_id, [{"event_type": "BUILD_AUTHORIZATION_PREPARED", "payload": {
         "proposal_event_id": proposal_event_id, "source_event_id": source_event_id,
         "scope": deepcopy(scope), "verifier_files": files,
+        **({"model_defaults_source": model_defaults_source} if model_defaults_source is not None else {}),
         **({"rebind_from": rebind_from} if rebind_from is not None else {}),
         "acceptance_contracts": contracts, **({"verifier_source": verifier_source} if verifier_source else {}),
         **({"resource_prepare_request": resource_request} if resource_request is not None else {}), **startup}}], expected_revision=expected_revision,
@@ -385,7 +406,7 @@ def classify_verification_result(result):
 
 
 def resolve_build_attempt(store, program_id, prepared_event_id, attempt_id, *, reason, human_message_ref,
-                          expected_revision, idempotency_key, created_at):
+                          expected_revision, idempotency_key, created_at, host_reconciliation=None):
     """Record a real host decision about a finished effect; no dispatch/grant.
 
     Old UNKNOWN/BLOCKED records remain intact. This permits a later bounded
@@ -395,27 +416,44 @@ def resolve_build_attempt(store, program_id, prepared_event_id, attempt_id, *, r
     _check(isinstance(human_message_ref, str) and human_message_ref.strip(), "actual human reconciliation is required")
     events = store.list_events(program_id)
     _event(events, prepared_event_id, "BUILD_AUTHORIZATION_PREPARED")
+    replay = store.idempotent_events(program_id, idempotency_key)
+    if replay is not None:
+        if not (len(replay) == 1 and replay[0]["event_type"] == "BUILD_ATTEMPT_RESOLVED"
+                and replay[0]["stream_revision"] == expected_revision + 1
+                and all(replay[0]["payload"].get(k) == v for k, v in {
+                    "prepared_event_id": prepared_event_id, "attempt_id": attempt_id,
+                    "reason": reason, "human_message_ref": human_message_ref,
+                    "host_reconciliation": host_reconciliation}.items())):
+            raise IdempotencyConflictError("resolution key was reused with different content")
+        return replay[0]
     controller = BuildController(store, program_id)
     attempts, _ = controller._state(events, prepared_event_id)
     attempt = attempts.get(attempt_id)
-    _check(attempt is not None and attempt["status"] in {"UNKNOWN_SIDE_EFFECT", "BLOCKED", "REJECTED", "RETRY_ALLOWED"},
+    _check(attempt is not None and attempt["status"] in {"IN_FLIGHT", "UNKNOWN_SIDE_EFFECT", "BLOCKED", "REJECTED", "RETRY_ALLOWED"},
            "only an unresolved/blocked/rejected attempt can be reconciled")
     latest = [row for row in attempts.values() if row["workpack_id"] == attempt["workpack_id"]][-1]
     _check(latest["attempt_id"] == attempt_id, "a historical attempt cannot invalidate a later attempt")
     observations = [row["payload"] for row in events if row["event_type"] == "BUILD_COMMAND_OBSERVED"
                     and row["payload"].get("attempt_id") == attempt_id]
-    _check(bool(observations), "no process outcome to reconcile; inspect the live command first")
-    result = observations[-1]["result"]
-    capture = result.get("capture", result)
-    _check(type(capture.get("exit_code")) is int or result.get("workload_started") is False
-           or result.get("model_process_started") is False, "process termination/not-started is not established")
     planned = {row["payload"]["command_id"] for row in events if row["event_type"] == "BUILD_COMMAND_PLANNED"
                and row["payload"].get("attempt_id") == attempt_id}
-    _check(planned <= {row.get("command_id") for row in observations}, "unobserved command still requires reconciliation")
+    observed = {row.get("command_id") for row in observations}
+    _check(bool(planned) and observed <= planned, "no complete command intent to reconcile")
+    for row in observations:
+        result = row["result"]
+        capture = result.get("capture", result)
+        _check(type(capture.get("exit_code")) is int or result.get("workload_started") is False
+               or result.get("model_process_started") is False, "process termination/not-started is not established")
+    if host_reconciliation is not None:
+        from .build_reconciliation import validate_host_reconciliation
+        host_reconciliation = validate_host_reconciliation(events, attempt, host_reconciliation)
+    else:
+        _check(planned <= observed, "unobserved command still requires host termination and effects reconciliation")
     binding = {key: attempt[key] for key in ("prepared_event_id", "attempt_id", "proposal_event_id", "workpack_id", "job_id")}
     return store.append_batch(program_id, [{"event_type": "BUILD_ATTEMPT_RESOLVED", "payload": {
         **binding, "status": "RETRY_ALLOWED", "original_status": attempt.get("original_status", attempt["status"]), "reason": reason,
         "human_message_ref": human_message_ref, "budget_reset": False, "old_output_accepted": False,
+        **({"host_reconciliation": host_reconciliation} if host_reconciliation is not None else {}),
     }}], expected_revision=expected_revision, idempotency_key=idempotency_key, created_at=created_at)[0]
 
 
@@ -440,7 +478,8 @@ class NativeBuildRunner:
             if invocation["executor"] == "CODEX":
                 from .coding_process import CodingCommand, CodexCodingRunner
                 result = CodexCodingRunner(scope["codex_executable"]).run(
-                    CodingCommand(command, invocation["prompt"], model=scope["model"]),
+                    CodingCommand(command, invocation["prompt"], model=scope["model"],
+                                  reasoning_effort=scope.get("model_reasoning_effort")),
                     before_dispatch=before_dispatch, **hooks)
             else:
                 result = CodexSandboxRunner(scope["codex_executable"]).run(command, before_dispatch=before_dispatch, **hooks)
@@ -658,6 +697,8 @@ class BuildController:
                 "workpack_id": task["workpack_id"], "job_id": task["job_id"],
                 **{key: prepared["scope"][key] for key in ("expires_at", "model", "allow_model_service",
                     "command_timeout_seconds", "max_attempts", "max_task_attempts")},
+                **({"model_reasoning_effort": prepared["scope"]["model_reasoning_effort"]}
+                   if "model_reasoning_effort" in prepared["scope"] else {}),
             }
         scope = prepared["scope"]
         workspace = Path(scope["workspace_root"]).resolve()
@@ -1209,6 +1250,19 @@ class BuildController:
         # if authority was revoked while the finite process was running.
         for _ in range(3):
             events = self.store.list_events(self.program_id)
+            existing = [row for row in events if row["event_type"] == kind
+                        and row["payload"].get("command_id") == payload["command_id"]]
+            if existing:
+                fields = ("prepared_event_id", "proposal_event_id", "attempt_id", "workpack_id",
+                          "job_id", "command_id", "phase", "case_id", "executor", "observation_root",
+                          "resource_binding")
+                _check(len(existing) == 1 and all(existing[0]["payload"].get(field) == payload.get(field)
+                                                for field in fields),
+                       "existing command observation has conflicting binding")
+                # Reconciliation may have recorded the durable capture while
+                # the original host was returning. Keep the first observation;
+                # the caller's revision check still fences its stale control.
+                return existing[0]
             try:
                 return self._append(kind, payload, len(events), key)
             except RevisionConflictError:

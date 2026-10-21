@@ -73,6 +73,31 @@ class CodingProcessTests(unittest.TestCase):
         self.assertNotIn("--ignore-rules", argv)
         self.assertNotIn("--dangerously-bypass-approvals-and-sandbox", argv)
 
+    def test_bound_model_and_reasoning_are_explicit_without_user_config_inheritance(self):
+        original = self.command()
+        command = CodingCommand(original.scope, original.prompt, "example-model", "custom-effort")
+        command.validate()
+        argv = command.argv()
+        config = dict(arg.split("=", 1) for index, arg in enumerate(argv) if index and argv[index - 1] == "-c")
+        self.assertEqual(argv[argv.index("--model") + 1], "example-model")
+        self.assertEqual(tomllib.loads("value=" + config["model_reasoning_effort"])["value"], "custom-effort")
+        self.assertIn("--ignore-user-config", argv)
+        self.assertIn("--strict-config", argv)
+        self.assertEqual(config["model_provider"], '"openai"')
+        self.assertEqual(config["features.hooks"], "false")
+        result = self.runner.run(command, before_dispatch=lambda: None)
+        self.assertEqual(result["status"], "MODEL_TURN_COMPLETED")
+        received = json.loads((self.cwd / "fixture-input.json").read_text())
+        self.assertIn('model_reasoning_effort="custom-effort"', received["argv"])
+
+    def test_invalid_reasoning_is_rejected_but_omission_preserves_explicit_model_path(self):
+        original = self.command()
+        for value in ("", " ", "bad\x00value", 3, True):
+            with self.subTest(value=value), self.assertRaises(LocalProcessError):
+                CodingCommand(original.scope, original.prompt, "example-model", value).validate()
+        argv = CodingCommand(original.scope, original.prompt, "example-model").argv()
+        self.assertFalse(any(value.startswith("model_reasoning_effort=") for value in argv))
+
     def test_valid_large_stream_and_diagnostic_clipping_preserve_terminal(self):
         for mode in ("large_unicode", "large_stream", "large_stderr"):
             with self.subTest(mode=mode):
