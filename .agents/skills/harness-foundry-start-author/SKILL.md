@@ -89,14 +89,19 @@ history; no schema/file check proves full semantic correctness or external effec
 
 Read [the public Build CLI](../../../docs/GENERIC_BUILD_CLI.md) completely before
 requests, and [runtime boundaries](../../../docs/GENERIC_BUILD_RUNTIME.md) when
-dispatching or recovering.
+dispatching or recovering. For ordinary new CODEX builds, omit the model (or use
+null), effort and selection policy to follow Codex global defaults; do not ask
+for a separate model choice without a user need. Explicit selections stay fixed;
+comparisons can freeze defaults at preparation. Show the resulting policy and
+bound service in the existing Readback. Do not change approved scopes or add
+per-command approval for normal default selection.
 
 1. Translate the reviewed document into Requirement/Plan, complete sources and
    independent acceptance contracts. Keep unselected PRD scope unverified.
 2. Use `record-build-plan`, `capture-build-sources` and
    `prepare-build-authorization`. These persist preparation only, not authority,
    and create no target directory. `compile-build-plan` is stateless.
-3. Display exact model/service, tools, checker, source/read/write paths, attempt
+3. Display the model policy (or fixed model/effort), bound service, tools, checker, source/read/write paths, attempt
    and timeout limits and expiry. Record the real later human decision with
    `approve-build-authorization`. Document confirmation alone is not permission.
 4. Use `advance-build` for approved directory creation, implementation, checking,

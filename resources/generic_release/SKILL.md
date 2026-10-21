@@ -54,12 +54,12 @@ contracts; see the linked build policy. Use current accepted input references,
 preserve named existing files and inspect repair history before another attempt.
 Do not infer semantic completeness or external effects from file checks.
 Prepare the plan, complete source binding, public Case contracts and independent
-checkers. Show exact model/service, tools, read/write paths, attempt/time limits
+checkers. Show the model policy (or fixed model/effort), bound service, tools, read/write paths, attempt/time limits
 and expiry before a real runtime approval. The trusted host authenticates actual
 messages; JSON actor fields do not prove a human decision. No test receiver or
 unrestricted fallback is available through the public CLI.
 
-Advance within that scope without per-Workpack permission requests. Astra may choose
+Advance within that scope without per-Workpack permission requests. Codex may choose
 algorithms, module layout and debugging methods; the controller must validate plan
 changes against the existing contract. Use read-build to recover context. Explain
 contract gaps or infrastructure failures instead of spending implementation retries
@@ -244,15 +244,23 @@ arbitrary task renaming or a G1/G2 extension; ordinary preparation stays unchang
 
 ## Global model defaults and interrupted observations
 
-When requested, prepare with `follow_codex_defaults: true`, `scope.model: null`
-and no explicit effort. The native global config reader resolves model and
+For ordinary new CODEX builds, omit `scope.model` (or set it to null),
+`model_policy` and explicit effort. Preparation defaults to following the Codex
+global model and reasoning effort for each new command, while binding the service
+for the existing runtime approval. Do not add a model-selection question unless
+the user needs a choice. This does not inherit a chat-only selection or change
+previously prepared/approved scopes. Explicit models stay fixed. For comparisons,
+use the same explicit model/effort or freeze defaults at preparation time.
+
+To freeze the current defaults, prepare with `follow_codex_defaults: true`,
+`scope.model: null` and no explicit effort. The native global config reader resolves model and
 reasoning effort and the selected `model_service` before approval. Show the
 frozen values, service and returned source; never inherit global tool permissions,
 MCPs or hooks. Existing prepared scopes keep their values and cumulative budgets.
 Explicit `model_service` supports native authentication or declared environment
 credential references, resolved only for the client and redacted from observations.
 Do not claim static headers/query parameters or command-based authentication are supported.
-For explicitly requested per-command model/effort selection, use
+To state per-command model/effort selection explicitly, use
 `model_policy: CODEX_GLOBAL_DEFAULTS` instead of the freezing switch. Preparation
 still binds the service. Old dynamic scopes without that binding remain readable
 and recoverable; use the existing same-Program rebind to prepare the actual service,

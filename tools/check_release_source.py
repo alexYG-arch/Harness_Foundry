@@ -30,6 +30,7 @@ REQUIRED_MODULES = (
     "test_build_reconciliation",
     "test_build_observation_race",
     "test_build_model_defaults",
+    "test_build_daily_model_defaults",
     "test_coding_defaults",
     "test_model_service_configuration",
     "test_model_configuration_observation",

@@ -240,20 +240,27 @@ def prepare_build_authorization(store, program_id, proposal_event_id, source_eve
                                 expected_revision, idempotency_key, created_at, rebind_from=None, follow_codex_defaults=False):
     """Save a readable scope challenge, not authority. Creates no target paths."""
     _check(type(follow_codex_defaults) is bool, "follow_codex_defaults must be boolean")
+    proposal = _proposal_event(store, program_id, proposal_event_id)
+    # Infer only a NEW preparation's selection policy. Persisted scopes retain
+    # their old FIXED default in validation, dispatch and recovery.
+    implicit_defaults = (not follow_codex_defaults and "model_policy" not in scope
+                         and scope.get("model") is None and "model_reasoning_effort" not in scope
+                         and any(task["executor"] == "CODEX" for task in proposal["payload"]["plan"]["workpacks"]))
+    replay = store.idempotent_events(program_id, idempotency_key)
+    recorded_request = replay is not None and any("resource_prepare_request" in row["payload"] for row in replay)
     resource_request = ({"proposal_event_id": proposal_event_id, "source_event_id": source_event_id,
                          "scope": deepcopy(scope), "expected_revision": expected_revision,
                          **({"follow_codex_defaults": True} if follow_codex_defaults else {}),
                          **({"rebind_from": rebind_from} if rebind_from is not None else {})}
                         if "verification_resources" in scope or rebind_from is not None or follow_codex_defaults
-                        or "model_policy" in scope or "model_service" in scope else None)
+                        or "model_policy" in scope or "model_service" in scope
+                        or implicit_defaults or "model" not in scope or recorded_request else None)
     if resource_request is not None:
-        replay = store.idempotent_events(program_id, idempotency_key)
         if replay is not None:
             if (len(replay) != 1 or replay[0]["event_type"] != "BUILD_AUTHORIZATION_PREPARED"
                     or replay[0]["payload"].get("resource_prepare_request") != resource_request):
                 raise IdempotencyConflictError("resource preparation key was reused with different content")
             return replay[0]
-    proposal = _proposal_event(store, program_id, proposal_event_id)
     events = store.list_events(program_id)
     source = _event(events, source_event_id, "BUILD_SOURCES_CAPTURED")
     _check(source["payload"]["proposal_event_id"] == proposal_event_id, "sources belong to another proposal")
@@ -264,6 +271,9 @@ def prepare_build_authorization(store, program_id, proposal_event_id, source_eve
     validate_requirement_source_bindings(ir, source["payload"]["snapshot"])
     contracts = validate_acceptance_contracts(ir, snapshot=source["payload"]["snapshot"], required=True)
     scope = deepcopy(scope)
+    scope.setdefault("model", None)
+    if implicit_defaults:
+        scope["model_policy"] = "CODEX_GLOBAL_DEFAULTS"
     model_defaults_source = None
     dynamic_defaults = scope.get("model_policy") == "CODEX_GLOBAL_DEFAULTS"
     _check(not (follow_codex_defaults and dynamic_defaults), "frozen and per-command default selection cannot be combined")

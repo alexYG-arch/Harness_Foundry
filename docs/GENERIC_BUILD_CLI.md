@@ -218,7 +218,7 @@ DB 替换为已有控制库的绝对路径，ID 替换为真实 Program ID。此
 
 ## Scope
 
-scope 必须完整列出以下基础字段；可另提供 `model_reasoning_effort`，Plan 1.2 可提供下述 `verification_resources`：
+scope 必须完整列出以下基础字段，`model` 可省略；可另提供 `model_reasoning_effort`，Plan 1.2 可提供下述 `verification_resources`：
 
 - `workspace_root`：绝对目标目录，可尚不存在；不使用 Foundry 自身源码目录。
 - `task_write_roots`：每个 Workpack 的规范相对目录数组，覆盖其声明输出。
@@ -228,12 +228,22 @@ scope 必须完整列出以下基础字段；可另提供 `model_reasoning_effor
 - `verification_root`：已存在的检查器源码目录。旧 scope 要求位于实施区外；资源模式准备时复制声明文件到宿主保护区，源码可在同仓库维护，Readback 展示源码与运行副本两个位置。
 - `executables`：逻辑程序名到绝对程序文件的映射；LOCAL 与检查的 argv 首项引用它。
 - `codex_executable`：原生 Codex receiver 的绝对程序路径。
-- `model`, `allow_model_service`：CODEX 任务必须显式声明模型选择方式并允许模型服务；
-  不自动换模型或要求另配 API key。纯 LOCAL 可不授予模型服务。
+- `model`, `allow_model_service`：新 CODEX 请求未指定模型（省略或 null）、推理强度或选择策略时，
+  默认跟随 Codex 全局模型和推理强度；仍须明确允许模型服务。显式模型保持固定，
+  不静默替换用户选择或要求另配 API key。纯 LOCAL 不读取模型默认配置，也不要求模型服务。
 - `model_reasoning_effort`：可选的明确推理强度，由已绑定 Codex/模型支持；不自行映射到另一强度。
 - `max_attempts`, `max_task_attempts`：本范围总计及每任务的有限尝试预算。
 - `command_timeout_seconds`：每个有限命令的超时（不超过一天，也不越过到期时间）。
 - `expires_at`：带时区的 ISO 时间。
+
+日常新请求无需手动选型：省略 `model` 或填写 null，并省略 `model_policy`、推理强度和
+冻结开关，prepare 会保存明确的 `CODEX_GLOBAL_DEFAULTS` 策略及选定服务。准备仍未授权；
+在原批准服务范围内，每条新命令跟随当时全局模型/强度，不增加逐次确认。
+这读取全局配置，不承诺继承当前聊天临时选择。相同 prepare 请求先返回原记录，
+不重新读取默认；旧 prepared、已批准固定值及完整报告恢复均不重新解释。
+显式 `model` 继续按固定模型处理，可用 `model_policy: FIXED` 明示；仅指定推理强度
+不代表允许忽略该值，固定选择仍须给出模型。对照测试应显式固定相同模型/强度，
+或采用下述准备时冻结方式；不会将已有固定比较自动改成动态默认。
 
 要沿用 Codex **全局默认模型与推理强度并在准备时冻结**，在 prepare request 顶层加入
 `"follow_codex_defaults": true`，scope 中 `model` 为 null，且不同时填写推理强度。
@@ -253,7 +263,7 @@ Readback、命令行或日志，不让模型工具继承。日志中的已知凭
 本次未接入内联凭据、静态 HTTP headers/query 参数或命令式认证；这些不能被写成已经支持。
 不对凭据内容附加业务格式要求，也不修改宿主环境或全局配置。
 
-若明确需要**每次命令跟随默认模型/强度**，使用 scope 的
+也可明确指定**每次命令跟随默认模型/强度**，使用 scope 的
 `"model_policy": "CODEX_GLOBAL_DEFAULTS"`、`"model": null`，不填写推理强度，
 不与 `follow_codex_defaults` 混用。准备仍读取一次原生配置并固定 `model_service`；
 实际派发只重选模型/强度，服务身份、端点或认证声明变化时按原范围变更处理，
