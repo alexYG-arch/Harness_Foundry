@@ -1,6 +1,30 @@
 """Native Codex JSONL observation, independent of historical Candidate protocols."""
 
 import json
+import re
+
+
+# exec JSONL currently exposes retry notifications as message-only `error`
+# events. Match the native retry envelope, not one provider's error detail.
+# The stream retry count can restart after a transport switch; it is not a
+# Foundry attempt counter. Unrecognized/fatal errors keep the original rule.
+_RECONNECT = re.compile(
+    r"(?P<envelope>Reconnecting\.\.\. (?:(?P<attempt>[1-9][0-9]*)/(?P<limit>[1-9][0-9]*)"
+    r"|waiting for network))(?: \((?P<detail>.+)\))?", re.DOTALL)
+_OPERATION_TYPES = {"command_execution", "mcp_tool_call", "collab_tool_call", "web_search", "file_change"}
+
+
+def _retry_notification(event):
+    if (set(event) != {"type", "message"} or event.get("type") != "error"
+            or not isinstance(event.get("message"), str)):
+        return None
+    match = _RECONNECT.fullmatch(event["message"])
+    if match is None:
+        return None
+    attempt, limit = match["attempt"], match["limit"]
+    # Provider retry policy is not the receiver's acceptance limit. Compare
+    # canonical decimal strings without Python's integer-conversion ceiling.
+    return match if attempt is None or (len(attempt), attempt) <= (len(limit), limit) else None
 
 
 def _contract_blocker(message):
@@ -38,6 +62,8 @@ class CodingEventObserver:
         self.pending = bytearray()
         self.phase, self.failed, self.protocol_error = "NEW", False, False
         self.blocker = None
+        self.open_operations = {}
+        self.operation_protocol_error = False
         self.result = {"thread_id": None, "usage": None, "final_message": None, "event_count": 0,
                        "reported_command_failures": [], "workpack_accepted": False,
                        "automatic_retry_allowed": False}
@@ -85,11 +111,30 @@ class CodingEventObserver:
             usage = event.get("usage")
             self.result["usage"] = usage if len(json.dumps(usage)) <= 65536 else None
         elif kind == "error":
-            self.failed = True
+            if self.phase == "TURN" and _retry_notification(event):
+                self.result["reconnect_notification_count"] = self.result.get("reconnect_notification_count", 0) + 1
+                notices = self.result.setdefault("reconnect_notifications", [])
+                notice = {"event_index": self.result["event_count"], "message": event["message"][:4096]}
+                if len(event["message"]) > 4096:
+                    notice["message_truncated"] = True
+                notices.append(notice)
+                if len(notices) > 100:
+                    del notices[0]
+                    self.result["reconnect_details_truncated"] = True
+            else:
+                self.failed = True
         elif kind in {"item.started", "item.updated", "item.completed"}:
             if self.phase != "TURN" or not isinstance(event.get("item"), dict):
                 raise ValueError("item event outside the active turn")
             item = event["item"]
+            if item.get("type") in _OPERATION_TYPES:
+                self._operation(kind, item)
+            if kind == "item.completed" and item.get("type") == "command_execution" and item.get("status") == "declined":
+                declines = self.result.setdefault("reported_command_declines", [])
+                declines.append({key: item.get(key) for key in ("id", "exit_code", "status")})
+                if len(declines) > 64:
+                    del declines[0]
+                    self.result["command_decline_details_truncated"] = True
             if kind == "item.completed" and item.get("type") == "agent_message":
                 message = item.get("text")
                 self.blocker = _contract_blocker(message)
@@ -103,6 +148,31 @@ class CodingEventObserver:
                     self.result["command_failure_details_truncated"] = True
         else:
             raise ValueError("unsupported JSONL event type: " + kind)
+
+    def _operation(self, kind, item):
+        # These facts are used only when reconsidering a retry notification;
+        # the established no-reconnect classification remains unchanged.
+        identifier = item.get("id")
+        if not isinstance(identifier, str) or not identifier:
+            self.operation_protocol_error = True
+        elif kind == "item.started":
+            if identifier in self.open_operations:
+                self.operation_protocol_error = True
+            self.open_operations[identifier] = item["type"]
+        elif kind == "item.completed":
+            previous = self.open_operations.pop(identifier, None)
+            if previous is not None and previous != item["type"]:
+                self.operation_protocol_error = True
+            status = item.get("status")
+            if item["type"] == "command_execution":
+                exit_code = item.get("exit_code")
+                ended = ((status in {"completed", "failed"} and type(exit_code) is int)
+                         or (status == "declined" and exit_code is None))
+                if not ended:
+                    self.operation_protocol_error = True
+            elif item["type"] in {"mcp_tool_call", "collab_tool_call", "file_change"}:
+                if status not in {"completed", "failed"}:
+                    self.operation_protocol_error = True
 
     def finish(self, *, exit_code, timed_out=False, output_truncated=False):
         if (type(timed_out) is not bool or type(output_truncated) is not bool
@@ -121,7 +191,9 @@ class CodingEventObserver:
         elif exit_code is not None and exit_code != 0 or self.failed:
             result.update(status="MODEL_PROCESS_FAILED", reason_code="CODEX_PROCESS_OR_TURN_FAILED")
         elif self.phase == "DONE" and exit_code == 0:
-            if self.blocker is not None:
+            if self.result.get("reconnect_notification_count") and (self.open_operations or self.operation_protocol_error):
+                result["reason_code"] = "CODEX_RECONNECT_OPERATIONS_UNRESOLVED"
+            elif self.blocker is not None:
                 result.update(status="VALIDATION_FAILED", **self.blocker)
             else:
                 result.update(status="MODEL_TURN_COMPLETED", reason_code="CODEX_TURN_COMPLETED_NOT_WORKPACK_ACCEPTANCE")

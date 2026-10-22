@@ -13,7 +13,7 @@ from pathlib import Path
 import tomllib
 from uuid import uuid4
 
-from .coding_events import CodingEventObserver, _contract_blocker
+from .coding_events import CodingEventObserver, _contract_blocker, _retry_notification
 from .local_process import CodexSandboxRunner, LocalCommand, LocalProcessError, _toml_inline, _within
 
 
@@ -189,8 +189,16 @@ class _CodingJsonlRedactor:
                     "item.started", "item.updated", "item.completed"}:
                 return self._invalid(payload)
 
+            retry = _retry_notification(value)  # Validate the original event before masking any text.
+
             def clean(item, path=()):
                 if isinstance(item, str):
+                    if path == ("message",) and retry is not None:
+                        start, end = retry.span("detail")
+                        # Preserve only native facts. Match secrets in the whole
+                        # message so values crossing a delimiter cannot leak.
+                        return retry["envelope"] + (" (" + self.redactor.text_fragment(item, start, end) + ")"
+                                                    if start >= 0 else "")
                     if (path in {("type",), ("item", "type"), ("item", "status")}
                             or path == ("item", "text", "$report", "foundry_blocker", "failure_kind")
                             and item == "CONTRACT_GAP"):

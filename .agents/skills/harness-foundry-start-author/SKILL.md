@@ -285,3 +285,10 @@ checks without generic “继续” prompts. Add no old lock-token or per-log Ha
 Never infer target execution, installation, Git push or release permission from
 a source repair request. Follow [the release boundary](../../../docs/RELEASE_READINESS.md)
 for publication work; source regressions are not same-package real acceptance.
+
+For a fully captured reconnect that an older observer classified as a process failure,
+use the documented `reassess-build-attempt` recovery with the original command,
+configuration receipt (when declared), current output binding and actual host decision.
+It appends a correction, never refunds attempts or accepts outputs. Existing `advance-build`
+can then finish the missing checks; a captured check is retrieved, never replayed.
+See `docs/GENERIC_BUILD_CLI.md` for eligibility and the preserved legacy boundary.

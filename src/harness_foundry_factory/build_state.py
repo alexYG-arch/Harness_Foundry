@@ -132,6 +132,11 @@ def project_readback_attempts(events):
         if event["event_type"] == "BUILD_ATTEMPT_STARTED":
             attempts[payload["attempt_id"]].update(implementation_commands=[], resource_commands=[])
             implementation_plans[payload["attempt_id"]] = set()
+        elif event["event_type"] == "BUILD_COMMAND_REASSESSED":
+            attempts[payload["attempt_id"]].setdefault("command_reassessments", []).append({
+                "event_id": event["event_id"], "command_id": payload["command_id"],
+                "policy": payload["policy"], "original_result": payload["original_result"],
+                "result": payload["result"], "automatic_acceptance": False})
         elif event["event_type"] in {"BUILD_COMMAND_PLANNED", "BUILD_COMMAND_STARTED", "BUILD_COMMAND_OBSERVED"}:
             attempts[payload["attempt_id"]]["last_command"] = {
                 "event_id": event["event_id"], "event_type": event["event_type"], **payload}

@@ -28,6 +28,8 @@ REQUIRED_MODULES = (
     "test_build_runtime",
     "test_build_runtime_context",
     "test_build_reconciliation",
+    "test_build_reassessment",
+    "test_coding_reconnect",
     "test_build_observation_race",
     "test_build_model_defaults",
     "test_build_daily_model_defaults",

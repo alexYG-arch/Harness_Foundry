@@ -16,7 +16,7 @@ from .identity import BASELINE_FACTORY_ID, FACTORY_ID, FACTORY_VERSION, TARGET_P
 BUILD_COMMANDS = frozenset({
     "compile-build-plan", "record-build-plan", "capture-build-sources",
     "prepare-build-authorization", "approve-build-authorization", "revoke-build-authorization",
-    "reconcile-build-observations", "resolve-build-attempt", "request-build-repair", "advance-build", "read-build", "read-history",
+    "reassess-build-attempt", "reconcile-build-observations", "resolve-build-attempt", "request-build-repair", "advance-build", "read-build", "read-history",
 })
 
 

@@ -59,6 +59,7 @@ Review，再使用本入口；原始材料保留追溯角色。后台检查全�
 | `approve-build-authorization` | 同上 | `program_id`, `prepared_event_id`, `decision` |
 | `revoke-build-authorization` | 同上 | `program_id`, `prepared_event_id`, `decision`, `reason` |
 | `reconcile-build-observations` | 同上 | `program_id`, `prepared_event_id` |
+| `reassess-build-attempt` | 同上 | `program_id`, `prepared_event_id`, `attempt_id`, `decision`, `evidence` |
 | `resolve-build-attempt` | 同上 | `program_id`, `prepared_event_id`, `attempt_id`, `decision`, `reason`；可选 `host_reconciliation` |
 | `request-build-repair` | 同上 | `program_id`, `prepared_event_id`, `targets`, `finding`；可选 `continuation_of` |
 | `advance-build` | 同上 | `program_id`, `prepared_event_id`, `expected_revision`；可选 `advance_mode`, `codex_handoff` |
@@ -585,6 +586,48 @@ UNKNOWN/失败事件、不验收旧输出、不退还预算、不创建新批准
 下一次 advance 仍检查有效范围、剩余预算和全部独立 Case。
 同一目标的新 scope 不能绕过旧 scope 的 IN_FLIGHT/UNKNOWN。
 正常耐久观测恢复不需要使用此入口；它不是新增的逐 Workpack 人工门。
+
+### 已完整捕获的重连误判：重判后只完成原检查
+
+部分 Codex exec 版本把连接重试发成顶层 `error`。接收器按已核实的重连消息格式兼容
+数字 n/m、不同错误详情、等待网络及计数重置；未知错误、失败终态、非零退出、真实流缺失、
+超时仍保持失败或未知。完整成功终态与适用操作结束只证明模型过程完成，不证明产品接受。
+合法 `declined`／空退出码表示命令被拒绝而未执行，单列诊断，不当成功或未结束。
+通知总数完整计数；有界明细的截短不使完整原始流变成失败，也不增加生产尝试。
+
+旧运行器已记录的同类 `MODEL_PROCESS_FAILED` 可用 `reassess-build-attempt`，
+不能通过改 SQLite、覆盖 `result.json` 或新建 Program 清零。宿主绑定当前有效 prepared、
+同任务最新旧尝试、原捕获及本次待验文件，沿既有真实处置消息结构提交：
+`decision.action=REASSESS_BUILD_ATTEMPT`，`actor` 与 `user_message` 同上。
+这是对具体旧失败的恢复处置，正常运行和完整报告取回不增加逐次确认。
+
+`evidence` 精确包含：
+
+- `runtime_identity`：`build_reassessment.runtime_identity()`，只绑定重判与观察实现。
+- `capture_files`：`capture_identity(command)` 返回的原附件 SHA-256／字节数。
+  包括 binding、capture、result、stdout，以及存在的 stderr、started、model-configuration。
+- `artifacts`：原计划全部输出的 artifact_id 到 path／size／sha256 映射。
+
+输入、检查器、有效授权及已接受依赖仍沿 `_current` 和原恢复路径检查。旧 BLOCKED，
+以及旧版本记为 REJECTED 的实际进程误判可用；ASSERTION 失败、结果不完整、未知效果、
+已开始验证或已有更新尝试不能借此变成通过。有配置声明时必须存在并一致绑定原配置回执；
+未声明配置的历史命令保持兼容，不能从今天的默认值补写过去。
+
+返回 `BUILD_REASSESSMENT_RECORDED_NOT_ACCEPTED`。它只原子追加纠正观察、绑定待验输出
+与同一次尝试待检查状态；不调用模型、不运行检查、不接受输出、不增减原生产消耗。
+随后 `advance-build` 可沿原流程只补未启动的独立检查；要仅交回这一项，使用既有
+`advance_mode=ONE_ATTEMPT`。完整检查捕获只取回；启动后结果未知时核对原 command，
+不得自动重发。真实 LOCAL 检查的时间、命令和结果照常记录。
+
+同批准内、不改变原任务结构／检查的内部 Plan 调整复用既有适配判断，不机械要求整个
+proposal ID 不变。原命令保持旧绑定；合法调整后的新接受记录注明当前验收 Plan，
+并以 `implementation_proposal_event_id` 保留原实施来源。改变检查或外部范围仍按原规则处理。
+旧失败可能没有结束时的输出快照：当前文件摘要只绑定本次待验字节，不能据此声称退出后
+从未变化；宿主应据已有证据确认来源，或明确将当前文件纳入这次恢复处置。
+
+同键同请求只取原回执，同键异请求冲突，改键不能重复纠正已处理尝试。原失败、模型消耗
+和报告全部保留，`read-build --json` 的 `command_reassessments` 并列显示旧结果和纠正结果；
+`reassessment_pending` 仅表示原检查待完成。撤销／过期不阻止纯回执取回，但不能继续检查。
 
 ## 大文档与证据
 

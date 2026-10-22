@@ -275,3 +275,10 @@ termination/effects evidence plus a real user decision may use the existing
 `resolve-build-attempt` route with `host_reconciliation`. Never infer safe replay
 from a missing PID, elapsed time or partial stdout. Follow the CLI documentation;
 this is not a new per-task approval gate.
+
+For a fully captured reconnect that an older observer classified as a process failure,
+use the documented `reassess-build-attempt` recovery with the original command,
+configuration receipt (when declared), current output binding and actual host decision.
+It appends a correction, never refunds attempts or accepts outputs. Existing `advance-build`
+can then finish the missing checks; a captured check is retrieved, never replayed.
+See `docs/GENERIC_BUILD_CLI.md` for eligibility and the preserved legacy boundary.

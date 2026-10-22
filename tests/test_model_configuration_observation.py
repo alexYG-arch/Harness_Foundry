@@ -60,6 +60,18 @@ elif args and args[0] == "exec":
                 for at in range(0, len(raw), 3):
                     sys.stdout.buffer.write(raw[at:at + 3]); sys.stdout.buffer.flush()
             sys.stderr.write(value + "\n"); sys.stderr.flush()
+    if options.get("reconnect"):
+        value = os.environ[service["env_key"]]
+        messages = ["Reconnecting... 1/5 (echo " + value + ")",
+                    "Reconnecting... 2/5 (echo " + value + ")",
+                    "Reconnecting... 1/5 (echo " + value + ")",
+                    "Reconnecting... waiting for network (echo " + value + ")"]
+        for message in messages:
+            raw = (json.dumps({"type":"error", "message":message}, ensure_ascii=False) + "\n").encode()
+            for at in range(0, len(raw), 3):
+                sys.stdout.buffer.write(raw[at:at + 3]); sys.stdout.buffer.flush()
+    if options.get("unknown_error"):
+        print(json.dumps({"type":"error", "message":"Fatal: " + os.environ[service["env_key"]]}), flush=True)
     if options.get("failed"):
         print(json.dumps({"type":"item.completed", "item":{"type":"command_execution", "id":"c", "status":"failed", "exit_code":0}}), flush=True)
     message = "fixture complete"
@@ -176,6 +188,95 @@ class ModelConfigurationObservationTests(unittest.TestCase):
 
     def test_zero_credential_preserves_numeric_command_exit(self):
         self._short_credential_roundtrip("0", failed=True)
+
+    def _reconnect_credential_roundtrip(self, secret, *, unknown_error=False, failed=False):
+        command = self.command(echo=True)
+        options = {**json.loads(command.prompt), "reconnect":True,
+                   "unknown_error":unknown_error, "failed":failed}
+        with patch.dict(os.environ, {"TEST_MODEL_TOKEN":secret}):
+            result = self.run_fixture(replace(command, prompt=json.dumps(options)))
+        expected = "MODEL_PROCESS_FAILED" if unknown_error or failed else "MODEL_TURN_COMPLETED"
+        self.assertEqual(result["status"], expected, result)
+        self.assertFalse(result["workpack_accepted"])
+        self.assertEqual(result["reconnect_notification_count"], 4)
+        messages = [row["message"] for row in result["reconnect_notifications"]]
+        self.assertEqual(messages, ["Reconnecting... " + prefix + " (echo [REDACTED])"
+                                   for prefix in ("1/5", "2/5", "1/5", "waiting for network")])
+        self.assertEqual(result["capture"]["stderr"].strip(), "[REDACTED]")
+        events = [json.loads(line) for line in (self.journal.root / "stdout.bin").read_text().splitlines()]
+        self.assertEqual([row["message"] for row in events if row["type"] == "error"][:4], messages)
+        if unknown_error:
+            self.assertEqual([row["message"] for row in events if row["type"] == "error"][-1], "Fatal: [REDACTED]")
+        for final_saved in (True, False):
+            if not final_saved:
+                (self.journal.root / "result.json").unlink()  # Simulate interrupted result persistence only.
+            before = {p.name:p.read_bytes() for p in self.journal.root.iterdir()}
+            with patch("subprocess.Popen", side_effect=AssertionError("recovery cannot execute")), patch(
+                    "harness_foundry_factory.coding_defaults.resolve_codex_defaults", side_effect=AssertionError("no reread")):
+                for _ in range(2):
+                    recovered = CommandObservation.recover(self.journal.root, "COMMAND-LOCAL-TEST", "CODEX")
+                    for key in ("status", "reason_code", "reconnect_notification_count", "reconnect_notifications",
+                                "usage", "model_configuration", "reported_command_failures"):
+                        self.assertEqual(recovered[key], result[key], key)
+            self.assertEqual(before, {p.name:p.read_bytes() for p in self.journal.root.iterdir()})
+        self.assertEqual((self.cwd / "calls").read_text().splitlines(), ["fixture-only"])
+
+    def test_reconnect_numeric_credential_capture_and_report_recovery(self):
+        self._reconnect_credential_roundtrip("1")
+
+    def test_reconnect_network_credential_capture_and_report_recovery(self):
+        self._reconnect_credential_roundtrip("network")
+
+    def test_reconnect_prefix_credential_capture_and_report_recovery(self):
+        self._reconnect_credential_roundtrip("Reconnecting")
+
+    def test_reconnect_unicode_multiline_credential_capture_and_report_recovery(self):
+        self._reconnect_credential_roundtrip('密钥"\\值\n下一行')
+
+    def test_reconnect_unknown_error_still_fails_after_redaction_and_recovery(self):
+        self._reconnect_credential_roundtrip("1", unknown_error=True)
+
+    def test_reconnect_failed_terminal_still_fails_after_redaction_and_recovery(self):
+        self._reconnect_credential_roundtrip("network", failed=True)
+
+    def test_reconnect_boundary_spanning_credentials_mask_payload_not_protocol(self):
+        cases = [("5 (private", "Reconnecting... 1/5 (private-value)", "Reconnecting... 1/5 ([REDACTED]-value)"),
+                 ("private)", "Reconnecting... 1/5 (a private)", "Reconnecting... 1/5 (a [REDACTED])"),
+                 ("Reconnecting... 1/5 (private)", "Reconnecting... 1/5 (private)", "Reconnecting... 1/5 ([REDACTED])"),
+                 (" ", "Reconnecting... 1/5 (a b)", "Reconnecting... 1/5 (a[REDACTED]b)"),
+                 ("1", "Reconnecting... 1/5 (safe detail)", "Reconnecting... 1/5 (safe detail)"),
+                 ("network", "Reconnecting... waiting for network", "Reconnecting... waiting for network")]
+        for secret, original, expected in cases:
+            with self.subTest(secret=secret):
+                events = [{"type":"thread.started","thread_id":"t"}, {"type":"turn.started"},
+                          {"type":"error","message":original}, {"type":"turn.completed"}]
+                raw = b"".join(json.dumps(row).encode()+b"\n" for row in events)
+                stream = _CodingJsonlRedactor(SecretRedactor([secret]))
+                safe = b"".join(stream.feed(raw[at:at+3]) for at in range(0,len(raw),3)) + stream.finish()
+                result = observe_coding_process(safe, exit_code=0)
+                self.assertEqual(result["status"], "MODEL_TURN_COMPLETED", result)
+                self.assertEqual(result["reconnect_notification_count"], 1)
+                self.assertEqual(result["reconnect_notifications"][0]["message"], expected)
+
+    def test_reconnect_invalid_original_envelopes_remain_failure(self):
+        cases = [{"type":"error","message":"Reconnecting... 6/5 (private)"},
+                 {"type":"error","message":"Reconnecting... 0/5 (private)"},
+                 {"type":"error","message":"Reconnecting... 01/5 (private)"},
+                 {"type":"error","message":"Reconnecting... 1/5 (private)","code":"private"},
+                 {"type":"error","message":"Fatal: private"},
+                 {"type":"turn.failed","message":"Reconnecting... 1/5 (private)"}]
+        for event in cases:
+            with self.subTest(event=event):
+                events = [{"type":"thread.started","thread_id":"t"}, {"type":"turn.started"}, event]
+                if event["type"] == "error":
+                    events.append({"type":"turn.completed"})
+                raw = b"".join(json.dumps(row).encode()+b"\n" for row in events)
+                stream = _CodingJsonlRedactor(SecretRedactor(["1","private"]))
+                safe = stream.feed(raw)+stream.finish()
+                self.assertNotIn(b"private", safe)
+                result = observe_coding_process(safe, exit_code=0)
+                self.assertEqual(result["status"], "MODEL_PROCESS_FAILED", result)
+                self.assertEqual(result.get("reconnect_notification_count", 0), 0)
 
     def test_invalid_unknown_or_truncated_payload_is_redacted_not_completion(self):
         prefix = (b'{"type":"thread.started","thread_id":"t"}\n'

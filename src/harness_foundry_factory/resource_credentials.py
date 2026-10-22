@@ -90,6 +90,17 @@ class SecretRedactor:
     def text(self, value):
         return _replace(value, self._text_tokens, _REPLACEMENT)
 
+    def text_fragment(self, value, start, end):
+        """Mask a payload slice, including secrets overlapping its boundaries."""
+        pieces, offset = [], start
+        for left, right in _ranges(value, self._text_tokens):
+            left, right = max(left, start), min(right, end)
+            if left < right:
+                pieces.extend((value[offset:left], _REPLACEMENT))
+                offset = right
+        pieces.append(value[offset:end])
+        return "".join(pieces)
+
     def bytes(self, value):
         return _replace(value, self._byte_tokens, _REPLACEMENT.encode("ascii"))
 

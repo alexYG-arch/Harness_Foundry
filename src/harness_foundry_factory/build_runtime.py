@@ -1371,8 +1371,10 @@ class BuildController:
         if len(pending) != 1:
             return False
         attempt = pending[0]
-        if attempt["proposal_event_id"] != prepared["proposal_event_id"]:
+        if (attempt["proposal_event_id"] != prepared["proposal_event_id"]
+                and not attempt.get("reassessment_pending")):
             return False
+        # _current has validated any same-scope Plan adaptation for this started task.
         task = next(task for task in plan["workpacks"] if task["workpack_id"] == attempt["workpack_id"])
         rows = [event for event in events if event["payload"].get("attempt_id") == attempt["attempt_id"]]
         if ((attempt["status"] == "IN_FLIGHT" or "effects" in task)
@@ -1399,6 +1401,8 @@ class BuildController:
         if missing:
             return True  # Reload canonical events before making any decision.
         commands = [event["payload"] for event in rows if event["event_type"] == "BUILD_COMMAND_OBSERVED"]
+        from .build_reassessment import apply_reassessment
+        commands = apply_reassessment(self, prepared, events, attempt, commands)
         inputs = [event["payload"] for event in rows if event["event_type"] == "BUILD_VERIFICATION_INPUTS"]
         baselines = [event["payload"]["files"] for event in rows if event["event_type"] == "BUILD_EFFECTS_BASELINE"]
         def finish(status, artifacts, verification):
@@ -1417,9 +1421,15 @@ class BuildController:
             kind = "BUILD_ATTEMPT_FINISHED" if attempt["status"] == "IN_FLIGHT" else "BUILD_ATTEMPT_RECOVERED"
             current, _, _ = self._current(prepared_id)
             _check(len(current) == len(events), "control state changed before recovery commit")
-            self._append(kind, {**attempt, "status": status, "artifacts": artifacts,
-                         "verification": verification, "effects": effects, "recovered_from_observation": True},
-                         len(events), attempt["attempt_id"] + ":recovered")
+            acceptance_plan = ({"implementation_proposal_event_id": attempt["proposal_event_id"],
+                                "proposal_event_id": prepared["proposal_event_id"]}
+                               if status == "ACCEPTED" and attempt.get("reassessment_pending")
+                               and attempt["proposal_event_id"] != prepared["proposal_event_id"] else {})
+            self._append(kind, {**attempt, **acceptance_plan, "status": status, "artifacts": artifacts,
+                         "verification": verification, "effects": effects, "recovered_from_observation": True,
+                         **({"reassessment_pending": False} if attempt.get("reassessment_pending") else {})},
+                         len(events), attempt["attempt_id"] + ":recovered" + next(
+                             (":" + row["event_id"] for row in rows if row["event_type"] == "BUILD_COMMAND_REASSESSED"), ""))
             return True
         if commands and commands[0]["phase"] == "PREFLIGHT":
             preflight = commands[0]["result"]

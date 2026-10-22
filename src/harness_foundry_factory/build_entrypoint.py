@@ -30,6 +30,7 @@ MUTATIONS = {
     "prepare-build-authorization": {"program_id", "proposal_event_id", "source_event_id", "scope"},
     "approve-build-authorization": {"program_id", "prepared_event_id", "decision"},
     "revoke-build-authorization": {"program_id", "prepared_event_id", "decision", "reason"},
+    "reassess-build-attempt": {"program_id", "prepared_event_id", "attempt_id", "decision", "evidence"},
     "reconcile-build-observations": {"program_id", "prepared_event_id"},
     "resolve-build-attempt": {"program_id", "prepared_event_id", "attempt_id", "decision", "reason"},
     "request-build-repair": {"program_id", "prepared_event_id", "targets", "finding"},
@@ -191,6 +192,8 @@ def apply_build_request(command, request, control_db):
         program = _program(request["program_id"])
         _require(database.is_file(), "generic controller does not exist; record a proposal first")
     human_ref = None
+    if command == "reassess-build-attempt":
+        human_ref = _human_ref(request["decision"], "REASSESS_BUILD_ATTEMPT")
     if command == "resolve-build-attempt":
         human_ref = _human_ref(request["decision"], "RESOLVE_BUILD_ATTEMPT")
     if command in {"approve-build-authorization", "revoke-build-authorization"}:
@@ -241,6 +244,15 @@ def apply_build_request(command, request, control_db):
                 "event_id": event["event_id"], "stream_revision": event["stream_revision"],
                 **event["payload"], "control_state_write": True, "target_write": False,
                 "execution_started": False, "harness_e2e_verified": False}
+    elif command == "reassess-build-attempt":
+        from .build_reassessment import reassess_build_attempt
+        event = reassess_build_attempt(BuildController(store, program), request["prepared_event_id"],
+            request["attempt_id"], evidence=request["evidence"], human_message_ref=human_ref, **kwargs)
+        return {"status": "BUILD_REASSESSMENT_RECORDED_NOT_ACCEPTED", "program_id": program,
+                "event_id": event["event_id"], "stream_revision": len(store.list_events(program)),
+                "prepared_event_id": request["prepared_event_id"], "attempt_id": request["attempt_id"],
+                "control_state_write": True, "target_write": False, "execution_started": False,
+                "budget_reset": False, "old_output_accepted": False, "harness_e2e_verified": False}
     elif command == "resolve-build-attempt":
         event = resolve_build_attempt(store, program, request["prepared_event_id"], request["attempt_id"],
                                       reason=request["reason"], human_message_ref=human_ref,
