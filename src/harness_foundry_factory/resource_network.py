@@ -23,7 +23,9 @@ def normalize_network(value, *, write_roots=()):
         return {"mode": mode}
     if mode == "LOCAL_SERVICE" and set(value) == {"mode", "tcp"} and value["tcp"] == "LOOPBACK":
         return {"mode": mode, "tcp": "LOOPBACK"}
-    if mode == "LOCAL_SERVICE" and set(value) == {"mode", "unix_sockets"}:
+    if mode == "LOCAL_SERVICE" and set(value) in ({"mode", "unix_sockets"}, {"mode", "tcp", "unix_sockets"}):
+        if "tcp" in value and value["tcp"] != "LOOPBACK":
+            raise ValueError("local TCP selector must be LOOPBACK")
         paths = value["unix_sockets"]
         if not isinstance(paths, list) or not paths or any(not isinstance(p, str) for p in paths):
             raise ValueError("local service requires exact owned Unix socket paths")
@@ -38,7 +40,7 @@ def normalize_network(value, *, write_roots=()):
             result.append(str(path))
         if len(set(result)) != len(result):
             raise ValueError("duplicate local service socket")
-        return {"mode": mode, "unix_sockets": result}
+        return {"mode": mode, **({"tcp": "LOOPBACK"} if "tcp" in value else {}), "unix_sockets": result}
     if mode == "REMOTE_SERVICE" and set(value) == {"mode", "allowed_hosts"}:
         hosts = value["allowed_hosts"]
         if not isinstance(hosts, list) or not hosts:

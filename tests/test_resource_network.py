@@ -69,8 +69,7 @@ class ResourceNetworkContractTests(unittest.TestCase):
         self.assertEqual(observed["enforcement"], "CODEX_NATIVE_LOOPBACK_TCP")
         for bad in ({"mode": "LOCAL_SERVICE", "tcp": True},
                     {"mode": "LOCAL_SERVICE", "tcp": "ANY"},
-                    network | {"ports": [8000]}, network | {"allowed_hosts": ["example.com"]},
-                    network | {"unix_sockets": [str(self.scratch / "service.sock")]}):
+                    network | {"ports": [8000]}, network | {"allowed_hosts": ["example.com"]}):
             with self.subTest(bad=bad), self.assertRaises(LocalProcessError):
                 self.command(network=bad)
 

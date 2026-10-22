@@ -20,7 +20,8 @@ from .build_check_protocol import CHECKER_GUIDANCE, verification_interfaces
 from .build_rebind import validate_rebind, approval_rebind, superseding_prepared, reverification_candidates
 from .build_repair import RepairContext
 from .build_state import (affected_workpacks, repair_budget_exhaustion, project_execution_state,
-                          attempt_budget, task_budget_usage, failure_status, project_budget_attempts)
+                          attempt_budget, task_budget_usage, failure_status, project_budget_attempts,
+                          production_attempts, is_checker_reverification)
 from .build_artifacts import (relative_path as _relative, file_identity as _file_identity,
                               superseded_artifacts, changed_accepted_files, check_accepted_files)
 from .build_review import validate_build_review, validate_review_sources
@@ -236,40 +237,21 @@ def _validate_scope(store, plan, scope):
     return verifier_files
 
 
-def prepare_build_authorization(store, program_id, proposal_event_id, source_event_id, scope, *,
-                                expected_revision, idempotency_key, created_at, rebind_from=None, follow_codex_defaults=False):
-    """Save a readable scope challenge, not authority. Creates no target paths."""
+def prepare_build_scope(store, ir, plan, source, scope, *, created_at,
+                        follow_codex_defaults=False, prepared_preview=None):
+    """Validate the complete scope without recording a Program or authorization.
+
+    Resource preparation may create only the host-owned checker snapshot. A
+    previously displayed preview can reuse that exact snapshot, with both its
+    source files and protected copy checked again before materialization.
+    """
     _check(type(follow_codex_defaults) is bool, "follow_codex_defaults must be boolean")
-    proposal = _proposal_event(store, program_id, proposal_event_id)
-    # Infer only a NEW preparation's selection policy. Persisted scopes retain
-    # their old FIXED default in validation, dispatch and recovery.
     implicit_defaults = (not follow_codex_defaults and "model_policy" not in scope
                          and scope.get("model") is None and "model_reasoning_effort" not in scope
-                         and any(task["executor"] == "CODEX" for task in proposal["payload"]["plan"]["workpacks"]))
-    replay = store.idempotent_events(program_id, idempotency_key)
-    recorded_request = replay is not None and any("resource_prepare_request" in row["payload"] for row in replay)
-    resource_request = ({"proposal_event_id": proposal_event_id, "source_event_id": source_event_id,
-                         "scope": deepcopy(scope), "expected_revision": expected_revision,
-                         **({"follow_codex_defaults": True} if follow_codex_defaults else {}),
-                         **({"rebind_from": rebind_from} if rebind_from is not None else {})}
-                        if "verification_resources" in scope or rebind_from is not None or follow_codex_defaults
-                        or "model_policy" in scope or "model_service" in scope
-                        or implicit_defaults or "model" not in scope or recorded_request else None)
-    if resource_request is not None:
-        if replay is not None:
-            if (len(replay) != 1 or replay[0]["event_type"] != "BUILD_AUTHORIZATION_PREPARED"
-                    or replay[0]["payload"].get("resource_prepare_request") != resource_request):
-                raise IdempotencyConflictError("resource preparation key was reused with different content")
-            return replay[0]
-    events = store.list_events(program_id)
-    source = _event(events, source_event_id, "BUILD_SOURCES_CAPTURED")
-    _check(source["payload"]["proposal_event_id"] == proposal_event_id, "sources belong to another proposal")
-    ir, plan = proposal["payload"]["requirement_ir"], proposal["payload"]["plan"]
-    review = validate_build_review(proposal["payload"].get("document_review"))
-    validate_review_sources(review, ir, source_root=source["payload"]["source_root"], snapshot=source["payload"]["snapshot"])
+                         and any(task["executor"] == "CODEX" for task in plan["workpacks"]))
     validate_build_plan(ir, plan)
-    validate_requirement_source_bindings(ir, source["payload"]["snapshot"])
-    contracts = validate_acceptance_contracts(ir, snapshot=source["payload"]["snapshot"], required=True)
+    validate_requirement_source_bindings(ir, source["snapshot"])
+    contracts = validate_acceptance_contracts(ir, snapshot=source["snapshot"], required=True)
     scope = deepcopy(scope)
     scope.setdefault("model", None)
     if implicit_defaults:
@@ -309,8 +291,6 @@ def prepare_build_authorization(store, program_id, proposal_event_id, source_eve
             scope["model_service"] = validate_model_service(scope["model_service"])
         except LocalProcessError as exc:
             raise RequestValidationError(str(exc)) from exc
-    if rebind_from is not None:
-        validate_rebind(events, rebind_from, proposal["payload"], scope)
     verifier_source = None
     if "verification_resources" in scope:
         # Validate configuration before creating the host-held checker snapshot.
@@ -319,10 +299,20 @@ def prepare_build_authorization(store, program_id, proposal_event_id, source_eve
              store.database_path, store.database_path.with_suffix(".commands"),
              store.database_path.with_suffix(".verifiers"), Path(__file__).resolve().parent,
              *scope["source_read_roots"], *scope["executables"].values(), scope["codex_executable"]])
-        verifier_source = snapshot_verifier(store, plan, scope)
+        if prepared_preview is None:
+            verifier_source = snapshot_verifier(store, plan, scope)
+        else:
+            verifier_source = deepcopy(prepared_preview.get("verifier_source"))
+            _check(isinstance(verifier_source, dict), "preview checker snapshot is missing")
+            root = Path(verifier_source["runtime_root"]).resolve(strict=True)
+            _check(root.parent == store.database_path.with_suffix(".verifiers").resolve()
+                   and Path(verifier_source["source_root"]).resolve() == Path(scope["verification_root"]).resolve(),
+                   "preview checker snapshot belongs to a different source or controller")
+            original_files = _validate_scope(store, plan, scope)
+            _check(original_files == prepared_preview["verifier_files"], "preview checker source changed")
         scope["verification_root"] = verifier_source["runtime_root"]
     files = _validate_scope(store, plan, scope)
-    _check_native_layout(store, scope, source["payload"])
+    _check_native_layout(store, scope, source)
     _check(_utc(created_at) < _utc(scope["expires_at"]), "authorization already expired")
     # Persist actual directory bindings, not movable symbolic root aliases.
     scope = deepcopy(scope)
@@ -333,25 +323,72 @@ def prepare_build_authorization(store, program_id, proposal_event_id, source_eve
     for task_id, roots in scope["task_write_roots"].items():
         scope["task_write_roots"][task_id] = [str(_relative(workspace, root).relative_to(workspace)) for root in roots]
     write_roots = [_relative(workspace, root) for roots in scope["task_write_roots"].values() for root in roots]
-    for entry in source["payload"]["manifest"]:
-        path = _relative(Path(source["payload"]["source_root"]), entry["path"])
+    for entry in source["manifest"]:
+        path = _relative(Path(source["source_root"]), entry["path"])
         _check(not any(path.is_relative_to(root) for root in write_roots),
                "declared requirement source must not be task-writable")
     startup = {}
     if any(task["executor"] == "CODEX" for task in plan["workpacks"]):
         from .coding_process import instruction_read_preflight
-        source_files = [str(_relative(Path(source["payload"]["source_root"]), entry["path"]))
-                        for entry in source["payload"]["manifest"]]
+        source_files = [str(_relative(Path(source["source_root"]), entry["path"]))
+                        for entry in source["manifest"]]
         startup["coding_instruction_preflight"] = instruction_read_preflight(
             workspace, [workspace, *scope["source_read_roots"], *source_files])
+    payload = {"scope": deepcopy(scope), "verifier_files": files,
+               **({"model_defaults_source": model_defaults_source} if model_defaults_source is not None else {}),
+               "acceptance_contracts": contracts,
+               **({"verifier_source": verifier_source} if verifier_source else {}), **startup}
+    if prepared_preview is not None:
+        _check({key: value for key, value in payload.items() if key != "model_defaults_source"}
+               == {key: value for key, value in prepared_preview.items() if key != "model_defaults_source"},
+               "displayed preparation changed before materialization")
+        if "model_defaults_source" in prepared_preview:
+            payload["model_defaults_source"] = deepcopy(prepared_preview["model_defaults_source"])
+    return payload
+
+
+def prepare_build_authorization(store, program_id, proposal_event_id, source_event_id, scope, *,
+                                expected_revision, idempotency_key, created_at, rebind_from=None, follow_codex_defaults=False, prepared_preview=None):
+    """Save a readable scope challenge, not authority. Creates no target paths."""
+    _check(type(follow_codex_defaults) is bool, "follow_codex_defaults must be boolean")
+    proposal = _proposal_event(store, program_id, proposal_event_id)
+    # Infer only a NEW preparation's selection policy. Persisted scopes retain
+    # their old FIXED default in validation, dispatch and recovery.
+    implicit_defaults = (not follow_codex_defaults and "model_policy" not in scope
+                         and scope.get("model") is None and "model_reasoning_effort" not in scope
+                         and any(task["executor"] == "CODEX" for task in proposal["payload"]["plan"]["workpacks"]))
+    replay = store.idempotent_events(program_id, idempotency_key)
+    recorded_request = replay is not None and any("resource_prepare_request" in row["payload"] for row in replay)
+    resource_request = ({"proposal_event_id": proposal_event_id, "source_event_id": source_event_id,
+                         "scope": deepcopy(scope), "expected_revision": expected_revision,
+                         **({"follow_codex_defaults": True} if follow_codex_defaults else {}),
+                         **({"rebind_from": rebind_from} if rebind_from is not None else {}),
+                         **({"prepared_preview": prepared_preview} if prepared_preview is not None else {})}
+                        if "verification_resources" in scope or rebind_from is not None or follow_codex_defaults
+                        or "model_policy" in scope or "model_service" in scope
+                        or implicit_defaults or "model" not in scope or recorded_request or prepared_preview is not None else None)
+    if resource_request is not None:
+        if replay is not None:
+            if (len(replay) != 1 or replay[0]["event_type"] != "BUILD_AUTHORIZATION_PREPARED"
+                    or replay[0]["payload"].get("resource_prepare_request") != resource_request):
+                raise IdempotencyConflictError("resource preparation key was reused with different content")
+            return replay[0]
+    events = store.list_events(program_id)
+    source = _event(events, source_event_id, "BUILD_SOURCES_CAPTURED")
+    _check(source["payload"]["proposal_event_id"] == proposal_event_id, "sources belong to another proposal")
+    ir, plan = proposal["payload"]["requirement_ir"], proposal["payload"]["plan"]
+    review = validate_build_review(proposal["payload"].get("document_review"))
+    validate_review_sources(review, ir, source_root=source["payload"]["source_root"], snapshot=source["payload"]["snapshot"])
+    if rebind_from is not None:
+        validate_rebind(events, rebind_from, proposal["payload"], scope)
+    prepared = prepare_build_scope(store, ir, plan, source["payload"], scope,
+        created_at=created_at, follow_codex_defaults=follow_codex_defaults, prepared_preview=prepared_preview)
     return store.append_batch(program_id, [{"event_type": "BUILD_AUTHORIZATION_PREPARED", "payload": {
-        "proposal_event_id": proposal_event_id, "source_event_id": source_event_id,
-        "scope": deepcopy(scope), "verifier_files": files,
-        **({"model_defaults_source": model_defaults_source} if model_defaults_source is not None else {}),
+        "proposal_event_id": proposal_event_id, "source_event_id": source_event_id, **prepared,
         **({"rebind_from": rebind_from} if rebind_from is not None else {}),
-        "acceptance_contracts": contracts, **({"verifier_source": verifier_source} if verifier_source else {}),
-        **({"resource_prepare_request": resource_request} if resource_request is not None else {}), **startup}}], expected_revision=expected_revision,
-        idempotency_key=idempotency_key, created_at=created_at, exclusive_program=True)[0]
+        **({"resource_prepare_request": resource_request} if resource_request is not None else {})}}],
+        expected_revision=expected_revision, idempotency_key=idempotency_key, created_at=created_at,
+        exclusive_program=True)[0]
 
 
 def approve_build_authorization(store, program_id, prepared_event_id, *, human_message_ref,
@@ -384,7 +421,7 @@ def approve_build_authorization(store, program_id, prepared_event_id, *, human_m
     if replay is not None:
         if not (len(replay) == 1 and replay[0]["event_type"] == "BUILD_AUTHORIZATION_APPROVED"
                 and replay[0]["payload"]["prepared_event_id"] == prepared_event_id
-                and replay[0]["payload"]["human_message_ref"] == human_message_ref
+                and replay[0]["payload"].get("human_message_ref") == human_message_ref
                 and replay[0]["stream_revision"] == expected_revision + 1):
             raise IdempotencyConflictError("approval key was reused with different content")
         return replay[0]
@@ -566,6 +603,8 @@ class BuildController:
         revoked = any(e["event_type"] == "BUILD_AUTHORIZATION_REVOKED" and e["payload"]["prepared_event_id"] == prepared_id
                       for e in events)
         _check(approved and not revoked, "build authorization is absent or revoked")
+        from .build_correction import validate_authority_chain
+        validate_authority_chain(events, prepared_id, self.clock())
         _check(superseding_prepared(events, prepared_id) is None, "build authorization was superseded by an approved rebind")
         _check(self.clock() < _utc(prepared["scope"]["expires_at"]), "build authorization expired")
         proposal = _proposal_event(self.store, self.program_id, None)
@@ -741,6 +780,8 @@ class BuildController:
                 "approved_proposal_event_id": original["payload"]["proposal_event_id"],
                 "proposal_event_id": prepared["proposal_event_id"], "source_event_id": prepared["source_event_id"],
                 "workpack_id": task["workpack_id"], "job_id": task["job_id"],
+                **{key: deepcopy(approval["payload"][key]) for key in ("derived_authority", "approval_basis")
+                   if key in approval["payload"]},
                 **{key: prepared["scope"][key] for key in ("expires_at", "model", "allow_model_service",
                     "command_timeout_seconds", "max_attempts", "max_task_attempts")},
                 **({"model_reasoning_effort": prepared["scope"]["model_reasoning_effort"]}
@@ -808,9 +849,10 @@ class BuildController:
                 for check in row.get("verification", [])], "effects": row.get("effects"),
             "invalidation": row.get("invalidation")} for row in history]
         context["repair_history_is_summary"] = True  # Complete observations remain in the same event store.
-        context["budget_consumed"] = {"attempts": len(budget_attempts), "task_attempts": sum(
+        charged_attempts = production_attempts(budget_attempts.values())
+        context["budget_consumed"] = {"attempts": len(charged_attempts), "task_attempts": sum(
             bool(set(row.get("budget_workpack_ids", [row["workpack_id"]])) & set(prepared["task_budget_owners"][task["workpack_id"]]))
-            for row in budget_attempts.values()), "reset": False}
+            for row in charged_attempts), "reset": False}
         source = _event(events, prepared["source_event_id"], "BUILD_SOURCES_CAPTURED")["payload"]
         # Complete source bytes remain in the store and in these explicit
         # read-only files. Do not inline a multi-megabyte PRD into every model
@@ -1035,12 +1077,14 @@ class BuildController:
                 if len(accepted) == len(plan["workpacks"]):
                     return {"status": "PLAN_CHECKS_ACCEPTED", "accepted_workpacks": list(accepted), "harness_e2e_verified": False}
                 budget_attempts = project_budget_attempts(events, prepared_id)
-                if len(budget_attempts) >= scope["max_attempts"]:
-                    return {"status": "ATTEMPT_BUDGET_EXHAUSTED", "accepted_workpacks": list(accepted)}
                 ready = [task for task in plan["workpacks"] if task["workpack_id"] not in accepted
                          and set(task["depends_on"]) <= accepted.keys()]
                 _check(bool(ready), "no dependency-ready task")
                 task = ready[0]
+                reverify = reverification_candidates(events, prepared_id).get(task["workpack_id"])
+                correction_check = reverify is not None and reverify.get("reverify_kind") == "SAME_SCOPE_CHECKER_REVERIFY_V1"
+                if not correction_check and len(production_attempts(budget_attempts.values())) >= scope["max_attempts"]:
+                    return {"status": "ATTEMPT_BUDGET_EXHAUSTED", "accepted_workpacks": list(accepted)}
                 if codex_handoff is not None:
                     reason = ("handoff recipient is not the selected CODEX workpack"
                               if task["executor"] != "CODEX" or codex_handoff["workpack_id"] != task["workpack_id"]
@@ -1055,12 +1099,11 @@ class BuildController:
                 prior = [row for row in budget_attempts.values() if row["workpack_id"] == task["workpack_id"]]
                 budget_owners = prepared["task_budget_owners"][task["workpack_id"]]
                 usage = task_budget_usage(budget_attempts.values())
-                if any(usage.get(owner, 0) >= scope["max_task_attempts"] for owner in budget_owners):
+                if not correction_check and any(usage.get(owner, 0) >= scope["max_task_attempts"] for owner in budget_owners):
                     return {"status": "TASK_REPAIR_BUDGET_EXHAUSTED", "workpack_id": task["workpack_id"]}
                 feedback = prior[-1].get("verification", []) if prior else None
                 if prior and prior[-1]["status"] == "INVALIDATED":
                     feedback = [{"invalidation": prior[-1]["invalidation"], "previous_verification": feedback}]
-                reverify = reverification_candidates(events, prepared_id).get(task["workpack_id"])
                 # Legacy dynamic observations and accepted products remain recoverable.
                 # Only a new model dispatch needs a previously approved service binding.
                 if task["executor"] == "CODEX" and reverify is None:
@@ -1092,6 +1135,10 @@ class BuildController:
             _check(self._artifacts(Path(prepared["scope"]["workspace_root"]), task["artifacts"]) == reverify["artifacts"],
                    "reverification input differs from the old accepted bytes")
             binding["reverification_of_attempt_id"] = reverify["attempt_id"]
+            if reverify.get("reverify_kind") == "SAME_SCOPE_CHECKER_REVERIFY_V1":
+                binding.update(reverify_kind="SAME_SCOPE_CHECKER_REVERIFY_V1", production_budget_charge=0,
+                               production_attempt_id=reverify.get("production_attempt_id", reverify.get("reverification_of_attempt_id", reverify["attempt_id"])),
+                               checker_binding=deepcopy(prepared["verifier_files"]))
         started = self._append("BUILD_ATTEMPT_STARTED", {**binding, **task_data}, len(events), attempt_id + ":start")
         revision = started["stream_revision"]
 
@@ -1269,6 +1316,12 @@ class BuildController:
             if not any(row["event_type"] == "BUILD_AUTHORIZATION_APPROVED"
                        and row["payload"]["prepared_event_id"] == binding["prepared_event_id"] for row in rows):
                 return "BUILD_AUTHORIZATION_ABSENT"
+            from .build_correction import validate_authority_chain
+            try:
+                validate_authority_chain(rows, binding["prepared_event_id"], self.clock())
+            except RequestValidationError as exc:
+                return ("BUILD_AUTHORIZATION_REVOKED" if "revoked" in str(exc) else
+                        "BUILD_AUTHORIZATION_EXPIRED" if "expired" in str(exc) else "BUILD_AUTHORIZATION_ABSENT")
             return None
 
         if preparation_failure is not None:
@@ -1377,7 +1430,22 @@ class BuildController:
         # _current has validated any same-scope Plan adaptation for this started task.
         task = next(task for task in plan["workpacks"] if task["workpack_id"] == attempt["workpack_id"])
         rows = [event for event in events if event["payload"].get("attempt_id") == attempt["attempt_id"]]
+        checker_only = is_checker_reverification(attempt)
+        if checker_only:
+            candidate = reverification_candidates(events, prepared_id).get(task["workpack_id"])
+            _check(candidate is not None and candidate["attempt_id"] == attempt["reverification_of_attempt_id"]
+                   and attempt.get("checker_binding") == prepared["verifier_files"],
+                   "reverification source or checker binding changed")
+            _check(self._artifacts(Path(prepared["scope"]["workspace_root"]), task["artifacts"]) == candidate["artifacts"],
+                   "reverification input differs from the original product bytes")
+            if self._no_command_intent(events, prepared_id, attempt) and "environment" in task:
+                binding = {key: deepcopy(attempt[key]) for key in (
+                    "prepared_event_id", "attempt_id", "proposal_event_id", "workpack_id", "job_id",
+                    "reverification_of_attempt_id", "reverify_kind", "production_budget_charge", "checker_binding")}
+                self._execute_command(binding, prepared, self._preflight_invocation(prepared, task), len(events))
+                return True
         if ((attempt["status"] == "IN_FLIGHT" or "effects" in task)
+                and not checker_only
                 and self._no_command_intent(events, prepared_id, attempt)):
             kind = "BUILD_ATTEMPT_FINISHED" if attempt["status"] == "IN_FLIGHT" else "BUILD_ATTEMPT_RECOVERED"
             self._append(kind, {**attempt, "status": "NOT_DISPATCHED",
@@ -1470,6 +1538,12 @@ class BuildController:
         reverify = None
         if attempt.get("reverification_of_attempt_id"):
             binding["reverification_of_attempt_id"] = attempt["reverification_of_attempt_id"]
+            if is_checker_reverification(attempt):
+                _check(attempt.get("checker_binding") == prepared["verifier_files"],
+                       "reverification checker binding changed")
+                binding.update({key: deepcopy(attempt[key]) for key in
+                                ("reverify_kind", "production_budget_charge", "checker_binding")})
+                binding["production_attempt_id"] = attempt.get("production_attempt_id", attempt["reverification_of_attempt_id"])
             reverify = reverification_candidates(events, prepared_id).get(task["workpack_id"])
             _check(reverify is not None and reverify["attempt_id"] == attempt["reverification_of_attempt_id"],
                    "reverification acceptance source is unavailable")

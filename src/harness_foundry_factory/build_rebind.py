@@ -80,7 +80,7 @@ def _check_signature(prepared, task):
             scope["source_read_roots"], {r: profiles[r] for r in refs})
 
 
-def approval_rebind(events, previous_id, new_prepared, new_proposal):
+def approval_rebind(events, previous_id, new_prepared, new_proposal, *, extra_candidates=None):
     """Freeze a current qualification at the approval CAS; no command executes."""
     old = validate_rebind(events, previous_id, new_proposal, new_prepared["scope"])
     lineage = prepared_lineage(events, previous_id)
@@ -89,7 +89,7 @@ def approval_rebind(events, previous_id, new_prepared, new_proposal):
         _require(not any(a["status"] in {"IN_FLIGHT", "UNKNOWN_SIDE_EFFECT"} for a in attempts.values()),
                  "rebind cannot bypass unresolved effects; reconcile the original command first")
     _, accepted = project_execution_state(events, previous_id)
-    candidates = {**reverification_candidates(events, previous_id), **accepted}
+    candidates = {**(extra_candidates or {}), **reverification_candidates(events, previous_id), **accepted}
     old_proposal = _event(events, old["proposal_event_id"], "BUILD_PLAN_PROPOSED")["payload"]
     after = {t["workpack_id"]: t for t in new_proposal["plan"]["workpacks"]}
     reuse, reverify, rebuild = {}, {}, set()
@@ -111,7 +111,8 @@ def approval_rebind(events, previous_id, new_prepared, new_proposal):
             for identity, item in record["artifacts"].items())
         if not intact:
             rebuild.add(key)
-        elif _check_signature(old_binding, task) == _check_signature(new_prepared, after[key]):
+        elif (not record.get("unaccepted_completed_implementation")
+              and _check_signature(old_binding, task) == _check_signature(new_prepared, after[key])):
             reuse[key] = deepcopy(record)
         else:
             _require(not set(record["artifacts"]).intersection(superseded),
@@ -127,6 +128,12 @@ def approval_rebind(events, previous_id, new_prepared, new_proposal):
     for key in affected_workpacks(new_proposal["plan"], rebuild):
         reuse.pop(key, None)
         reverify.pop(key, None)
+    # Qualification carries artifact provenance, not the prior round's billing
+    # policy. Only derive_checker_authorization may mark a NEW correction round
+    # free; an ordinary later human rebind retains the historical charge rule.
+    for record in reverify.values():
+        for field in ("reverify_kind", "production_budget_charge", "checker_binding"):
+            record.pop(field, None)
     return {"from_prepared_event_id": previous_id, "superseded_prepared_ids": lineage,
             "accepted": reuse, "verification_pending": reverify, "rebuild_workpack_ids": sorted(rebuild),
             "budget_reset": False, "old_authority_inherited": False}

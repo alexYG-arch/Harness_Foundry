@@ -22,6 +22,7 @@ style. Do not rewrite reviewed/accepted history or block tasks without guidance
 artifacts. The runtime embeds the policy; it grants no extra reads or approval.
 
 Before a build, read the [build-document policy](../../../docs/GENERIC_BUILD_PLAN.md).
+When contract and runtime details are complete, use the optional `preview-build` then `materialize-build-preview` route documented in the CLI guide: one actual later human reply must explicitly confirm both. Preview creates only host preparation, no Program/target or execution. Keep the original split route when information is incomplete.
 Before forming the design, load [the design guide](../../../docs/HARNESS_DESIGN_GUIDE.md)
 with the public source materials; follow its example links only when relevant.
 An already loaded, unchanged version can be reused. These design questions do not
@@ -96,14 +97,15 @@ acceptance is provided. Other profiles retain their cwd/environment; network,
 credentials, budgets and G1/G2 are unchanged. Preparation copies named checker files and helpers to host storage,
 including checkers maintained in the product repository. The STRUCTURED_V1
 summary binds command/Case and required checks; only the host records acceptance.
-NONE needs no network setup. LOCAL_SERVICE supports owned Unix sockets or explicit
-{"mode":"LOCAL_SERVICE","tcp":"LOOPBACK"}. This native grant allows all TCP and
+NONE needs no network setup. LOCAL_SERVICE supports owned Unix sockets, explicit
+{"mode":"LOCAL_SERVICE","tcp":"LOOPBACK"}, or an explicitly declared combination
+with unix_sockets. Old single-mode grants do not acquire the other capability. This native grant allows all TCP and
 UDP loopback ports, not service isolation. The tcp selector and
 CODEX_NATIVE_LOOPBACK_TCP remain compatibility names, not TCP-only guarantees.
 New policy records include loopback_protocols=["TCP", "UDP"] to describe existing
 permissions without changing authorization or claiming UDP business acceptance.
 Recovery preserves saved policy; do not backfill old captures or rerun commands
-because this field is absent. The native port 53 exception does not inspect DNS
+because this field is absent. A receiver may retain the native port 53 exception; this is an upper bound, not a promise of DNS access. The exception does not inspect DNS
 content. Native binding also permits wildcard listeners; trusted checkers bind
 loopback and use their actual endpoint, preferably an OS-assigned port. Fixed
 ports remain supported; conflicts are startup failures. REMOTE_SERVICE uses an
@@ -282,3 +284,7 @@ configuration receipt (when declared), current output binding and actual host de
 It appends a correction, never refunds attempts or accepts outputs. Existing `advance-build`
 can then finish the missing checks; a captured check is retrieved, never replayed.
 See `docs/GENERIC_BUILD_CLI.md` for eligibility and the preserved legacy boundary.
+
+## Same-scope host corrections
+
+Use `derive-build-correction` for a reviewed equivalent checker correction after preparing an explicit rebind, or `resolve-build-technical-attempt` for an evidenced technical false block. Their exact receipt fields are in the CLI guide. Preserve public assertions, original effects, source approval and old consumption. New checker-only rounds have distinct identities and do not charge production; historical charged checks remain charged. Do not use host receipts to waive a real decision, expand authority, override a stop or infer unknown effects. Recover completed reports before considering any new execution.

@@ -170,13 +170,16 @@ for family,address in [(socket.AF_INET,('192.0.2.1',12345)),(socket.AF_INET6,('2
   try:client.connect(address)
   except PermissionError:pass
   else:raise AssertionError('non-loopback direct network allowed')
-# The native proxy backend retains a DNS-port permission exception. Probe
+# Some native proxy versions retain a DNS-port permission exception. Probe
 # the reserved TEST-NET address without sending application bytes; this is
-# evidence of the permission, not successful DNS or remote service acceptance.
+# evidence of the permission ceiling, not successful DNS/service acceptance.
+# A receiver that denies the historical exception is narrower, not a failure.
 with socket.socket(socket.AF_INET,socket.SOCK_STREAM) as client:
  client.setblocking(False)
  dns_permission=client.connect_ex(('192.0.2.1',53))
- assert dns_permission in (0,errno.EINPROGRESS,errno.EWOULDBLOCK),dns_permission
+ assert dns_permission in (0,errno.EINPROGRESS,errno.EWOULDBLOCK,errno.EPERM,errno.EACCES),dns_permission
+ print('DNS_PORT_53_PERMISSION',json.dumps({'connect_ex':dns_permission,
+       'denied':dns_permission in (errno.EPERM,errno.EACCES)}))
 try:urllib.request.urlopen('http://example.invalid/',timeout=2)
 except urllib.error.HTTPError as exc:assert exc.code==403,str(exc)
 else:raise AssertionError('non-loopback proxy target allowed')

@@ -26,7 +26,11 @@
     "advance-build",
     "read-build",
     "read-history",
-    "reassess-build-attempt"
+    "reassess-build-attempt",
+    "preview-build",
+    "materialize-build-preview",
+    "derive-build-correction",
+    "resolve-build-technical-attempt"
   ],
   "source_diagnostic_cli": [
     "verify-spec",

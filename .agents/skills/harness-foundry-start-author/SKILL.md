@@ -67,6 +67,14 @@ all follow this boundary:
    Background PASS, earlier answers, old approvals and delegation do not replace
    review. Before confirmation create no Program/target or runtime.
 
+When the complete contract and runtime scope are ready, use the optional
+`preview-build` route before confirmation. It saves host preparation only, without
+a Program, target or execution. Display the complete versioned preview; one real
+message explicitly confirming both contract and runtime scope permits
+`materialize-build-preview` to record the existing proposal, sources, prepared
+scope and approval. Do not reinterpret document-only confirmation as runtime
+approval. The original two-step path below remains available.
+
 The public entrypoint checks host-recorded review and unchanged document content.
 The trusted host still authenticates actual messages and semantic coverage; JSON
 actor labels do not prove a human decision. Never manufacture message references.
@@ -96,6 +104,8 @@ comparisons can freeze defaults at preparation. Show the resulting policy and
 bound service in the existing Readback. Do not change approved scopes or add
 per-command approval for normal default selection.
 
+On the original two-step path:
+
 1. Translate the reviewed document into Requirement/Plan, complete sources and
    independent acceptance contracts. Keep unselected PRD scope unverified.
 2. Use `record-build-plan`, `capture-build-sources` and
@@ -121,6 +131,14 @@ provider configuration is carried into the isolated receiver. Credential values
 stay in the client environment, never the public scope or model tools. Preserve
 the original per-command configuration when recovering; missing old metadata is
 not permission to replay or reset usage.
+
+For an evidenced same-scope checker correction or technical false block, use the
+trusted-host entries in the public CLI. Preserve the source human approval,
+original failures and production consumption; do not create another human message.
+A new, explicitly marked checker-only round has its own identity and no new
+production charge. Older recorded charges remain; a real product repair uses its
+remaining production budget. Source revocation or expiry prevents dependent new
+dispatch, while complete captured reports remain readable without replay.
 
 Use actual behavior to check changed, required mechanisms, not just their names
 in code. Repair at the smallest responsible layer: project-specific fixes stay
@@ -152,14 +170,15 @@ acceptance is provided. Other profiles retain their cwd/environment; network,
 credentials, budgets and G1/G2 are unchanged. Preparation copies named checker files and helpers to host storage,
 including checkers maintained in the product repository. The STRUCTURED_V1
 summary binds command/Case and required checks; only the host records acceptance.
-NONE needs no network setup. LOCAL_SERVICE supports owned Unix sockets or explicit
-{"mode":"LOCAL_SERVICE","tcp":"LOOPBACK"}. This native grant allows all TCP and
+NONE needs no network setup. LOCAL_SERVICE supports owned Unix sockets, explicit
+{"mode":"LOCAL_SERVICE","tcp":"LOOPBACK"}, or an explicitly declared combination
+with unix_sockets. It never extends an older single-mode approval. This native grant allows all TCP and
 UDP loopback ports, not service isolation. The tcp selector and
 CODEX_NATIVE_LOOPBACK_TCP remain compatibility names, not TCP-only guarantees.
 New policy records include loopback_protocols=["TCP", "UDP"] to describe existing
 permissions without changing authorization or claiming UDP business acceptance.
 Recovery preserves saved policy; do not backfill old captures or rerun commands
-because this field is absent. The native port 53 exception does not inspect DNS
+because this field is absent. A receiver may retain the native port 53 exception; this is an upper bound, not a promise of DNS access. The exception does not inspect DNS
 content. Native binding also permits wildcard listeners; trusted checkers bind
 loopback and use their actual endpoint, preferably an OS-assigned port. Fixed
 ports remain supported; conflicts are startup failures. REMOTE_SERVICE uses an

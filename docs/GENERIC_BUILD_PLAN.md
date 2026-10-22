@@ -139,7 +139,7 @@ Review 确认外部合同，不要求用户逐项批准类名、算法和普通�
 上游修订；Foundry 不自行改写被确认目标。
 
 文档 Review 是内容决定，执行批准是权限决定。充分展示二者后，一条真实回复可明确作出两种决定，
-但不能由一个默默推断另一个，不新增逐 Workpack 审批。
+但不能由一个默默推断另一个，不新增逐 Workpack 审批。现有可选 `preview-build` 会在创建 Program 前保存完整非执行预览；展示后的一条真实消息明确确认合同和运行范围，再用 `materialize-build-preview` 幂等生成既有提案、来源、prepared 和最终批准。原分步入口继续可用，旧批准不补做预览。具体字段与同范围修正见 [CLI](GENERIC_BUILD_CLI.md)。
 
 `tests/test_build_review.py` 的配对回归覆盖自然语言、问答、PRD、项目说明和既有工程输入；直接输入、未确认草案、
 Agent 自批、后台全部 PASS 后直启、通过兼容/委托路线绕过、确认后内容变化均拒绝；真实确认且
@@ -209,7 +209,7 @@ FOUNDRY_PRODUCT_ROOT 指向 command 的 product 副本，根和输入只读，�
 新资源模式固定读取 FOUNDRY_REPORT_DIR/summary.json，要求 schema_version=1.0、本次
 case_id/command_id、完整 required_checks 对应的 checks、errors 与退出码相符。
 LOCAL_SERVICE 另核对 services_stopped；REMOTE_SERVICE 核对 external_effects。
-LOCAL_SERVICE 可选择 Unix socket，或显式 `tcp: LOOPBACK`；后者原生授权允许 loopback 的
+LOCAL_SERVICE 可选择 Unix socket、显式 `tcp: LOOPBACK`，或显式同时声明两者；组合不自动扩展旧单模式批准。回环原生授权允许 loopback 的
 TCP/UDP 所有端口，拒绝外部连接但保留原生 53 端口例外（不检查 DNS 协议内容），不承诺指定端口或本次服务隔离。
 tcp: LOOPBACK 和 CODEX_NATIVE_LOOPBACK_TCP 是兼容标识，不是 TCP-only 承诺；实际策略补充
 loopback_protocols=["TCP", "UDP"]，不改变网络授权或业务检查义务，不代表 UDP 业务验收。

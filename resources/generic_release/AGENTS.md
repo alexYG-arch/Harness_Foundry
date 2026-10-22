@@ -12,7 +12,7 @@ approval gate. `read-build --human` summarizes state; `--json` retains full fact
 Every build starts with clarification and a saved, displayed, versioned build document.
 Wait for the user's actual confirmation of that document and scope before creating a
 Program or target. Background validation and the source documents themselves are not
-approval. Then show the concrete runtime scope and obtain a real authorization.
+approval. When the full contract and runtime scope are ready, `preview-build` can save nonexecuting host preparation; after one real message explicitly confirms both, `materialize-build-preview` records the reviewed proposal, sources, prepared scope and approval. Otherwise use the original document-review then runtime-approval route.
 Within it, proceed through implementation, checking, repair and resume without per-task
 approvals. Changed requirements, expanded authority, exhausted budget, expiry and
 unresolved side effects stop affected work.
@@ -26,3 +26,5 @@ This distribution contains only the generic build route. It does not execute his
 Candidate/epoch or fixed-project workflows, and it needs no sibling specification.
 Do not fetch the author's checkout or private files to fill a runtime dependency.
 Its manifest records contents and declared capability, not acceptance or execution authority.
+
+For evidenced same-scope checker corrections or technical false blocks, use the trusted-host correction entries in the CLI guide; retain the original human approval, old reports and consumed budget. Host review is not a fabricated human message. Only explicitly marked new checker-only rounds avoid a new production charge; old charges remain. Source revocation/expiry stops dependent new dispatch, not historical report reads.

@@ -55,9 +55,12 @@ def _network(value):
             return normalize_network(value)
         except ValueError as exc:
             raise RequestValidationError(str(exc), details={"reason_code": "BUILD_VERIFICATION_RESOURCES_INVALID"}) from exc
+    combined = mode == "LOCAL_SERVICE" and set(value) == {"mode", "tcp", "unix_sockets"}
+    if combined:
+        _require(value["tcp"] == "LOOPBACK", "local TCP selector must be LOOPBACK")
     fields = {"NONE": {"mode"}, "LOCAL_SERVICE": {"mode", "unix_sockets"},
               "REMOTE_SERVICE": {"mode", "allowed_hosts"}}
-    _require(isinstance(mode, str) and mode in fields and set(value) == fields[mode], "unsupported resource network contract")
+    _require(combined or isinstance(mode, str) and mode in fields and set(value) == fields[mode], "unsupported resource network contract")
     if mode == "LOCAL_SERVICE":
         sockets = value["unix_sockets"]
         _require(isinstance(sockets, list) and sockets and all(isinstance(item, str) for item in sockets)

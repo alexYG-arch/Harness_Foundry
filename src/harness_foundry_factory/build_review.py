@@ -20,26 +20,12 @@ def _text(value):
     return isinstance(value, str) and bool(value.strip())
 
 
-def validate_build_review(review, *, check_files=True):
-    """Validate a host-recorded decision and, by default, the current document."""
-    _require(isinstance(review, dict) and set(review) == {
-        "document_id", "version", "documents", "presentation", "decision"},
-        "a displayed build document and actual human confirmation are required")
-    _require(_text(review["document_id"]) and _text(review["version"]), "review requires document identity/version")
-    presentation, decision = review["presentation"], review["decision"]
-    _require(isinstance(presentation, dict) and set(presentation) == {"chat_thread_id", "turn_id"}
-             and all(_text(value) for value in presentation.values()), "bind the actual document presentation turn")
-    _require(isinstance(decision, dict) and set(decision) == {"action", "actor", "user_message"},
-             "review requires the original human decision")
-    actor = decision["actor"]
-    _require(decision["action"] == "CONFIRM_BUILD_DOCUMENT" and _text(decision["user_message"])
-             and isinstance(actor, dict) and set(actor) == {"type", "chat_thread_id", "turn_id"}
-             and actor["type"] == "HUMAN_VIA_CODEX_CHAT"
-             and all(_text(actor[key]) for key in ("chat_thread_id", "turn_id"))
-             and actor["chat_thread_id"] == presentation["chat_thread_id"]
-             and actor["turn_id"] != presentation["turn_id"],
-             "the trusted host must record a later human document confirmation, not an agent decision or runtime grant")
-    documents = review["documents"]
+def validate_build_document_material(document, *, check_files=True):
+    """Validate complete displayed files without claiming a human decision."""
+    _require(isinstance(document, dict) and {"document_id", "version", "documents"} <= set(document),
+             "complete versioned build documents are required")
+    _require(_text(document["document_id"]) and _text(document["version"]), "review requires document identity/version")
+    documents = document["documents"]
     _require(isinstance(documents, list) and bool(documents), "review must bind complete displayed documents")
     ids, paths = set(), set()
     for document in documents:
@@ -58,6 +44,29 @@ def validate_build_review(review, *, check_files=True):
                 raise RequestValidationError("reviewed document cannot be read", details={
                     "reason_code": "BUILD_DOCUMENT_REVIEW_REQUIRED"}) from exc
             _require(current == document["text"], "reviewed document changed; show the new content for human review")
+    return document
+
+
+def validate_build_review(review, *, check_files=True):
+    """Validate a host-recorded decision and, by default, the current document."""
+    _require(isinstance(review, dict) and set(review) == {
+        "document_id", "version", "documents", "presentation", "decision"},
+        "a displayed build document and actual human confirmation are required")
+    _require(_text(review["document_id"]) and _text(review["version"]), "review requires document identity/version")
+    presentation, decision = review["presentation"], review["decision"]
+    _require(isinstance(presentation, dict) and set(presentation) == {"chat_thread_id", "turn_id"}
+             and all(_text(value) for value in presentation.values()), "bind the actual document presentation turn")
+    _require(isinstance(decision, dict) and set(decision) == {"action", "actor", "user_message"},
+             "review requires the original human decision")
+    actor = decision["actor"]
+    _require(decision["action"] in {"CONFIRM_BUILD_DOCUMENT", "CONFIRM_BUILD_AND_RUNTIME"} and _text(decision["user_message"])
+             and isinstance(actor, dict) and set(actor) == {"type", "chat_thread_id", "turn_id"}
+             and actor["type"] == "HUMAN_VIA_CODEX_CHAT"
+             and all(_text(actor[key]) for key in ("chat_thread_id", "turn_id"))
+             and actor["chat_thread_id"] == presentation["chat_thread_id"]
+             and actor["turn_id"] != presentation["turn_id"],
+             "the trusted host must record a later human document confirmation, not an agent decision or runtime grant")
+    validate_build_document_material(review, check_files=check_files)
     return review
 
 

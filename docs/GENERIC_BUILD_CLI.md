@@ -20,6 +20,8 @@ Review，再使用本入口；原始材料保留追溯角色。后台检查全�
 
 ## 一条控制链，一次范围批准
 
+完整信息已备齐时，可先用 `preview-build` 保存非执行预览，展示合同与完整运行范围后取得一次明确确认，再用 `materialize-build-preview` 落到同一事件流。预览不注册 Program、不创建目标、不执行模型／业务；可能创建的检查器快照仅在已列明的宿主准备区。以下原分步流程保持兼容。
+
 ```text
 上游需求问答 → 输出搭建文档 → 人工 Review → Requirement/Plan → record-build-plan → capture-build-sources
   → prepare-build-authorization → 展示 Readback → 真实后续用户批准
@@ -28,7 +30,7 @@ Review，再使用本入口；原始材料保留追溯角色。后台检查全�
                          ↑ 已知失败在预算内修复
 ```
 
-人工 Review 前只准备并展示上游文档，不创建 Program 或目标。Review 后的提案/范围准备
+人工 Review 前可以准备完整非执行预览并展示合同与范围，不创建 Program 或目标。Review 后的提案/范围准备
 只写显式控制库，不创建目标目录、不执行命令、不批准任务。用户批准的是
 完整建设范围，不是每次内部动作；已批准范围内的调试、检查、后继推进和确定性续跑
 不另设 Human Gate。需求/验收或读写/服务范围改变、撤销/到期、未知副作用仍停止。
@@ -53,6 +55,10 @@ Review，再使用本入口；原始材料保留追溯角色。后台检查全�
 
 | COMMAND | 额外参数 | request 的业务字段 |
 |---|---|---|
+| `preview-build` | `--control-db DB --request FILE` | 完整非执行预览，字段见下文；无 revision/幂等 key |
+| `materialize-build-preview` | 同上 | 预览引用、展示记录、明确同时确认的真实决定、初始 revision 与幂等 key |
+| `derive-build-correction` | 同上 | `program_id`, `prepared_event_id`, `evidence` |
+| `resolve-build-technical-attempt` | 同上 | `program_id`, `prepared_event_id`, `attempt_id`, `evidence` |
 | `record-build-plan` | `--control-db DB --request FILE` | `requirement_ir`, `plan`, `document_review` |
 | `capture-build-sources` | 同上 | `program_id`, `proposal_event_id`, `source_root`, `manifest` |
 | `prepare-build-authorization` | 同上 | `program_id`, `proposal_event_id`, `source_event_id`, `scope`；可选 `rebind_from`, `follow_codex_defaults` |
@@ -71,7 +77,7 @@ Review，再使用本入口；原始材料保留追溯角色。后台检查全�
 数据库所有者先正常关闭；此入口不会代为 checkpoint。历史控制事件库不作自动格式转换；
 通用 `REVISION_V1` 数据仍用 `read-build`。记录中的旧 Hash 只是原数据，不重新计算或签发。
 
-除 `advance-build` 外的变更 request 还必须包含 `expected_revision` 和
+除 `advance-build`、非执行的 `preview-build` 外的变更 request 还必须包含 `expected_revision` 和
 `idempotency_key`。新控制流从 stream revision 0、Requirement/Plan revision 1
 开始；后续使用命令返回的 revision。同一原始请求重试返回同一事件，不重派命令。
 `advance-build` 先检查预期 revision；控制器继续逐派发与提交核对当前状态。
@@ -388,12 +394,12 @@ actual = (product / "build/result.txt").read_text()
 |---|---|
 | `{"mode":"NONE"}` | 离线；临时文件和 SQLite 正常可写，无模型或外网探测前置 |
 | `{"mode":"LOCAL_SERVICE","unix_sockets":["resource://scratch/service.sock"]}` | 该命令拥有的 Unix socket 服务；TCP/外网关闭。长路径时包装器进入 scratch 后使用相对 socket 名，业务读取仍显式使用产品路径 |
-| `{"mode":"LOCAL_SERVICE","tcp":"LOOPBACK"}` | 原生授权允许 127.0.0.1、localhost、::1 的全部 TCP/UDP 端口，不是 TCP-only；外部连接除原生 53 端口例外外均拒绝；支持普通 HTTP/API 服务，不提供指定端口或本次服务隔离 |
+| `{"mode":"LOCAL_SERVICE","tcp":"LOOPBACK"}` | 原生授权允许 127.0.0.1、localhost、::1 的全部 TCP/UDP 端口，不是 TCP-only；外部连接拒绝；接收器可能保留原生 53 端口例外，但不保证许可；支持普通 HTTP/API 服务，不提供指定端口或本次服务隔离 |
 | `{"mode":"REMOTE_SERVICE","allowed_hosts":["api.example.com"]}` | 显式启动并探测原生代理，通过支持代理的 HTTP(S) 客户端连接允许主机；拒绝其他主机和直连，不承诺端口、方法或业务操作过滤 |
 
 `services: []` 表示本次支持由受保护检查器在一个有限命令内启动、等待就绪、调用并关闭服务；未实现跨命令后台服务管理。命令超时/撤销清理自身进程组。TCP 精确端口/服务隔离、秘密管理器与代理代持、请求级权限代理和远端写入去重/核对适配尚未实现；已有服务自身账号权限不由域名许可替代。模型服务授权与验收外联配置独立。
 
-TCP 和 Unix socket 两种配置二选一。TCP 分支固定 loopback 主机范围，启用原生代理及 local binding；派发前分别检查 `CODEX_NETWORK_PROXY_ACTIVE=1` 和 `CODEX_NETWORK_ALLOW_LOCAL_BINDING=1`。实际策略保存 `enforcement: CODEX_NATIVE_LOOPBACK_TCP`、`loopback_protocols: ["TCP", "UDP"]`、`guarantee: LOOPBACK_ALL_PORTS_NOT_SERVICE_ISOLATION`，随 command 恢复。输入 tcp: LOOPBACK 与 enforcement 保留为兼容标识，不是 TCP-only 承诺；新增字段说明既有原生授权，不改变网络 profile 或业务检查义务，也不表示 UDP 业务验收。历史捕获不回填新字段，不因缺少字段重派或增加 attempt。外部连接保留原生 53 端口例外，该例外不检查 DNS 协议内容。该原生绑定能力也允许 `0.0.0.0` / `::`，因此检查器应显式绑定 `127.0.0.1` 或 `::1`，建议用端口 0，从服务取得实际端点并核对本次实例身份。已有指定端口也可使用，占用冲突按启动失败处理。若合同要求只有本次服务或某端口可达，当前 TCP 适配器不满足；可用 Unix socket 或后续独立网络适配。
+TCP 和 Unix socket 可分别选择，也可显式组合为 `{"mode":"LOCAL_SERVICE","tcp":"LOOPBACK","unix_sockets":["resource://scratch/service.sock"]}`。组合同时验证回环接收器能力及每个自有 socket，不能自动扩大旧单模式批准。TCP 分支固定 loopback 主机范围，启用原生代理及 local binding；派发前分别检查 `CODEX_NETWORK_PROXY_ACTIVE=1` 和 `CODEX_NETWORK_ALLOW_LOCAL_BINDING=1`。实际策略保存 `enforcement: CODEX_NATIVE_LOOPBACK_TCP`、`loopback_protocols: ["TCP", "UDP"]`、`guarantee: LOOPBACK_ALL_PORTS_NOT_SERVICE_ISOLATION`，随 command 恢复。输入 tcp: LOOPBACK 与 enforcement 保留为兼容标识，不是 TCP-only 承诺；新增字段说明既有原生授权，不改变网络 profile 或业务检查义务，也不表示 UDP 业务验收。历史捕获不回填新字段，不因缺少字段重派或增加 attempt。接收器可能保留原生 53 端口例外，也可能更严格地拒绝；这是权限上限，不保证 DNS 可用，该例外不检查 DNS 协议内容。该原生绑定能力也允许 `0.0.0.0` / `::`，因此检查器应显式绑定 `127.0.0.1` 或 `::1`，建议用端口 0，从服务取得实际端点并核对本次实例身份。已有指定端口也可使用，占用冲突按启动失败处理。若合同要求只有本次服务或某端口可达，当前 TCP 适配器不满足；可用 Unix socket 或后续独立网络适配。
 
 需要测试凭据时，在该检查引用的 profile 中加入以下可选片段，不写入秘密值：
 
@@ -707,3 +713,65 @@ effects 观察已声明写根和具名保留文件，allowed 是精确允许变�
 链接创建、删除、重定向和类型替换仍按原 allowed 比较；required/must_preserve 的普通文件义务
 不能由链接冒充。末级链接不扩大读写根，通过软链接祖先访问子路径仍不允许。
 首次构建可创建缺失的正常父目录；不新增忽略 build、通配授权或额外预检要求。
+
+## 可选：完整准备后一次确认
+
+完整合同与运行条件已经齐备时，可以用 `preview-build` 保存一次完整预览。它只写宿主准备文件；资源模式会在所声明控制库旁的 `.verifiers` 区域创建受保护检查器副本，不创建 Program、不创建目标目录、不启动模型或业务命令。原先“先确认合同、再准备并批准运行”的路径继续保留，已批准记录无需补做预览。
+
+调用方式：`hffactory preview-build --control-db /absolute/host/control.sqlite3 --request /absolute/host/preview-request.json --json`。请求字段为：
+
+- `preview_path`：新的宿主准备文件绝对路径；旧版本保留，不覆盖。
+- `document`：`document_id`、`version`、`documents`；每份文档包含 `source_id`、`path` 和完整 `text`。
+- `requirement_ir`、`plan`、`source_root`、`manifest`、`scope`：与既有入口相同的完整声明。scope 中的到期时间为绝对时间，不在确认后重新起算。
+- 可选 `follow_codex_defaults`：沿既有规则将当前默认模型冻结；日常跟随则保持 `CODEX_GLOBAL_DEFAULTS`，不是强制所有任务冻结模型。
+
+返回的完整 `readback` 绑定公开合同、来源、计划、模型策略及服务、工具、读写域、独立检查器、预算和有效期。完整内容由可信宿主展示；私有预期不能作为实施模型的公开输入。`preview_sha256` 只绑定这份已展示内容，不是授权口令。
+
+用户一条真实消息明确同时确认该版本合同和运行范围后，宿主调用 `materialize-build-preview`，请求包含：
+
+```json
+{
+  "preview_path": "/absolute/host/preview-v1.json",
+  "preview_sha256": "从 preview-build 原样取得",
+  "presentation": {"chat_thread_id": "实际展示所在会话", "turn_id": "实际展示轮次"},
+  "decision": {
+    "action": "CONFIRM_BUILD_AND_RUNTIME",
+    "actor": {"type": "HUMAN_VIA_CODEX_CHAT", "chat_thread_id": "同一会话", "turn_id": "后续真实用户轮次"},
+    "user_message": "原始用户消息，不由模型编造"
+  },
+  "expected_revision": 0,
+  "idempotency_key": "该次确认的稳定幂等键"
+}
+```
+
+仅确认合同、继续准备、模型自我批准或引用旧版本消息，不构成合并运行批准。身份和消息语义仍由可信宿主核实；JSON 字段不能自行证明用户身份。平台权限不变。
+
+物化依次登记完整预览确认、原 proposal、source、prepared，最后才追加运行批准。事件使用真实登记时间，批准依据明确指向已展示预览和真实消息，不声称用户提前看过尚不存在的 prepared ID。途中失败时用原请求、原 `expected_revision: 0` 和原幂等键接续；已经完成的阶段复用，不新建 Program 或重复捕获、准备、批准。变化的内容需要重新展示；已完成物化的取回不重新执行。
+
+`BUILD_PREVIEW_MATERIALIZED` 仅表示该预览已形成绑定，不表示业务已执行或当前授权仍有效。随后使用返回的 `prepared_event_id` 和最新 revision 调用原 `advance-build`；派发继续检查有效期、撤销、当前范围和累计预算。原 `read-build` 可取回持久化预览、批准依据和现有运行记录。
+
+本路径不增加审批步骤；其目标是将已有两次等待在完整材料齐备时合成一次真实决定。同范围宿主修正仍走对应接续入口，不能借一次确认扩大合同、服务、权限或预算。
+
+## 同范围宿主修正与技术误阻断
+
+这些入口只供可信外层宿主调用，目标实施模型不能写控制库或批准自身。JSON 是核实结果的记录，不认证调用者身份，也不能证明任意代码语义等价；宿主必须先核对具体差异、公开合同与独立预期。原人类处置与独立新批准入口保留。
+
+检查器等义修正先另存修后文件，沿原 `rebind_from` 准备新的受保护绑定，再调用 `derive-build-correction`。请求除公共 revision/key 外含 `program_id`、新 `prepared_event_id` 和 `evidence`：
+
+- `review`：`policy: SAME_SCOPE_CHECKER_CORRECTION_V1`，`actor: {type: TRUSTED_CODEX_HOST, chat_thread_id, turn_id}`，非空 `reason`、`evidence_refs`，`decision: EQUIVALENT_CHECKER_CORRECTION`。
+- `source_prepared_event_id`、原样读回的 `old_verifier_files`、`new_verifier_files`，以及完整 `preserved_case_ids`。
+- `changed_files`：每个实际变化的检查适配文件对应 `{role: CHECKER_ADAPTER, reason: 具体修正理由}`；包含必要代码依赖。改答案、删断言或改业务判定不能伪称适配修正，须回原决定流程。
+- `completed_attempts`：一般接受／待复验复用可为空对象；尚未接受的原生产者按 attempt ID 列出 `artifacts` 和 `effects`。effects 含 `status: EFFECTS_RECONCILED`、完整 `command_ids`、`detail`、`evidence_refs`。宿主须核实实际效果，文件未变或进程消失不代替此事实。
+
+新绑定仅继承仍有效的原真实批准，保留原生产目标、公开来源、断言、工具与服务、读写域、预算和绝对有效期。新检查有独立子 attempt，记录 `SAME_SCOPE_CHECKER_REVERIFY_V1`、原生产身份和本次检查器；只检查当前绑定产物，不重放实施。原失败保持，真实检查通过后才接受。新路径不新增生产消耗，但所有检查命令与耗时仍记录；旧版本复验已耗次数不退回。普通新人工重新绑定仍保留原计数语义。
+
+来源批准及自动派生链中的撤销会停止后继派发，并沿原取消观察处理本次自有进程；旧 prepared 被替代本身不撤销来源批准。独立新人工批准不继承无关旧授权撤销。完整报告取回不需要重新授权或执行。
+
+对实施阶段已有完整结束与效果证据的技术误阻断，可调用 `resolve-build-technical-attempt`，请求含 `program_id`、`prepared_event_id`、`attempt_id`、`evidence` 和公共 revision/key。evidence 含：
+
+- `review` 形状同上，policy 改为 `HOST_TECHNICAL_DISPOSITION_V1`，decision 为 `TECHNICAL_FALSE_BLOCK_CONFIRMED`。
+- `classification: TECHNICAL_FALSE_BLOCK_PUBLIC_SCOPE_COMPLETE`、原 prepared 中的完整 `public_basis: acceptance_contracts`、该次实际 `command_ids` 及同形 `effects`。
+
+宿主应从公开范围和原始观察核实不存在待用户决定的真实缺口；不能仅凭模型把问题叫作“技术问题”。处理只登记 `RETRY_ALLOWED`，不接受旧产物、不增加授权、不退回用量；后续生产仍受原剩余额度限制。已有检查失败不通过该入口重放，检查器修正走上面的独立只复验路径。真正用户停止、范围／合同变化、未决效果、过期／撤销和不完整捕获均不能借此绕过。
+
+同一请求使用原 revision/key 取回原记录；完整捕获只取回。新复验即使在首条命令前中断，也保留原复验身份，继续尚未派发的预检／检查。需要真正修复产品时回原生产者并扣原剩余额度，不扩大 G1/G2。

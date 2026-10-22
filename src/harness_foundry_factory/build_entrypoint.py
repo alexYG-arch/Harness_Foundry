@@ -25,6 +25,8 @@ from .process_observation import CommandObservation
 
 
 MUTATIONS = {
+    "derive-build-correction": {"program_id", "prepared_event_id", "evidence"},
+    "resolve-build-technical-attempt": {"program_id", "prepared_event_id", "attempt_id", "evidence"},
     "record-build-plan": {"requirement_ir", "plan", "document_review"},
     "capture-build-sources": {"program_id", "proposal_event_id", "source_root", "manifest"},
     "prepare-build-authorization": {"program_id", "proposal_event_id", "source_event_id", "scope"},
@@ -86,6 +88,20 @@ def _scope_readback(event, events):
     successor = superseding_prepared(events, prepared_id)
     state = ("SUPERSEDED" if successor else "REVOKED" if revoked else "EXPIRED" if _utc(payload["scope"]["expires_at"]) <= datetime.now(timezone.utc)
              else "APPROVED" if approved else "APPROVAL_REQUIRED")
+    approval = next((row for row in reversed(events) if row["event_type"] == "BUILD_AUTHORIZATION_APPROVED"
+                     and row["payload"].get("prepared_event_id") == prepared_id), None)
+    authority = {}
+    if approval is not None and approval["payload"].get("approval_basis"):
+        authority["approval_basis"] = approval["payload"]["approval_basis"]
+    if approval is not None and approval["payload"].get("derived_authority"):
+        authority["derived_authority"] = approval["payload"]["derived_authority"]
+        from .build_correction import validate_authority_chain
+        try:
+            validate_authority_chain(events, prepared_id, datetime.now(timezone.utc))
+        except RequestValidationError as exc:
+            authority["authority_unavailable_reason"] = str(exc)
+            if state == "APPROVED":
+                state = "REVOKED" if "revoked" in str(exc) else "EXPIRED" if "expired" in str(exc) else "APPROVAL_REQUIRED"
     source = next(row for row in events if row["event_id"] == payload["source_event_id"])
     proposal = next(row for row in events if row["event_id"] == payload["proposal_event_id"])
     attempts = [row["payload"] for row in events if row["event_type"] == "BUILD_ATTEMPT_STARTED"
@@ -106,7 +122,7 @@ def _scope_readback(event, events):
             "requirement_ir": proposal["payload"]["requirement_ir"], "plan": proposal["payload"]["plan"],
             "scope": payload["scope"], "source_binding": _source_summary(source),
             **({"model_defaults_source": payload["model_defaults_source"]} if "model_defaults_source" in payload else {}),
-            "verification_files": sorted(payload["verifier_files"]), "state": state,
+            "verification_files": sorted(payload["verifier_files"]), "state": state, **authority,
             **({"verifier_source": payload["verifier_source"]} if "verifier_source" in payload else {}),
             "coding_instruction_preflight": payload.get("coding_instruction_preflight"),
             "acceptance_contracts": payload.get("acceptance_contracts"),
@@ -121,8 +137,19 @@ def read_build(control_db, program_id):
     """Read persisted declarations and progress without creating a database."""
     program_id = _program(program_id)
     store = ControlEventStore(_database(control_db), read_only=True, storage_format="REVISION_V1")
-    proposal = read_build_plan_proposal(store, program_id)
     events = store.list_events(program_id)
+    if events and all(row["event_type"] == "BUILD_PREVIEW_CONFIRMED" for row in events):
+        # A crash may follow the durable human confirmation but precede the
+        # first proposal. Read that capture without inventing a runnable Plan,
+        # budget or approval; retry the original materialization request.
+        return {"status": "BUILD_PREVIEW_MATERIALIZATION_PENDING", "program_id": program_id,
+                "stream_revision": len(events),
+                "confirmed_previews": [{"event_id": row["event_id"], **row["payload"]} for row in events],
+                "proposal": None, "sources": [], "authorizations": [], "attempts": [],
+                "next_action": "RESUME_ORIGINAL_PREVIEW_MATERIALIZATION",
+                "runtime_authorized": False, "writes_performed": False,
+                "execution_started": False, "harness_e2e_verified": False}
+    proposal = read_build_plan_proposal(store, program_id)
     latest_proposal = next(row for row in events if row["event_id"] == proposal["proposal_binding"]["proposal_event_id"])
     attempts = project_readback_attempts(events)
     # Host observation inspection is the read-only I/O boundary. It is not part
@@ -134,6 +161,8 @@ def read_build(control_db, program_id):
     return {"status": "BUILD_READBACK", "program_id": program_id, "stream_revision": len(events),
             "proposal": proposal, "requirement_ir": latest_proposal["payload"]["requirement_ir"],
             "document_review": review_summary(latest_proposal["payload"].get("document_review")),
+            "confirmed_previews": [{"event_id": row["event_id"], **row["payload"]}
+                                   for row in events if row["event_type"] == "BUILD_PREVIEW_CONFIRMED"],
             "sources": [_source_summary(row) for row in events if row["event_type"] == "BUILD_SOURCES_CAPTURED"],
             "authorizations": [_scope_readback(row, events) for row in events if row["event_type"] == "BUILD_AUTHORIZATION_PREPARED"],
             "attempts": list(attempts.values()),
@@ -152,6 +181,9 @@ def apply_build_request(command, request, control_db):
     provides transaction/CAS and exact idempotency for all subsequent mutations.
     """
     _require(isinstance(request, dict), "build request must be an object")
+    if command in {"preview-build", "materialize-build-preview"}:
+        from .build_preview import preview_build, materialize_build_preview
+        return (preview_build if command == "preview-build" else materialize_build_preview)(request, control_db)
     if command == "advance-build":
         required = {"program_id", "prepared_event_id", "expected_revision"}
         _require(required <= set(request) <= required | {"advance_mode", "codex_handoff"},
@@ -229,6 +261,16 @@ def apply_build_request(command, request, control_db):
     elif command == "approve-build-authorization":
         event = approve_build_authorization(store, program, request["prepared_event_id"], human_message_ref=human_ref, **kwargs)
         status = "BUILD_APPROVED_EXECUTION_NOT_STARTED"
+    elif command == "derive-build-correction":
+        from .build_correction import derive_checker_authorization
+        event = derive_checker_authorization(store, program, request["prepared_event_id"],
+                                              evidence=request["evidence"], **kwargs)
+        status = "BUILD_SAME_SCOPE_CORRECTION_BOUND_NOT_EXECUTED"
+    elif command == "resolve-build-technical-attempt":
+        from .build_correction import resolve_technical_attempt
+        event = resolve_technical_attempt(store, program, request["prepared_event_id"], request["attempt_id"],
+                                           evidence=request["evidence"], **kwargs)
+        status = "BUILD_TECHNICAL_DISPOSITION_RECORDED_NOT_EXECUTED"
     elif command == "request-build-repair":
         event = request_build_repair(BuildController(store, program), request)
         return {"status": "BUILD_REPAIR_REQUESTED", "program_id": program, "event_id": event["event_id"],

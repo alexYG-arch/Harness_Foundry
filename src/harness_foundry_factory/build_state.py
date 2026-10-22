@@ -66,9 +66,24 @@ def project_budget_attempts(events, prepared_id):
     return attempts
 
 
+def is_checker_reverification(attempt):
+    """Only the new explicit host-correction path is free of production charge.
+
+    Historical revalidation attempts keep their original charge. The full
+    history projection remains intact for recovery, feedback and artifact use.
+    """
+    return (attempt.get("reverify_kind") == "SAME_SCOPE_CHECKER_REVERIFY_V1"
+            and attempt.get("production_budget_charge") == 0
+            and bool(attempt.get("reverification_of_attempt_id")))
+
+
+def production_attempts(attempts):
+    return [row for row in attempts if not is_checker_reverification(row)]
+
+
 def task_budget_usage(attempts):
     usage = {}
-    for attempt in attempts:
+    for attempt in production_attempts(attempts):
         for owner in attempt.get("budget_workpack_ids", [attempt["workpack_id"]]):
             usage[owner] = usage.get(owner, 0) + 1
     return usage
@@ -76,8 +91,10 @@ def task_budget_usage(attempts):
 
 def attempt_budget(scope, attempts):
     usage = task_budget_usage(attempts)
-    return {"attempts_consumed": len(attempts),
-            "attempts_remaining": max(0, scope["max_attempts"] - len(attempts)),
+    charged = len(production_attempts(attempts))
+    return {"attempts_consumed": charged,
+            "attempts_remaining": max(0, scope["max_attempts"] - charged),
+            **({"checker_reverification_rounds": len(attempts) - charged} if charged != len(attempts) else {}),
             "task_attempts_consumed": usage,
             "task_attempts_remaining": {key: max(0, scope["max_task_attempts"] - count)
                                         for key, count in usage.items()}, "reset": False}
@@ -96,6 +113,7 @@ def affected_workpacks(plan, producers):
 def repair_budget_exhaustion(prepared, attempts, required):
     """Count each required task once, including shared owners after replanning."""
     required = set(required)
+    attempts = {key: row for key, row in attempts.items() if not is_checker_reverification(row)}
     scope, owners = prepared["scope"], prepared["task_budget_owners"]
     for key in sorted(required):
         for owner in owners[key]:
