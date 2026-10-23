@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "harness-foundry-chat-factory"
-version = "0.5.0"
+version = "1.0.0"
 description = "Implementation-first local factory for Harness Foundry v2.9."
 requires-python = ">=3.11"
 dependencies = []

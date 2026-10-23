@@ -3,7 +3,8 @@
 这份指南面向希望用 Codex 为自己的项目搭建 Harness 的使用者。
 运行包、案例需求和本文说明不自动启动任务；先确认要做什么，再批准具体执行范围。
 
-当前稳定版为 **0.5.0**，于 **2026-10-15** 发布，协议仍为 **2.9**。
+当前源码产品版本为 **1.0.0（未发布）**，协议仍为 **2.9**。本轮版本调整已通过针对性测试、源码检查及实际 version 入口核对，旧业务证据不改绑为 1.0.0 全部验收通过；收益未证实及 57 项未验边界见 [README](../README.md#验证状态)。
+已发布的历史稳定版为 **0.5.0**，于 **2026-10-15** 发布。
 资源接入和续修功能已进入 v0.5.0 运行包；旧版 tag、Release 和附件保持不变。
 
 ## Foundry 与 Harness 的关系
@@ -69,7 +70,9 @@ Windows 也不是本版已支持的同等执行环境。不要为了启动而关
 
 ## 第一次使用
 
-### 1. 获取运行包
+### 1. 获取当前源码或历史运行包
+
+评估 1.0.0 时获取当前 `main` 源码并记录实际提交；环境及分支能力见 [README](../README.md)。尚无 1.0.0 Release 或新固定运行包，不将源码快照当成已验收运行包。以下下载和校验说明仅适用于历史 v0.5.0。
 
 打开 [v0.5.0 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.5.0)，
 下载 Assets 中的 `Harness-Foundry-0.5.0-generic.zip` 和 `SHA256SUMS`，
@@ -79,7 +82,7 @@ Windows 也不是本版已支持的同等执行环境。不要为了启动而关
 [v0.2.0 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.2.0)
 及各自的 ZIP、SHA256SUMS 继续保留，不覆盖替换。
 
-本次发布直接复用已验收原 ZIP，来自固定提交 `a8312c65a21b3fb82175e7908611d49be422da7e`。
+历史 v0.5.0 发布直接复用已验收原 ZIP，来自固定提交 `a8312c65a21b3fb82175e7908611d49be422da7e`。
 从 Release 下载后的 SHA-256 应为
 `def7d377c5115bc55ea0992b26345bcea9fe42e7a0c9ba23cfcfe584b1be6127`。
 正式下载包已核对 53 个文件，并通过隔离 version/help 加载复验。
@@ -101,10 +104,10 @@ python3 tools/hffactory.py version --json
 python3 tools/hffactory.py --help
 ```
 
-v0.5.0 运行包应输出 `implementation_version: 0.5.0`，v0.4.0 历史包仍输出 `0.4.0`；
-两者的 `product_route` 均为 `GENERIC_REVIEWED_BUILD`，协议均为 `2.9`。
+当前源码已实际核对输出 `implementation_version: 1.0.0`；历史 v0.5.0 运行包应输出 `implementation_version: 0.5.0`，v0.4.0 历史包仍输出 `0.4.0`；
+上述三个版本的 `product_route` 均为 `GENERIC_REVIEWED_BUILD`，协议均为 `2.9`。
 这两条命令不会创建业务工程或调用模型。旧 v0.3.0、v0.2.0 包保持各自的版本。
-本轮功能、发布来源与检查依据见[v0.5.0 发布说明](releases/v0.5.0.md)，
+历史 v0.5.0 的功能、发布来源与检查依据见[v0.5.0 发布说明](releases/v0.5.0.md)，
 既有稳定版记录见[v0.4.0 发布说明](releases/v0.4.0.md)。
 
 ### 3. 准备材料并发起需求
