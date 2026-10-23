@@ -288,3 +288,13 @@ See `docs/GENERIC_BUILD_CLI.md` for eligibility and the preserved legacy boundar
 ## Same-scope host corrections
 
 Use `derive-build-correction` for a reviewed equivalent checker correction after preparing an explicit rebind, or `resolve-build-technical-attempt` for an evidenced technical false block. Their exact receipt fields are in the CLI guide. Preserve public assertions, original effects, source approval and old consumption. New checker-only rounds have distinct identities and do not charge production; historical charged checks remain charged. Do not use host receipts to waive a real decision, expand authority, override a stop or infer unknown effects. Recover completed reports before considering any new execution.
+
+## Optional RSI delivery
+
+When the reviewed task selects Wiki, Reviewer or TDD support, read the bundled
+[RSI delivery guide](../../../docs/RSI_DELIVERY.md). Use the existing material preparation
+entry `tools/prepare_rsi_delivery.py` and deliver its selected tools, knowledge and
+self-contained guidance as declared outputs. Reference the delivered guide from the
+target Harness instructions and prompts; do not rely on a Foundry checkout or chat.
+Keep independent expectations protected. Existing scope, budgets, generic Build and
+report recovery remain authoritative; no new mandatory query or approval step.

@@ -49,7 +49,7 @@ def package_revision(revision, output=None, *, repository=ROOT):
                 # narrower final distribution inventory.
                 for item in archive.infolist():
                     path = PurePosixPath(item.filename)
-                    if path.parts[0] not in {"src", "devtools", "resources", "docs", "examples",
+                    if path.parts[0] not in {"src", "devtools", "resources", "docs", "examples", "tools",
                                              "LICENSE", "pyproject.toml", "FACTORY_MANIFEST.json"}:
                         continue
                     if path.is_absolute() or ".." in path.parts or stat.S_ISLNK(item.external_attr >> 16):

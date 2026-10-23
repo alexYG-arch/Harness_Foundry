@@ -109,3 +109,18 @@ class Subject(unittest.TestCase):
 ''')
         self.assertEqual(result["failure_kind"], "INFRASTRUCTURE")
         self.assertEqual(result["errors"][0]["exception_type"], "PermissionError")
+
+    def test_success_ids_only_record_actual_success(self):
+        result=self.run_fixture('import unittest\nclass Subject(unittest.TestCase):\n'
+            ' def test_ok(self):\n  """References (test_subject.Subject.test_absent)."""\n  pass\n'
+            ' def test_fail(self): self.fail("assertion")\n'
+            ' def test_error(self): raise RuntimeError("error")\n'
+            ' @unittest.skip("optional")\n def test_skip(self): pass\n'
+            ' @unittest.expectedFailure\n def test_expected(self): self.fail("known")\n'
+            ' @unittest.expectedFailure\n def test_unexpected(self): pass\n'
+            ' def test_subtest(self):\n  with self.subTest(n=1): self.fail("subtest")\n')
+        self.assertEqual(result['successes'],['test_subject.Subject.test_ok'])
+        self.assertEqual(result['status'],'CHECKS_FAILED')
+        self.assertEqual(result['tests_run'],7)
+        self.assertTrue(result['failures']);self.assertTrue(result['errors']);self.assertTrue(result['skipped'])
+        self.assertTrue(result['expected_failures']);self.assertTrue(result['unexpected_successes'])

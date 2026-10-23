@@ -311,3 +311,13 @@ configuration receipt (when declared), current output binding and actual host de
 It appends a correction, never refunds attempts or accepts outputs. Existing `advance-build`
 can then finish the missing checks; a captured check is retrieved, never replayed.
 See `docs/GENERIC_BUILD_CLI.md` for eligibility and the preserved legacy boundary.
+
+## Optional RSI delivery
+
+When the reviewed task selects Wiki, Reviewer or TDD support, read the bundled
+[RSI delivery guide](../../../docs/RSI_DELIVERY.md). Use the existing material preparation
+entry `tools/prepare_rsi_delivery.py` and deliver its selected tools, knowledge and
+self-contained guidance as declared outputs. Reference the delivered guide from the
+target Harness instructions and prompts; do not rely on a Foundry checkout or chat.
+Keep independent expectations protected. Existing scope, budgets, generic Build and
+report recovery remain authoritative; no new mandatory query or approval step.

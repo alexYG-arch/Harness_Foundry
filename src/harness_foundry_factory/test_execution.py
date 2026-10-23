@@ -36,6 +36,11 @@ class StructuredResult(unittest.TextTestResult):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.error_details = []
+        self.success_ids = []
+
+    def addSuccess(self, test):
+        self.success_ids.append(test.id())
+        super().addSuccess(test)
 
     def _record_error(self, test, err):
         frames = traceback.extract_tb(err[2])
@@ -67,7 +72,7 @@ def collect_tests(project, pattern):
     passed = result.wasSuccessful() and not incomplete and not loader.errors
     return {"status": "CHECKS_PASS" if passed else "CHECKS_FAILED",
             "failure_kind": None if passed else kind, "phase": "UNITTEST",
-            "tests_run": result.testsRun,
+            "tests_run": result.testsRun, "successes": result.success_ids,
             "failures": [{"test": test.id(), "traceback": detail} for test, detail in result.failures],
             "errors": result.error_details, "discovery_errors": loader.errors,
             "skipped": [{"test": test.id(), "reason": reason} for test, reason in result.skipped],

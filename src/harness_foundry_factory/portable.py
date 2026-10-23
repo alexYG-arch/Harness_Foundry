@@ -39,6 +39,12 @@ ALLOWED_TOP_LEVEL_FILES = (
     "docs/CHAT_USAGE.md",
     "docs/GENERIC_BUILD_PLAN.md",
     "docs/HARNESS_DESIGN_GUIDE.md",
+    # Documentation link closure for historical offline diagnostics only.
+    "docs/RSI_ADOPTION.md",
+    "docs/RSI_DELIVERY.md",
+    "docs/RSI_CASE_INTAKE.md",
+    "docs/RSI_REVIEW_AND_TDD.md",
+    "docs/RSI_WIKI.md",
     "examples/harness-design/offline-naming.md",
     "examples/harness-design/audio-handoff.md",
     "docs/GENERIC_BUILD_CLI.md",

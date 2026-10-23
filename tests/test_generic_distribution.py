@@ -347,7 +347,7 @@ print(json.dumps(first))
 
     def source_copy(self):
         root = self.root / "copy"
-        for name in ("resources", "docs", "src", "examples"):
+        for name in ("resources", "docs", "src", "examples", "tools"):
             shutil.copytree(ROOT / name, root / name)
         for name in ("LICENSE", "pyproject.toml", "FACTORY_MANIFEST.json"):
             shutil.copy2(ROOT / name, root / name)

@@ -23,7 +23,7 @@ class CommittedDistributionTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve()
         self.repository = self.root / "source"
-        for name in ("src", "resources", "docs", "examples", "devtools"):
+        for name in ("src", "resources", "docs", "examples", "devtools", "tools"):
             shutil.copytree(ROOT / name, self.repository / name, ignore=shutil.ignore_patterns("__pycache__"))
         for name in ("LICENSE", "pyproject.toml", "FACTORY_MANIFEST.json"):
             shutil.copy2(ROOT / name, self.repository / name)
