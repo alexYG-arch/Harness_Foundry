@@ -13,7 +13,8 @@ Foundry 不是另一套模型，也不是固定行业流水线。Codex 负责需
 | 项目 | 状态 |
 |---|---|
 | 本 README 的累计升级范围 | 已发布 **v0.5.0 → 源码提交 `fd6f8a5`**，截至 2026-10-24 |
-| 当前开发分支 | `codex/latest-r3-main-repairs-20261021`；未合并 main、未发布新版 |
+| 当前默认分支 | `main`；由原 `codex/latest-r3-main-repairs-20261021` 更名，未发布新版 |
+| 旧主线历史 | `history/main-before-rsi-20261024`，保留旧 main 提交 `00348ca8` 及其历史；旧标签和 Release 不变 |
 | 稳定下载 | [v0.5.0 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.5.0)，2026-10-15 发布；原 tag 和附件保留 |
 | 协议与许可 | 协议 **2.9**；[MIT](LICENSE) |
 
@@ -138,7 +139,7 @@ Foundry 不是另一套模型，也不是固定行业流水线。Codex 负责需
 ### 选择稳定版或当前开发分支
 
 - **使用已发布版本**：从 [v0.5.0 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.5.0) 下载 `Harness-Foundry-0.5.0-generic.zip` 和 `SHA256SUMS`，保留隐藏的 `.agents/` 目录。它提供上述 v0.5.0 基础，不包含本分支新增项。
-- **评估本分支更新**：获取 `codex/latest-r3-main-repairs-20261021` 的源码，并记录实际提交。使用本 README 对应实现时，应核对 `fd6f8a5`。本分支尚无对应的新稳定 Release；已有固定包和能力包只按其自身清单及版本使用。
+- **评估本分支更新**：获取当前 `main` 的源码，并记录实际提交；它由原开发分支更名而来，成为默认分支不等于新版发布或未验项目通过。使用本 README 对应实现时，应核对 `fd6f8a5`。本分支尚无对应的新稳定 Release；已有固定包和能力包只按其自身清单及版本使用。
 
 GitHub 自动生成的 Source code ZIP 是源码快照，不等于已验收的通用运行包。旧项目不会因源码分支更新自动升级，切换前应核对实际加载路径、固定版本、交付材料和已有控制记录。
 
