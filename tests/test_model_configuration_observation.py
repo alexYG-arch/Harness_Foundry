@@ -7,6 +7,8 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+
+from tests.python_fixture import python_fixture_header
 from unittest.mock import patch
 
 from harness_foundry_factory.coding_process import CodingCommand, CodexCodingRunner, _dispatch_configuration
@@ -99,7 +101,7 @@ class ModelConfigurationObservationTests(unittest.TestCase):
         state = patch("harness_foundry_factory.coding_process.client_state_root", return_value=self.state)
         state.start(); self.addCleanup(state.stop)
         self.executable = self.root / "fake-client"
-        self.executable.write_text("#!" + sys.executable + "\n" + FIXTURE)
+        self.executable.write_text(python_fixture_header() + FIXTURE)
         self.executable.chmod(0o700)
         self.scope = LocalCommand.prepare(argv=[str(self.executable)], cwd=self.cwd,
             read_roots=[self.executable], write_roots=[self.cwd], timeout_seconds=10)

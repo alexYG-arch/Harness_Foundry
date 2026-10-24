@@ -14,6 +14,8 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+
+from tests.python_fixture import python_fixture_header
 from unittest.mock import patch
 
 from harness_foundry_factory.acceptance_contract import validate_acceptance_contracts
@@ -257,7 +259,7 @@ class CapabilityPrepareTests(unittest.TestCase):
     def test_appended_materials_retain_native_tool_and_runtime_read_fragment(self):
         (self.package / 'helper.txt').write_text('OLD NATIVE DEPENDENCY')
         (self.package / 'tool.py').write_text(
-            '#!' + sys.executable + '\nfrom pathlib import Path\n'
+            python_fixture_header() + 'from pathlib import Path\n'
             'print(Path(__file__).with_name("helper.txt").read_text())\n')
         (self.package / 'tool.py').chmod(0o700)
         self.descriptor['tools'][0].pop('interpreter')

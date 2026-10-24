@@ -8,6 +8,8 @@ import tempfile
 import time
 import tomllib
 import unittest
+
+from tests.python_fixture import python_fixture_header
 from unittest.mock import patch
 
 from harness_foundry_factory.coding_process import (
@@ -18,7 +20,7 @@ from harness_foundry_factory.local_process import LocalCommand, LocalProcessErro
 
 def fixture_executable(root):
     path = root / "test-only-codex"
-    path.write_text("#!" + sys.executable + "\n" + (Path(__file__).parent / "fixtures/coding_process_fixture.py").read_text())
+    path.write_text(python_fixture_header() + (Path(__file__).parent / "fixtures/coding_process_fixture.py").read_text())
     path.chmod(0o700)
     return path
 
@@ -65,6 +67,11 @@ class CodingProcessTests(unittest.TestCase):
         name = tomllib.loads("name=" + config["default_permissions"])["name"]
         profile = tomllib.loads("p=" + config["permissions." + name])["p"]
         self.assertEqual(profile["network"], {"enabled": False})
+        self.assertEqual(config["approval_policy"], '"never"')
+        self.assertEqual(config["web_search"], '"disabled"')
+        self.assertEqual(config["shell_environment_policy.inherit"], '"none"')
+        self.assertEqual(config["allow_login_shell"], "false")
+        self.assertEqual(profile["filesystem"][str(self.executable)], "read")
         self.assertEqual(profile["filesystem"][str(self.cwd)], "write")
         self.assertEqual(config["features.apps"], "false")
         self.assertEqual(config["features.plugins"], "false")

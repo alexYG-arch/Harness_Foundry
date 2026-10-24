@@ -13,6 +13,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+
+from tests.python_fixture import python_fixture_header
 from unittest.mock import patch
 
 from harness_foundry_factory.compiler import compile_start_package
@@ -442,7 +444,7 @@ class ControlledWorkpackRuntimeTests(unittest.TestCase):
         execution = self._execution_root(name)
         executable = self.root / f"{name}-protocol-fixture"
         source = (ROOT / "tests/fixtures/workpack_process_fixture.py").read_text()
-        executable.write_text(f"#!{Path(sys.executable).resolve()}\n" + source)
+        executable.write_text(python_fixture_header() + source)
         executable.chmod(0o755)
         overlay = self._overlay(execution)
         coding = overlay["commands"][0]

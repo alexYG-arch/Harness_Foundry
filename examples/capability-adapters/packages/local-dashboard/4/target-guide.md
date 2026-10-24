@@ -24,7 +24,7 @@ business execution or require a new install/approval process.
 ```json
 {
   "component": {
-    "name": "local-dashboard", "version": "3",
+    "name": "local-dashboard", "version": "4",
     "files": [{"path": "capability.json", "sha256": "replace-with-selected-hash"}]
   },
   "runs": [{

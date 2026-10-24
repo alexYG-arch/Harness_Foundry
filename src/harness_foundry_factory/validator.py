@@ -11811,6 +11811,7 @@ def _check_syntax(root: Path) -> list[dict[str, Any]]:
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             findings.append(_finding("JSON_INVALID", f"{path.relative_to(root)}: {exc}"))
     for path in sorted(root.rglob("*.jsonl")):
+        line_number = 0  # No line was read if decoding or I/O fails.
         try:
             for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
                 if line.strip():

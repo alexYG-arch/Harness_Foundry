@@ -7,6 +7,8 @@ import sys
 import tempfile
 import time
 import unittest
+
+from tests.python_fixture import python_fixture_header
 from unittest.mock import patch
 
 from harness_foundry_factory.coding_defaults import resolve_codex_defaults
@@ -104,7 +106,7 @@ class CodingDefaultsTests(unittest.TestCase):
                 resolve_codex_defaults(self.executable)
 
     def fixture(self, mode="normal"):
-        self.executable.write_text("#!" + sys.executable + "\n" + """
+        self.executable.write_text(python_fixture_header() + """
 import json, os, pathlib, sys, time
 root = pathlib.Path(__file__).parent
 (root/'pid').write_text(str(os.getpid()))

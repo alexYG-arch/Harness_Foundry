@@ -5,7 +5,7 @@
   "baseline_factory_id": "HARNESS_FOUNDRY_V2_8_CHAT_FACTORY_V0_1",
   "target_protocol_version": "2.9",
   "version": "1.0.0",
-  "release_status": "UNRELEASED",
+  "release_status": "RELEASED",
   "assurance_profile": "SELF_USE_LOCAL_TRUSTED_OPERATOR",
   "external_certification_claimed": false,
   "optional_security_hardening": "NOT_RUN",
@@ -46,7 +46,7 @@
     "harness_foundry_factory.legacy_history.read_history"
   ],
   "generic_build_update": {
-    "status": "IMPLEMENTED_UNRELEASED_SOURCE",
+    "status": "IMPLEMENTED_RELEASED_SOURCE",
     "available_cli": [
       "compile-build-plan",
       "record-build-plan",

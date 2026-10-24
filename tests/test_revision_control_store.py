@@ -1,6 +1,7 @@
 """Revision-based persistence uses the existing control store, without hashes."""
 
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 import json
 from pathlib import Path
 import sqlite3
@@ -39,7 +40,7 @@ class RevisionControlStoreTests(unittest.TestCase):
             self.assertEqual(report["last_revision"], 2)
             self.assertEqual(report["status"], "PASS")
             self.assertFalse(report["content_integrity_verified"])
-        with sqlite3.connect(self.path) as db:
+        with closing(sqlite3.connect(self.path)) as db, db:
             for table in ("control_events", "control_idempotency"):
                 columns = [row[1] for row in db.execute(f"PRAGMA table_info({table})")]
                 self.assertFalse(any("hash" in name or "sha256" in name for name in columns))
@@ -95,14 +96,14 @@ class RevisionControlStoreTests(unittest.TestCase):
             with self.assertRaises(sqlite3.IntegrityError):
                 self.store.append_batch("DATA", entries, idempotency_key="batch", created_at=NOW, expected_revision=0)
         self.assertEqual(self.store.list_events("DATA"), [])
-        with sqlite3.connect(self.path) as db:
+        with closing(sqlite3.connect(self.path)) as db, db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM control_idempotency").fetchone()[0], 0)
         self.assertEqual(len(self.store.append_batch("DATA", entries, idempotency_key="batch", created_at=NOW,
                                                      expected_revision=0)), 2)
 
     def test_format_mismatch_never_rewrites_existing_schema_or_history(self):
         self.append()
-        with sqlite3.connect(self.path) as db:
+        with closing(sqlite3.connect(self.path)) as db, db:
             db.execute("PRAGMA journal_mode=DELETE")
         before = self.path.read_bytes()
         with self.assertRaises(RequestValidationError):
@@ -111,7 +112,7 @@ class RevisionControlStoreTests(unittest.TestCase):
         legacy_path = self.path.parent / "legacy.sqlite3"
         legacy = ControlEventStore(legacy_path)
         legacy.append_batch("OLD", [{"event_type": "LEGACY", "payload": {}}], idempotency_key="old", created_at=NOW)
-        with sqlite3.connect(legacy_path) as db:
+        with closing(sqlite3.connect(legacy_path)) as db, db:
             db.execute("PRAGMA journal_mode=DELETE")
         before = legacy_path.read_bytes()
         for readonly in (False, True):
@@ -126,7 +127,7 @@ class RevisionControlStoreTests(unittest.TestCase):
         with self.assertRaises(RequestValidationError):
             readonly.append_batch("DATA", [{"event_type": "A", "payload": {}}],
                                   idempotency_key="next", created_at=NOW, expected_revision=1)
-        with sqlite3.connect(self.path) as db:
+        with closing(sqlite3.connect(self.path)) as db, db:
             for command in ("DELETE FROM control_events", "UPDATE control_events SET event_type='OTHER'"):
                 with self.assertRaises(sqlite3.IntegrityError):
                     db.execute(command)

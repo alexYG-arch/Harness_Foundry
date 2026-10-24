@@ -12,6 +12,8 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+
+from tests.python_fixture import python_fixture_header
 from unittest.mock import patch
 
 from harness_foundry_factory.build_authoring import record_build_plan_proposal
@@ -1101,7 +1103,7 @@ elif json.loads(Path("outputs/summary.json").read_text()) != {"rows":3,"invalid"
         # TEST ONLY sandbox-shaped local receiver. It deliberately provides no
         # OS isolation and cannot call Codex/model services.
         executable = self.root / "test-only-sandbox"
-        executable.write_text("#!" + sys.executable + "\n" + '''import subprocess, sys
+        executable.write_text(python_fixture_header() + '''import subprocess, sys
 args = sys.argv[1:]
 if args == ["sandbox", "--help"]:
     print("--permission-profile --include-managed-config --cd [COMMAND]")
@@ -1134,7 +1136,7 @@ else:
         # Exercise the real NativeBuildRunner and collector through a local
         # sandbox-shaped fixture. This is not OS isolation or model evidence.
         executable = self.root / "test-only-sandbox"
-        executable.write_text("#!" + sys.executable + "\n" + '''import subprocess, sys
+        executable.write_text(python_fixture_header() + '''import subprocess, sys
 args = sys.argv[1:]
 if args == ["sandbox", "--help"]:
     print("--permission-profile --include-managed-config --cd [COMMAND]")

@@ -1,6 +1,6 @@
 # Harness Foundry — generic Codex runtime
 
-Product version **1.0.0**; protocol **2.9**. This is a release-preparation candidate.
+Product version **1.0.0**; protocol **2.9**. This is the v1.0.0 release runtime.
 It adds declared verification resources, protected product copies, controlled repair
 and single-attempt handoff. Existing published releases remain unchanged.
 

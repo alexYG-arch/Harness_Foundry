@@ -30,6 +30,8 @@ PORTABLE_MANIFEST_NAME = "PORTABLE_LOCAL_PACKAGE_MANIFEST.json"
 PACKAGE_ROOT_URI = "harness-resource://package"
 ASSURANCE_PROFILE = "SELF_USE_LOCAL_TRUSTED_OPERATOR"
 ALLOWED_TOP_LEVEL_FILES = (
+    # Source template executes in the generated Candidate, not the host package.
+    "src/harness_foundry_factory/resources/portable_self_check.py.in",
     "AGENTS.md",
     "FACTORY_MANIFEST.json",
     "README.md",

@@ -28,3 +28,19 @@ PYTHONPATH=src .venv/bin/python -B -m unittest discover -s tests -p 'test_*.py' 
 `tools/lock_spec.py --verify spec_lock/HF28_SPEC_LOCK.json`；其旧路径/身份约束不变。
 `tools/lock_spec.py` 默认只输出当前开发绑定。它的显式写锁选项不属于正常测试准备，
 不得为绕过规范差异而重锁；升级规范应单独评审并保留旧版。
+
+## 历史自检源码资源
+
+历史编译器生成的 `tools/self_check.py` 维护源位于
+`src/harness_foundry_factory/resources/portable_self_check.py.in`。编译器按自身安装位置读取，
+仍通过原 `_write_text` 写出；不得依赖当前工作目录或开发目录补文件。
+源码分发及 setuptools 包需要携带此资源；`pyproject.toml` 已显式声明。
+修改资源时应执行 `tests/test_portable_self_check_resource.py` 及已有实际自检正常／拒错回归。
+本次提取保持提交 `3542301` 的生成字节不变，不拆分内部函数或改变判定逻辑。
+通用运行 ZIP 原本不包含历史编译器，仍不引入这份资源或历史规范作为运行依赖，
+也不恢复已退役的生产入口。
+
+此资源使用 `.py.in` 后缀表明其导入路径属于生成后的 Candidate，不能当作
+Foundry 宿主模块推断依赖。历史兼容打包清单显式包含它，原文本泄漏检查保留；
+生成文件的语法及行为由资源测试和原自检回归核验，不把 `harness_foundry_runtime`
+误声明为需要另行安装的宿主依赖。

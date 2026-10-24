@@ -43,7 +43,7 @@ class ProductIdentityTests(unittest.TestCase):
             manifest["target_protocol_version"], TARGET_PROTOCOL_VERSION
         )
         self.assertEqual(manifest["version"], FACTORY_VERSION)
-        self.assertEqual(manifest["release_status"], "UNRELEASED")
+        self.assertEqual(manifest["release_status"], "RELEASED")
         self.assertEqual(
             manifest["assurance_profile"], "SELF_USE_LOCAL_TRUSTED_OPERATOR"
         )

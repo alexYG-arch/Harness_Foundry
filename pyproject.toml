@@ -28,3 +28,6 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+harness_foundry_factory = ["resources/portable_self_check.py.in"]

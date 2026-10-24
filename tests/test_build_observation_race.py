@@ -4,6 +4,8 @@ from pathlib import Path
 import sys
 import unittest
 
+from tests.python_fixture import python_fixture_header
+
 import test_build_runtime as support
 from harness_foundry_factory.build_reconciliation import reconcile_build_observations
 from harness_foundry_factory.build_runtime import BuildController, NativeBuildRunner
@@ -16,7 +18,7 @@ class BuildObservationRaceTests(unittest.TestCase):
         self.f.setUp()
         self.addCleanup(self.f.doCleanups)
         receiver = self.f.root / "fixture-only-local-receiver"
-        receiver.write_text("#!" + sys.executable + "\n" + '''import subprocess, sys
+        receiver.write_text(python_fixture_header() + '''import subprocess, sys
 args = sys.argv[1:]
 if args == ["sandbox", "--help"]:
     print("--permission-profile --include-managed-config --cd [COMMAND]")

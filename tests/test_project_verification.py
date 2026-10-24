@@ -14,6 +14,8 @@ import sys
 import tempfile
 import unittest
 
+from tests.python_fixture import python_fixture_header
+
 from harness_foundry_factory.project_verification import (
     COMMAND_ID, EVIDENCE_SCOPE, plan_project_verification, observe_project_verification,
     owned_obligation_bindings,
@@ -47,7 +49,7 @@ def write_project(root, *, broken=False, frozen_broken=False):
 
 def test_receiver(root):
     path = root / "test-only-offline-receiver"
-    path.write_text(f"#!{sys.executable}\n" + '''
+    path.write_text(python_fixture_header() + '''
 # TEST ONLY: process transport, NOT an OS sandbox or model service.
 import subprocess, sys
 if '--help' in sys.argv:

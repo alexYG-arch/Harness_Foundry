@@ -1,3 +1,8 @@
+> **HISTORICAL_ONLY — 历史参考，不是当前操作指南。**
+> 下文保留旧路线及命令的原始说明；这些生产入口已退役，不得执行或绕过公开入口调用。
+> 当前搭建请从 [Skill](../SKILL.md) 和 [Generic Build CLI](../../../../docs/GENERIC_BUILD_CLI.md) 进入。
+> 本文件不随通用运行 ZIP 分发；历史兼容回归不恢复生产路线。
+
 # Factory Chat contract
 
 Run all commands from the Factory repository root. Request files must be absolute paths. Each mutating call emits exactly one JSON object on stdout.

@@ -3,7 +3,7 @@
 这份指南面向希望用 Codex 为自己的项目搭建 Harness 的使用者。
 运行包、案例需求和本文说明不自动启动任务；先确认要做什么，再批准具体执行范围。
 
-当前源码产品版本为 **1.0.0（未发布）**，协议仍为 **2.9**。本轮版本调整已通过针对性测试、源码检查及实际 version 入口核对，旧业务证据不改绑为 1.0.0 全部验收通过；收益未证实及 57 项未验边界见 [README](../README.md#验证状态)。
+当前产品版本为 **1.0.0**，协议仍为 **2.9**。下载和固定版本见[1.0.0发布说明](releases/v1.0.0.md)。历史业务证据不改绑为新版本全部验收通过；收益未证实及各层验证边界见 [README](../README.md#验证状态)。
 已发布的历史稳定版为 **0.5.0**，于 **2026-10-15** 发布。
 资源接入和续修功能已进入 v0.5.0 运行包；旧版 tag、Release 和附件保持不变。
 
@@ -70,14 +70,14 @@ Windows 也不是本版已支持的同等执行环境。不要为了启动而关
 
 ## 第一次使用
 
-### 1. 获取当前源码或历史运行包
+### 1. 获取1.0.0固定运行包或源码
 
-评估 1.0.0 时获取当前 `main` 源码并记录实际提交；环境及分支能力见 [README](../README.md)。尚无 1.0.0 Release 或新固定运行包，不将源码快照当成已验收运行包。以下下载和校验说明仅适用于历史 v0.5.0。
-
-打开 [v0.5.0 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.5.0)，
-下载 Assets 中的 `Harness-Foundry-0.5.0-generic.zip` 和 `SHA256SUMS`，
+使用1.0.0时从 [v1.0.0 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v1.0.0)
+下载 Assets 中的 `Harness-Foundry-1.0.0-generic.zip` 和 `SHA256SUMS`，核对校验值；维护源码使用同名标签。
+可选能力版本从同一源码标签的 `examples/capability-adapters/packages/` 获取，按声明准备；第三方SDK不随运行ZIP交付。
 保留隐藏的 `.agents/` 目录完整解压。
-旧 [v0.4.0 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.4.0)、
+旧 [v0.5.0 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.5.0)、
+[v0.4.0 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.4.0)、
 [v0.3.0 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.3.0) 和
 [v0.2.0 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.2.0)
 及各自的 ZIP、SHA256SUMS 继续保留，不覆盖替换。
