@@ -4,12 +4,16 @@
 
 当前唯一新建路线为完整来源 → 已审阅搭建文档 → Requirement/Plan → 具体范围批准 →
 单一 BuildController 的实施、独立检查、修复与恢复。SQLite REVISION_V1 是唯一权威；
-新 Plan 1.1 的环境/输入/效果记录进入同一控制器，不新建 Hash 链或恢复引擎。
+当前 Plan 1.2 保留 1.1 的环境/输入/效果记录，并增加可选验收资源引用；
+这些记录仍进入同一控制器，不新建 Hash 链或恢复引擎。
 见[2026-10-10 升级说明](FOUNDRY_UPGRADE_2026_10_10.md)和[通用计划](GENERIC_BUILD_PLAN.md)。
 
 ## 历史架构存档：41 项核心路径（不再是当前新建路线）
 
 以下保留历史含义，不作为当前 CLI 路由或执行授权。
+`FACTORY_MANIFEST.json` 的 `core_completion` 保留原历史完成条件；
+`historical_capability_scope` 与 `core_completion_scope` 明确其仅用于历史基线回归，
+不能代替当前通用路由、发行包或真实项目验收。
 
 ```text
 Requirement / Architecture inputs

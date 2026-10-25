@@ -74,6 +74,25 @@ class GenericDistributionTests(unittest.TestCase):
         self.assertFalse((self.bundle / "runs").exists())
         self.assertFalse((self.bundle / "spec").exists())
 
+    def test_relocated_argument_errors_and_help_need_no_development_dependencies(self):
+        launcher = str(self.bundle / "tools/hffactory.py")
+        for argv in (["bogus", "--json"], ["compile-build-plan", "--json"],
+                     ["read-build", "--control-db", str(self.root / "unopened.sqlite3"),
+                      "--program-id", "X", "--json", "--human"]):
+            with self.subTest(argv=argv):
+                result = self.run_python([launcher, *argv])
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertEqual(result.stderr, "")
+                response = json.loads(result.stdout)
+                self.assertEqual(response["error"]["details"]["reason_code"], "CLI_ARGUMENT_ERROR")
+                self.assertFalse(response["writes_performed"])
+                self.assertFalse(response["execution_started"])
+        self.assertFalse((self.root / "unopened.sqlite3").exists())
+        help_result = self.run_python([launcher, "compile-build-plan", "--help", "--json"])
+        self.assertEqual(help_result.returncode, 0, help_result.stderr)
+        self.assertIn("usage:", help_result.stdout)
+        self.assertEqual(self.cli("version")["implementation_version"], "1.0.0")
+
     def test_reproducible_archive_never_overwrites(self):
         second = self.root / "second.zip"
         packager.package(second)

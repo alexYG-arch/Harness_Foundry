@@ -1,6 +1,6 @@
 """Public retirement and raw historical reads; never use a real Program."""
 
-from contextlib import redirect_stdout
+from contextlib import redirect_stdout, redirect_stderr
 from io import StringIO
 import json
 import os
@@ -73,6 +73,55 @@ class RouteRetirementTests(unittest.TestCase):
         with redirect_stdout(StringIO()) as stream:
             self.assertEqual(main(["version", "--json"]), 0)
         self.assertEqual(json.loads(stream.getvalue())["product_route"], "GENERIC_REVIEWED_BUILD")
+
+    def test_argument_errors_are_json_before_request_read_or_dispatch(self):
+        cases = (
+            [], ["bogus", "--json"], ["bogus"],
+            ["compile-build-plan", "--json"],
+            ["compile-build-plan", "--request"],
+            ["version", "--unexpected", "--json"],
+            ["record-build-plan", "--request", str(self.root / "missing.json"),
+             "--control-db", str(self.database), "--unexpected", "--json"],
+            ["read-build", "--control-db", str(self.database), "--program-id", "X",
+             "--json", "--human"],
+        )
+        for argv in cases:
+            with self.subTest(argv=argv), redirect_stdout(StringIO()) as out, \
+                    redirect_stderr(StringIO()) as err, \
+                    patch("harness_foundry_factory.build_cli._load_request", side_effect=AssertionError("no request read")), \
+                    patch("sqlite3.connect", side_effect=AssertionError("no database open")), \
+                    patch("subprocess.Popen", side_effect=AssertionError("no process")):
+                self.assertEqual(main(argv), 2)
+            result = json.loads(out.getvalue())
+            self.assertEqual(err.getvalue(), "")
+            self.assertEqual(result["status"], "ERROR")
+            self.assertEqual(result["error"]["code"], "REQUEST_VALIDATION_ERROR")
+            self.assertEqual(result["error"]["details"]["reason_code"], "CLI_ARGUMENT_ERROR")
+            self.assertTrue(result["error"]["message"])
+            self.assertFalse(result["writes_performed"])
+            self.assertFalse(result["execution_started"])
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_real_launchers_preserve_json_errors_and_help(self):
+        environment = {**os.environ, "PYTHONPATH": str(ROOT / "src"), "PYTHONDONTWRITEBYTECODE": "1"}
+        launchers = ([str(ROOT / "tools/hffactory.py")],
+                     ["-m", "harness_foundry_factory.cli"],
+                     ["-m", "harness_foundry_factory.build_cli"])
+        for launcher in launchers:
+            for argv in (["bogus", "--json"], ["compile-build-plan", "--json"]):
+                with self.subTest(launcher=launcher, argv=argv):
+                    result = subprocess.run([sys.executable, "-B", *launcher, *argv], cwd=self.root,
+                                            env=environment, capture_output=True, text=True, timeout=30)
+                    self.assertEqual(result.returncode, 2, result.stderr)
+                    self.assertEqual(result.stderr, "")
+                    self.assertEqual(json.loads(result.stdout)["error"]["details"]["reason_code"], "CLI_ARGUMENT_ERROR")
+            for argv in (["--help"], ["compile-build-plan", "--help", "--json"]):
+                result = subprocess.run([sys.executable, "-B", *launcher, *argv], cwd=self.root,
+                                        env=environment, capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stderr, "")
+                self.assertIn("usage:", result.stdout)
+        self.assertEqual(list(self.root.iterdir()), [])
 
     def test_manifest_matches_production_commands_not_historical_api(self):
         from harness_foundry_factory.build_cli import BUILD_COMMANDS

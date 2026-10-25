@@ -408,9 +408,14 @@ class BuildEntrypointTests(unittest.TestCase):
         for argv in (["read-build", "--control-db", str(self.database), "--program-id", self.f.program,
                       "--json", "--human"], ["version", "--human"],
                      ["advance-build", "--control-db", str(self.database), "--request", "-", "--human"]):
-            with self.subTest(argv=argv), redirect_stderr(StringIO()), self.assertRaises(SystemExit) as stopped:
-                main(argv)
-            self.assertEqual(stopped.exception.code, 2)
+            with self.subTest(argv=argv), redirect_stdout(StringIO()) as stream, redirect_stderr(StringIO()) as err:
+                self.assertEqual(main(argv), 2)
+            result = json.loads(stream.getvalue())
+            self.assertEqual(result["error"]["code"], "REQUEST_VALIDATION_ERROR")
+            self.assertEqual(result["error"]["details"]["reason_code"], "CLI_ARGUMENT_ERROR")
+            self.assertFalse(result["writes_performed"])
+            self.assertFalse(result["execution_started"])
+            self.assertEqual(err.getvalue(), "")
         self.assertFalse(self.database.exists())
 
     def test_human_render_keeps_history_recovery_and_failure_evidence(self):

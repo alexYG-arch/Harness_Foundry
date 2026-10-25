@@ -44,6 +44,13 @@ class ProductIdentityTests(unittest.TestCase):
         )
         self.assertEqual(manifest["version"], FACTORY_VERSION)
         self.assertEqual(manifest["release_status"], "RELEASED")
+        self.assertEqual(manifest["verification_resources_update"]["status"], "IMPLEMENTED_RELEASED_SOURCE")
+        self.assertEqual(manifest["verification_resources_update"]["plan_version"], "1.2")
+        self.assertEqual(manifest["verification_resources_update"]["real_user_service_acceptance"], "NOT_RUN")
+        self.assertEqual(manifest["core_completion"],
+                         "OFFICIAL_CORE_VALIDATION_PASS_AND_PORTABLE_LOCAL_STARTUP_SMOKE_PASS")
+        self.assertEqual(manifest["core_completion_scope"],
+                         "HISTORICAL_BASELINE_REGRESSION_NOT_CURRENT_PRODUCT_OR_RELEASE_ACCEPTANCE")
         self.assertEqual(
             manifest["assurance_profile"], "SELF_USE_LOCAL_TRUSTED_OPERATOR"
         )

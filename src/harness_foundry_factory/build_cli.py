@@ -28,8 +28,13 @@ def _load_request(location):
     return value
 
 
+class _ArgumentParser(argparse.ArgumentParser):
+    def error(self, message):
+        raise RequestValidationError(message, details={"reason_code": "CLI_ARGUMENT_ERROR"})
+
+
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog="hffactory")
+    parser = _ArgumentParser(prog="hffactory")
     commands = parser.add_subparsers(dest="command", required=True)
     for name in ("version", *sorted(BUILD_COMMANDS)):
         command = commands.add_parser(name)
@@ -45,7 +50,13 @@ def main(argv=None):
             command.add_argument("--database", required=True)
         elif name not in {"version", "compile-build-plan"}:
             command.add_argument("--control-db", required=True)
-    args = parser.parse_args(argv)
+    try:
+        args = parser.parse_args(argv)
+    except RequestValidationError as exc:
+        result = exc.as_response()
+        result.update(writes_performed=False, execution_started=False)
+        print(canonical_json(result))
+        return exc.exit_code
     code = 0
     try:
         if args.command == "version":

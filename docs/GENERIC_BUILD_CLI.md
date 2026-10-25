@@ -38,6 +38,14 @@ Review，再使用本入口；原始材料保留追溯角色。后台检查全�
 
 ## 调用
 
+通用入口的参数解析错误（未知命令、缺少必填参数、未知选项、互斥选项）向 stdout
+输出一个 JSON 错误对象，退出码为 2；是否显式提供 `--json` 不改变该错误格式。
+错误码为 `REQUEST_VALIDATION_ERROR`，`error.details.reason_code` 为 `CLI_ARGUMENT_ERROR`，
+并明确 `writes_performed=false`、`execution_started=false`。解析失败不读取请求或打开控制库，
+也不启动业务执行。`--help` 仍输出帮助文本并以 0 退出，正常调用与历史入口退役语义不变。
+源码诊断命令不属于本次参数格式调整；通用发行包不提供 `verify-spec`、`validate-core`，
+运行包的初始自检使用 `version --json` 和 `--help`。
+
 宿主要求 Python 3.11 或以上；用已选环境的绝对解释器路径调用
 `/absolute/project/.venv/bin/python -B tools/hffactory.py COMMAND --json`。
 文档中的 `python3` 是满足此版本要求的解释器示意，不表示可以在运行或接续时重新搜索 PATH。
