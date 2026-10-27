@@ -1,8 +1,10 @@
 # Harness Foundry — generic Codex runtime
 
-Product version **1.0.0**; protocol **2.9**. This is the v1.0.0 release runtime.
-It adds declared verification resources, protected product copies, controlled repair
-and single-attempt handoff. Existing published releases remain unchanged.
+Product version **1.1.0**; protocol **2.9**. This is the v1.1.0 release runtime.
+It preserves declared verification resources, protected product copies, controlled
+repair and single-attempt handoff. It adds on-demand control reads, optional
+revision-body deduplication for new databases and baseline/delta report tools.
+Existing published releases remain unchanged.
 
 Open this directory as a Codex project. Its local `harness-foundry-build` Skill
 guides a build from clarified requirements and a human-reviewed build document.
@@ -22,8 +24,10 @@ python3 tools/hffactory.py --help
 Describe the Harness goal and provide complete requirements/project materials.
 Foundry first displays a versioned build document for your review; it must not
 start construction merely because all questions or automatic checks are satisfied.
-After confirmation it presents a separate bounded runtime scope. That approval
-covers in-scope execution, checking, repair and resume, not publication or expansion.
+When the complete contract and bounded runtime scope are ready, one explicit
+confirmation can cover both; the original two-step route remains available. That
+approval covers in-scope execution, checking, repair and resume, not publication
+or expansion.
 No account tokens or author configuration are bundled. Use your own legitimate
 Codex login. Native execution currently targets POSIX hosts and requires explicit
 Codex executable, model/service, local tool and instruction-read bindings; a
@@ -95,7 +99,12 @@ This does not retroactively update existing projects or prove model writing qual
 This generic distribution intentionally omits historical Candidate/epoch commands,
 fixed three-project protocols and domain-specific workflows. It does not migrate
 or reopen old authoring databases. Existing REVISION_V1 generic control data keeps
-its format; opening another format fails before rewriting it. Historical source
+its format. New databases may explicitly select REVISION_BODIES_V1 for same-database
+body deduplication; unknown formats fail before rewriting. Isolated database-copy
+conversion is a developer-source tool, not included here and never automatic.
+Optional report query/read-source entry points are described in
+[report handoff](docs/RSI_REPORT_HANDOFF.md); they do not accept or dispatch work.
+Historical source
 regressions are retained in the development repository, not shipped as executable
 compatibility routes. The old 41-capability baseline is not a certification of this
 distribution. See PACKAGE_MANIFEST.json for product identity and packaged commands.
@@ -109,11 +118,14 @@ Validate and use the exact archive intended for delivery. A package inventory,
 archive checksum or successful CLI command is not evidence that a target Harness
 meets its requirements. Complete release acceptance needs the declared same-package
 new-project and existing-project evidence, plus closure of known in-scope defects.
-This candidate does not itself assert publication or CI success. Its final validation
-and release information will identify the selected commit and exact archive.
+PACKAGE_MANIFEST.json describes files and interfaces, not business acceptance.
+The [v1.1.0 release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v1.1.0)
+identifies the selected commit, exact archive and applicable validation. Historical
+2436-case coverage is cross-batch evidence for a broader development snapshot,
+not this runtime's test count; benefits and real old-database adoption remain unverified.
 Existing tags and archives remain available from
 [published releases](https://github.com/alexYG-arch/Harness_Foundry/releases).
-This engineering candidate does not replace a published release.
+This version does not replace older release assets or upgrade existing deployments automatically.
 Use a separate directory for an upgrade; code rollback does not undo effects,
 revive authorizations or permit silent database downgrades.
 
