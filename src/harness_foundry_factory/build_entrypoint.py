@@ -19,7 +19,7 @@ from .build_runtime import (
     record_source_snapshot, revoke_build_authorization,
     resolve_build_attempt,
 )
-from .build_types import RequestValidationError, RevisionConflictError, SAFE_ID_RE, canonical_json
+from .build_types import RequestValidationError, RevisionConflictError, SAFE_ID_RE, canonical_json, authorization_reason
 from .revision_store import RevisionControlEventStore as ControlEventStore
 from .process_observation import CommandObservation
 
@@ -100,8 +100,11 @@ def _scope_readback(event, events):
             validate_authority_chain(events, prepared_id, datetime.now(timezone.utc))
         except RequestValidationError as exc:
             authority["authority_unavailable_reason"] = str(exc)
+            reason = authorization_reason(exc)
+            authority["authority_unavailable_reason_code"] = reason
             if state == "APPROVED":
-                state = "REVOKED" if "revoked" in str(exc) else "EXPIRED" if "expired" in str(exc) else "APPROVAL_REQUIRED"
+                state = ("REVOKED" if reason == "BUILD_AUTHORIZATION_REVOKED" else
+                         "EXPIRED" if reason == "BUILD_AUTHORIZATION_EXPIRED" else "APPROVAL_REQUIRED")
     source = next(row for row in events if row["event_id"] == payload["source_event_id"])
     proposal = next(row for row in events if row["event_id"] == payload["proposal_event_id"])
     attempts = [row["payload"] for row in events if row["event_type"] == "BUILD_ATTEMPT_STARTED"
@@ -143,13 +146,14 @@ def read_build(control_db, program_id):
         # first proposal. Read that capture without inventing a runnable Plan,
         # budget or approval; retry the original materialization request.
         return {"status": "BUILD_PREVIEW_MATERIALIZATION_PENDING", "program_id": program_id,
+                "physical_format": store.physical_format,
                 "stream_revision": len(events),
                 "confirmed_previews": [{"event_id": row["event_id"], **row["payload"]} for row in events],
                 "proposal": None, "sources": [], "authorizations": [], "attempts": [],
                 "next_action": "RESUME_ORIGINAL_PREVIEW_MATERIALIZATION",
                 "runtime_authorized": False, "writes_performed": False,
                 "execution_started": False, "harness_e2e_verified": False}
-    proposal = read_build_plan_proposal(store, program_id)
+    proposal = read_build_plan_proposal(store, program_id, events=events)
     latest_proposal = next(row for row in events if row["event_id"] == proposal["proposal_binding"]["proposal_event_id"])
     attempts = project_readback_attempts(events)
     # Host observation inspection is the read-only I/O boundary. It is not part
@@ -158,7 +162,7 @@ def read_build(control_db, program_id):
         command = row.get("last_command", {})
         if row["status"] in {"UNKNOWN_SIDE_EFFECT", "IN_FLIGHT"} and command.get("observation_root"):
             row["recovery"]["host_observation"] = CommandObservation.inspect(command["observation_root"])
-    return {"status": "BUILD_READBACK", "program_id": program_id, "stream_revision": len(events),
+    return {"status": "BUILD_READBACK", "physical_format": store.physical_format, "program_id": program_id, "stream_revision": len(events),
             "proposal": proposal, "requirement_ir": latest_proposal["payload"]["requirement_ir"],
             "document_review": review_summary(latest_proposal["payload"].get("document_review")),
             "confirmed_previews": [{"event_id": row["event_id"], **row["payload"]}
@@ -202,7 +206,8 @@ def apply_build_request(command, request, control_db):
                      and len(set(basis)) == len(basis), "invalid codex_handoff basis_attempt_ids")
     else:
         required = MUTATIONS.get(command, set()) | {"expected_revision", "idempotency_key"}
-        optional = ({"continuation_of"} if command == "request-build-repair" else
+        optional = ({"physical_format"} if command == "record-build-plan" else
+                    {"continuation_of"} if command == "request-build-repair" else
                     {"rebind_from", "follow_codex_defaults"} if command == "prepare-build-authorization" else
                     {"host_reconciliation"} if command == "resolve-build-attempt" else set())
         _require(command in MUTATIONS and required <= set(request) <= required | optional,
@@ -234,16 +239,16 @@ def apply_build_request(command, request, control_db):
             _require(isinstance(request["reason"], str) and request["reason"].strip(), "revocation reason is required")
     # Existing incompatible/historical stores are inspected read-only first.
     if database.exists():
-        existing = ControlEventStore(database, read_only=True, storage_format="REVISION_V1")
+        existing = ControlEventStore(database, read_only=True, storage_format="REVISION_V1", physical_format=request.get("physical_format"))
         _require(set(existing.list_program_ids()) <= {program}, "controller belongs to another Program")
-        if command == "advance-build" and len(existing.list_events(program)) != request["expected_revision"]:
+        if command == "advance-build" and existing.event_count(program) != request["expected_revision"]:
             raise RevisionConflictError("re-read current build progress before dispatch")
-    store = ControlEventStore(database, storage_format="REVISION_V1")
+    store = ControlEventStore(database, storage_format="REVISION_V1", physical_format=request.get("physical_format"))
     if command == "advance-build":
         return {**BuildController(store, program).advance(
                     request["prepared_event_id"], advance_mode=request.get("advance_mode", "CONTINUOUS"),
                     codex_handoff=request.get("codex_handoff")),
-                "program_id": program, "stream_revision": len(store.list_events(program)), "harness_e2e_verified": False}
+                "program_id": program, "stream_revision": store.event_count(program), "harness_e2e_verified": False}
     kwargs = {"expected_revision": request["expected_revision"], "idempotency_key": request["idempotency_key"],
               "created_at": datetime.now(timezone.utc).isoformat()}
     if command == "record-build-plan":
@@ -291,7 +296,7 @@ def apply_build_request(command, request, control_db):
         event = reassess_build_attempt(BuildController(store, program), request["prepared_event_id"],
             request["attempt_id"], evidence=request["evidence"], human_message_ref=human_ref, **kwargs)
         return {"status": "BUILD_REASSESSMENT_RECORDED_NOT_ACCEPTED", "program_id": program,
-                "event_id": event["event_id"], "stream_revision": len(store.list_events(program)),
+                "event_id": event["event_id"], "stream_revision": store.event_count(program),
                 "prepared_event_id": request["prepared_event_id"], "attempt_id": request["attempt_id"],
                 "control_state_write": True, "target_write": False, "execution_started": False,
                 "budget_reset": False, "old_output_accepted": False, "harness_e2e_verified": False}

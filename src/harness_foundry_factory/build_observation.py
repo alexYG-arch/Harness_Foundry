@@ -23,12 +23,13 @@ def read_build_scope(control_db, program_id, prepared_event_id, *, include_workf
     if not isinstance(prepared_event_id, str) or not prepared_event_id.strip():
         raise RequestValidationError("an explicit prepared event ID is required")
     store = RevisionControlEventStore(_database(control_db), read_only=True, storage_format="REVISION_V1")
-    events = store.list_events(program_id)
+    events = store.list_control_events(program_id)
     prepared = next((event for event in events
                      if event["event_type"] == "BUILD_AUTHORIZATION_PREPARED"
                      and event["event_id"] == prepared_event_id), None)
     if prepared is None:
         raise RequestValidationError("prepared scope does not exist for this Program")
+    store.hydrate_source_event(program_id, events, prepared["payload"]["source_event_id"], include_text=False)
     execution_proposal_id = next((event["payload"]["proposal_event_id"] for event in reversed(events)
                                   if event["event_type"] == "BUILD_ATTEMPT_STARTED"
                                   and event["payload"].get("prepared_event_id") == prepared_event_id),

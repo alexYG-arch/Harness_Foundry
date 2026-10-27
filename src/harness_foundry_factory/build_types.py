@@ -35,6 +35,22 @@ class RequestValidationError(FactoryError):
     exit_code = 2
 
 
+class BuildAuthorizationError(RequestValidationError):
+    """Keep the public error contract; classify authorization without parsing prose."""
+
+    def __init__(self, message, *, reason_code):
+        super().__init__(message, details={"reason_code": reason_code})
+
+
+def authorization_reason(error):
+    reason = error.details.get("reason_code")
+    return reason if reason in {
+        "BUILD_AUTHORIZATION_ABSENT", "BUILD_AUTHORIZATION_REVOKED",
+        "BUILD_AUTHORIZATION_EXPIRED", "BUILD_AUTHORIZATION_SUPERSEDED",
+        "BUILD_AUTHORIZATION_BINDING_INVALID",
+    } else "BUILD_AUTHORIZATION_INVALID"
+
+
 class StateConflictError(FactoryError):
     code = "STATE_HASH_CONFLICT"  # Historical error spelling, not a new hash operation.
     exit_code = 4

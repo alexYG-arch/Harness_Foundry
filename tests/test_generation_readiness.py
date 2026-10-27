@@ -694,6 +694,7 @@ class GenerationReadinessTests(unittest.TestCase):
                     "lab_protocol_contract_checks.py",
                     "build_types.py",
                     "revision_store.py",
+                    "revision_bodies.py",
                     "identity.py",
                     "resource_network.py",
                 },
@@ -711,6 +712,7 @@ class GenerationReadinessTests(unittest.TestCase):
                 "lab_protocol_contract_checks.py",
                 "build_types.py",
                 "revision_store.py",
+                "revision_bodies.py",
                 "identity.py",
                 "resource_network.py",
             ):

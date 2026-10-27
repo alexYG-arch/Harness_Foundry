@@ -131,6 +131,7 @@ FACTORY_IMPLEMENTATION_PATHS = (
     "src/harness_foundry_factory/store.py",
     "src/harness_foundry_factory/build_types.py",
     "src/harness_foundry_factory/revision_store.py",
+    "src/harness_foundry_factory/revision_bodies.py",
     "src/harness_foundry_factory/identity.py",
     "src/harness_foundry_factory/coding_events.py",
     "src/harness_foundry_factory/identity_derivation.py",
@@ -7451,7 +7452,7 @@ def _write_common_runtime_dependencies(runtime_root: Path, *, coding: bool = Fal
     not a retroactive edit of an epoch's frozen control-module declaration.
     Independent relative-import closure and relocated imports verify the result.
     """
-    names = ["build_types.py", "revision_store.py", "identity.py", "resource_network.py"]
+    names = ["build_types.py", "revision_store.py", "revision_bodies.py", "identity.py", "resource_network.py"]
     if coding:
         names.extend(("coding_events.py", "coding_defaults.py", "resource_credentials.py"))
     for filename in names:

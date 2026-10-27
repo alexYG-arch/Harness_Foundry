@@ -188,7 +188,7 @@ class FoundryDashboardTests(unittest.TestCase):
         before = f.events(); old_proposal = f.proposal_id
         next_plan = deepcopy(f.plan); next_plan['revision'] += 1
         next_plan['workpacks'][0]['goal'] = 'Next proposal, not the selected preparation.'
-        original = RevisionControlEventStore.list_events
+        original = RevisionControlEventStore.list_control_events
         reads = []
         def interleaved(store, program_id):
             rows = original(store, program_id)
@@ -198,7 +198,7 @@ class FoundryDashboardTests(unittest.TestCase):
                     record_build_plan_proposal(f.store, f.ir, next_plan, document_review=f.review,
                         expected_revision=len(before), idempotency_key='concurrent-proposal', created_at=support.NOW)
             return rows
-        with patch.object(RevisionControlEventStore, 'list_events', interleaved):
+        with patch.object(RevisionControlEventStore, 'list_control_events', interleaved):
             scoped = self.read_scope()
         self.assertEqual(reads, [(f.program, len(before))])
         self.assertEqual(scoped['stream_revision'], len(before))

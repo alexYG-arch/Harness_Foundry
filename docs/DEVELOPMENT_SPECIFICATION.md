@@ -44,3 +44,8 @@ PYTHONPATH=src .venv/bin/python -B -m unittest discover -s tests -p 'test_*.py' 
 Foundry 宿主模块推断依赖。历史兼容打包清单显式包含它，原文本泄漏检查保留；
 生成文件的语法及行为由资源测试和原自检回归核验，不把 `harness_foundry_runtime`
 误声明为需要另行安装的宿主依赖。
+
+## 控制库隔离转换
+
+开发维护工具 `devtools/migrate_revision_store.py` 的副本准备、库外材料、增量回滚和未采用边界见
+[控制库副本转换说明](REVISION_STORAGE_MIGRATION.md)。它不随通用ZIP交付，不替换活动库或恢复历史生产入口。

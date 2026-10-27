@@ -53,7 +53,7 @@ class RSIDeliveryTests(unittest.TestCase):
         for name,sha in receipt['files'].items():
             self.assertEqual(hashlib.sha256((self.output/name).read_bytes()).hexdigest(),sha)
         moved=self.root/'新目录'; self.output.rename(moved); self.output=moved
-        for tool in ('rsi_wiki.py','rsi_review.py','import_rsi_case.py','report_rsi_tdd.py'):
+        for tool in ('rsi_wiki.py','rsi_review.py','import_rsi_case.py','report_rsi_tdd.py','report_rsi_view.py'):
             self.cli(tool,'--help')
         self.assertNotIn(str(ROOT),(self.output/'DELIVERY_MANIFEST.json').read_text())
 
@@ -148,7 +148,8 @@ class RSIDeliveryTests(unittest.TestCase):
         self.assertEqual(result.returncode,0,result.stderr)
         self.assertTrue((self.output/'docs/RSI_DELIVERY.md').is_file())
         self.assertIn('RSI_DELIVERY.md',files['.agents/skills/harness-foundry-build/SKILL.md'].decode())
-        for name in ('src/harness_foundry_factory/rsi_cases.py','tools/rsi_wiki.py'):
+        for name in ('src/harness_foundry_factory/rsi_cases.py','tools/rsi_wiki.py',
+                     'src/harness_foundry_factory/rsi_reports.py','tools/report_rsi_view.py','docs/RSI_REPORT_HANDOFF.md'):
             self.assertEqual((self.output/name).read_bytes(),files[name])
         self.cli('rsi_review.py','--help')
 

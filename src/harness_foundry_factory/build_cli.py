@@ -64,6 +64,7 @@ def main(argv=None):
                       "implementation_version": FACTORY_VERSION, "target_protocol_version": TARGET_PROTOCOL_VERSION,
                       "baseline_factory_id": BASELINE_FACTORY_ID,
                       "product_route": "GENERIC_REVIEWED_BUILD", "storage_format": "REVISION_V1",
+                      "physical_formats": ["REVISION_V1", "REVISION_BODIES_V1"],
                       "legacy_specification_required": False, "writes_performed": False}
         elif args.command == "compile-build-plan":
             from .build_plan import compile_build_plan, validate_compiled_build_plan

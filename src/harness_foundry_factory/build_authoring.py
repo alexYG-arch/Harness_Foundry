@@ -66,13 +66,17 @@ def record_build_plan_proposal(store: ControlEventStore, requirement_ir: Mapping
                               created_at=created_at, exclusive_program=True)[0]
 
 
-def _proposal_event(store: ControlEventStore, program_id: str, event_id: str | None) -> dict[str, Any]:
+def _proposal_event(store: ControlEventStore, program_id: str, event_id: str | None, *, events=None) -> dict[str, Any]:
     _require_revision_store(store)
-    events = [event for event in store.list_events(program_id) if event["event_type"] == PROPOSAL_EVENT
-              and (event_id is None or event["event_id"] == event_id)]
-    if not events:
+    if events is None:
+        found = store.find_event(program_id, event_type=PROPOSAL_EVENT, event_id=event_id)
+    else:
+        found = next((event for event in reversed(events) if event["program_id"] == program_id
+                      and event["event_type"] == PROPOSAL_EVENT
+                      and (event_id is None or event["event_id"] == event_id)), None)
+    if found is None:
         raise RequestValidationError("build proposal does not exist for this Program and event")
-    return events[-1]
+    return found
 
 
 def _binding(event: Mapping[str, Any]) -> dict[str, Any]:
@@ -82,9 +86,9 @@ def _binding(event: Mapping[str, Any]) -> dict[str, Any]:
             "plan_id": plan["plan_id"], "plan_revision": plan["revision"]}
 
 
-def read_build_plan_proposal(store: ControlEventStore, program_id: str, *, event_id: str | None = None) -> dict[str, Any]:
+def read_build_plan_proposal(store: ControlEventStore, program_id: str, *, event_id: str | None = None, events=None) -> dict[str, Any]:
     """Rebuild the declared plan from one immutable event, never from a JSON view."""
-    event = _proposal_event(store, program_id, event_id)
+    event = _proposal_event(store, program_id, event_id, events=events)
     payload = event["payload"]
     compiled = compile_build_plan(payload["requirement_ir"], payload["plan"])
     validate_compiled_build_plan(payload["requirement_ir"], payload["plan"], compiled)
@@ -93,7 +97,7 @@ def read_build_plan_proposal(store: ControlEventStore, program_id: str, *, event
 
 
 def read_build_task_context(store: ControlEventStore, program_id: str, workpack_id: str,
-                            *, event_id: str) -> dict[str, Any]:
+                            *, event_id: str, events=None) -> dict[str, Any]:
     """Resolve a task's scope from a pinned proposal, with no fixed business flow.
 
     The context is for authoring/inspection, not yet a runnable command. Case
@@ -101,7 +105,7 @@ def read_build_task_context(store: ControlEventStore, program_id: str, workpack_
     """
     if not isinstance(event_id, str) or not event_id:
         raise RequestValidationError("task context requires a pinned proposal event ID")
-    event = _proposal_event(store, program_id, event_id)
+    event = _proposal_event(store, program_id, event_id, events=events)
     ir, plan = event["payload"]["requirement_ir"], event["payload"]["plan"]
     compiled = compile_build_plan(ir, plan)
     validate_compiled_build_plan(ir, plan, compiled)

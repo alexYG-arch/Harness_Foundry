@@ -144,7 +144,7 @@ class ContractBuildTests(TestCase):
             if row["event_type"] == "BUILD_AUTHORIZATION_PREPARED":
                 row["payload"].pop("acceptance_contracts")
         # Simulate an old event view; do not edit even the temporary SQLite.
-        with patch.object(self.f.store, "list_events", return_value=projected):
+        with patch.object(self.f.store, "list_control_events", return_value=projected):
             result = self.f.controller().advance(self.f.prepared_id)
         self.assertEqual(result["status"], "BUILD_STOPPED")
         self.assertIn("acceptance contract preflight", result["reason"])

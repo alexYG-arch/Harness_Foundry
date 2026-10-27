@@ -14,7 +14,7 @@ from .build_rebind import (_event, _production_signature, approval_rebind,
                            superseding_prepared)
 from .build_state import project_budget_attempts, project_execution_state
 from .build_types import (IdempotencyConflictError, RequestValidationError,
-                          RevisionConflictError)
+                          RevisionConflictError, BuildAuthorizationError)
 from .process_observation import CommandObservation
 
 POLICY = "SAME_SCOPE_CHECKER_CORRECTION_V1"
@@ -22,8 +22,10 @@ REVERIFY_KIND = "SAME_SCOPE_CHECKER_REVERIFY_V1"
 TECHNICAL_POLICY = "HOST_TECHNICAL_DISPOSITION_V1"
 
 
-def require(condition, message):
+def require(condition, message, *, reason_code=None):
     if not condition:
+        if reason_code is not None:
+            raise BuildAuthorizationError(message, reason_code=reason_code)
         raise RequestValidationError(message)
 
 
@@ -47,31 +49,38 @@ def validate_authority_chain(events, prepared_id, now):
     current = prepared_id
     approvals = []
     while current is not None:
-        require(current not in seen, "cyclic derived authorization")
+        require(current not in seen, "cyclic derived authorization", reason_code="BUILD_AUTHORIZATION_BINDING_INVALID")
         seen.add(current)
-        prepared = _event(events, current, "BUILD_AUTHORIZATION_PREPARED")
+        try:
+            prepared = _event(events, current, "BUILD_AUTHORIZATION_PREPARED")
+        except RequestValidationError as exc:
+            raise BuildAuthorizationError(str(exc), reason_code="BUILD_AUTHORIZATION_BINDING_INVALID") from exc
         matches = [e for e in events if e["event_type"] == "BUILD_AUTHORIZATION_APPROVED"
                    and e["payload"].get("prepared_event_id") == current]
-        require(bool(matches), "build authorization is absent")
+        require(bool(matches), "build authorization is absent", reason_code="BUILD_AUTHORIZATION_ABSENT")
         approval = matches[-1]
         require(not any(e["event_type"] == "BUILD_AUTHORIZATION_REVOKED"
                         and e["payload"].get("prepared_event_id") == current for e in events),
-                "build authorization or its source approval was revoked")
+                "build authorization or its source approval was revoked", reason_code="BUILD_AUTHORIZATION_REVOKED")
         require(_utc(now) < _utc(prepared["payload"]["scope"]["expires_at"]),
-                "build authorization or its source approval expired")
+                "build authorization or its source approval expired", reason_code="BUILD_AUTHORIZATION_EXPIRED")
         approvals.append(approval["event_id"])
         basis = approval["payload"].get("derived_authority")
         if basis is None:
             require(_text(approval["payload"].get("human_message_ref")),
-                    "authorization chain has no actual human approval")
+                    "authorization chain has no actual human approval", reason_code="BUILD_AUTHORIZATION_BINDING_INVALID")
             break
         require(isinstance(basis, dict) and set(basis) == {
                     "policy", "source_prepared_event_id", "source_approval_event_id"}
-                and basis["policy"] == POLICY, "unknown derived authorization basis")
-        parent = _event(events, basis["source_approval_event_id"], "BUILD_AUTHORIZATION_APPROVED")
+                and basis["policy"] == POLICY, "unknown derived authorization basis",
+                reason_code="BUILD_AUTHORIZATION_BINDING_INVALID")
+        try:
+            parent = _event(events, basis["source_approval_event_id"], "BUILD_AUTHORIZATION_APPROVED")
+        except RequestValidationError as exc:
+            raise BuildAuthorizationError(str(exc), reason_code="BUILD_AUTHORIZATION_BINDING_INVALID") from exc
         require(parent["payload"].get("prepared_event_id") == basis["source_prepared_event_id"]
                 and parent["stream_revision"] < approval["stream_revision"],
-                "derived authorization source differs")
+                "derived authorization source differs", reason_code="BUILD_AUTHORIZATION_BINDING_INVALID")
         current = basis["source_prepared_event_id"]
     return approvals
 

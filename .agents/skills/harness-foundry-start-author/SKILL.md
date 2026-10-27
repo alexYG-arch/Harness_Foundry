@@ -321,3 +321,7 @@ self-contained guidance as declared outputs. Reference the delivered guide from 
 target Harness instructions and prompts; do not rely on a Foundry checkout or chat.
 Keep independent expectations protected. Existing scope, budgets, generic Build and
 report recovery remain authoritative; no new mandatory query or approval step.
+
+For selected long report handoffs, see [baseline/delta report guidance](../../../docs/RSI_REPORT_HANDOFF.md).
+Use the delivered optional query/read-source tool; retain incomplete dependencies and original outcomes.
+A material view never grants acceptance or replay authority. Do not copy private reports into public knowledge.

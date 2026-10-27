@@ -26,7 +26,8 @@ from .build_artifacts import (relative_path as _relative, file_identity as _file
                               superseded_artifacts, changed_accepted_files, check_accepted_files)
 from .build_review import validate_build_review, validate_review_sources
 from .local_process import LocalCommand, CodexSandboxRunner, unsupported_isolation_paths
-from .build_types import RequestValidationError, RevisionConflictError, IdempotencyConflictError, canonical_json
+from .build_types import (RequestValidationError, RevisionConflictError, IdempotencyConflictError,
+                          canonical_json, BuildAuthorizationError, authorization_reason)
 from .process_observation import CommandObservation
 from .source_intake import load_local_sources, validate_requirement_source_bindings
 from .build_effects import snapshot_effects, compare_effects, environment_probe_argv, effect_path
@@ -63,8 +64,10 @@ _COMMUNICATION_POLICY = (
 )
 
 
-def _check(condition, message):
+def _check(condition, message, *, reason_code=None):
     if not condition:
+        if reason_code is not None:
+            raise BuildAuthorizationError(message, reason_code=reason_code)
         raise RequestValidationError(message)
 
 
@@ -595,28 +598,35 @@ class BuildController:
             expected_revision=revision, idempotency_key=key, created_at=self.clock().isoformat(), require_new=True)[0]
 
     def _current(self, prepared_id, *, check_content=True):
-        events = self.store.list_events(self.program_id)
-        prepared = deepcopy(_event(events, prepared_id, "BUILD_AUTHORIZATION_PREPARED")["payload"])
+        events = self.store.list_control_events(self.program_id)
+        try:
+            prepared = deepcopy(_event(events, prepared_id, "BUILD_AUTHORIZATION_PREPARED")["payload"])
+        except RequestValidationError as exc:
+            raise BuildAuthorizationError(str(exc), reason_code="BUILD_AUTHORIZATION_BINDING_INVALID") from exc
         prepared["prepared_event_id"] = prepared_id
         approved = any(e["event_type"] == "BUILD_AUTHORIZATION_APPROVED" and e["payload"]["prepared_event_id"] == prepared_id
                        for e in events)
         revoked = any(e["event_type"] == "BUILD_AUTHORIZATION_REVOKED" and e["payload"]["prepared_event_id"] == prepared_id
                       for e in events)
-        _check(approved and not revoked, "build authorization is absent or revoked")
+        _check(approved, "build authorization is absent or revoked", reason_code="BUILD_AUTHORIZATION_ABSENT")
+        _check(not revoked, "build authorization is absent or revoked", reason_code="BUILD_AUTHORIZATION_REVOKED")
         from .build_correction import validate_authority_chain
         validate_authority_chain(events, prepared_id, self.clock())
-        _check(superseding_prepared(events, prepared_id) is None, "build authorization was superseded by an approved rebind")
-        _check(self.clock() < _utc(prepared["scope"]["expires_at"]), "build authorization expired")
-        proposal = _proposal_event(self.store, self.program_id, None)
+        _check(superseding_prepared(events, prepared_id) is None, "build authorization was superseded by an approved rebind",
+               reason_code="BUILD_AUTHORIZATION_SUPERSEDED")
+        _check(self.clock() < _utc(prepared["scope"]["expires_at"]), "build authorization expired",
+               reason_code="BUILD_AUTHORIZATION_EXPIRED")
+        proposal = _proposal_event(self.store, self.program_id, None, events=events)
         review = validate_build_review(proposal["payload"].get("document_review"), check_files=check_content)
-        original = _proposal_event(self.store, self.program_id, prepared["proposal_event_id"])
-        _check(review == original["payload"].get("document_review"), "document review changed outside the approved scope")
+        original = _proposal_event(self.store, self.program_id, prepared["proposal_event_id"], events=events)
+        _check(review == original["payload"].get("document_review"), "document review changed outside the approved scope",
+               reason_code="BUILD_AUTHORIZATION_BINDING_INVALID")
         _check(proposal["payload"]["requirement_ir"] == original["payload"]["requirement_ir"],
-               "requirement changed outside the approved boundary")
+               "requirement changed outside the approved boundary", reason_code="BUILD_AUTHORIZATION_BINDING_INVALID")
         attempts, accepted = self._state(events, prepared_id)
         started_tasks = []
         for attempt in attempts.values():
-            used = _proposal_event(self.store, self.program_id, attempt["proposal_event_id"])["payload"]["plan"]
+            used = _proposal_event(self.store, self.program_id, attempt["proposal_event_id"], events=events)["payload"]["plan"]
             started_tasks.append(next(task for task in used["workpacks"] if task["workpack_id"] == attempt["workpack_id"]))
         writes, owners = adapt_build_plan(original["payload"]["plan"], proposal["payload"]["plan"],
                                          prepared["scope"], started_tasks)
@@ -626,7 +636,7 @@ class BuildController:
         # gate. Changing an accepted task requires explicit invalidation first.
         latest_tasks = {task["workpack_id"]: task for task in proposal["payload"]["plan"]["workpacks"]}
         for workpack_id, result in accepted.items():
-            used = _proposal_event(self.store, self.program_id, result["proposal_event_id"])["payload"]["plan"]
+            used = _proposal_event(self.store, self.program_id, result["proposal_event_id"], events=events)["payload"]["plan"]
             task = next(task for task in used["workpacks"] if task["workpack_id"] == workpack_id)
             _check(latest_tasks[workpack_id] == task, "accepted task was revised; explicit revalidation is required")
         for task in latest_tasks.values():
@@ -635,7 +645,7 @@ class BuildController:
                        "replanned local executable is outside approval")
                 _local_argv(task["local_argv"], prepared["scope"])
         prepared["proposal_event_id"] = proposal["event_id"]
-        source = _event(events, prepared["source_event_id"], "BUILD_SOURCES_CAPTURED")["payload"]
+        source = self.store.hydrate_source_event(self.program_id, events, prepared["source_event_id"])["payload"]
         _check_native_layout(self.store, prepared["scope"], source)
         # Old scopes remain readable, but cannot dispatch under an implicit
         # acceptance basis. A new preparation does not inherit old approval.
@@ -766,10 +776,11 @@ class BuildController:
             # controller validation may qualify it for this model dispatch.
             # Full content checks and cancellation remain at dispatch/runtime.
             current_events, current, current_plan = self._current(prepared["prepared_event_id"], check_content=False)
-            _check(prepared == current, "model context does not match the current prepared scope and Plan")
+            _check(prepared == current, "model context does not match the current prepared scope and Plan",
+                   reason_code="BUILD_AUTHORIZATION_BINDING_INVALID")
             _check(task == next((row for row in current_plan["workpacks"]
                                 if row["workpack_id"] == task["workpack_id"]), None),
-                   "model task does not match the current approved Plan")
+                   "model task does not match the current approved Plan", reason_code="BUILD_AUTHORIZATION_BINDING_INVALID")
             approval = next(row for row in reversed(current_events)
                             if row["event_type"] == "BUILD_AUTHORIZATION_APPROVED"
                             and row["payload"]["prepared_event_id"] == prepared["prepared_event_id"])
@@ -800,15 +811,16 @@ class BuildController:
         if verification:
             reads.append(scope["verification_root"])
         writes = [] if verification else [str(_relative(workspace, name)) for name in scope["task_write_roots"][task["workpack_id"]]]
-        context = read_build_task_context(self.store, self.program_id, task["workpack_id"], event_id=prepared["proposal_event_id"])
+        events = current_events if runtime_authorization is not None else self.store.list_control_events(self.program_id)
+        context = read_build_task_context(self.store, self.program_id, task["workpack_id"],
+                                         event_id=prepared["proposal_event_id"], events=events)
         if runtime_authorization is not None:
             context.update(status="TASK_CONTEXT_RUNTIME_AUTHORIZED", authority_validated=True,
                            runtime_authorization=runtime_authorization)
             # Prompt construction is not process startup or behavioral acceptance.
             # execution_started and behavior_verified retain their false values.
-        events = self.store.list_events(self.program_id)
         attempts, accepted = self._state(events, prepared["prepared_event_id"])
-        plan = _proposal_event(self.store, self.program_id, prepared["proposal_event_id"])["payload"]["plan"]
+        plan = _proposal_event(self.store, self.program_id, prepared["proposal_event_id"], events=events)["payload"]["plan"]
         superseded = self._superseded_artifacts(plan, project_budget_attempts(events, prepared["prepared_event_id"]))
         context["accepted_inputs"] = []
         for artifact_id, declaration in context["artifact_inputs"].items():
@@ -831,7 +843,7 @@ class BuildController:
         history = [row for row in budget_attempts.values() if row["workpack_id"] == task["workpack_id"] and row["status"] != "IN_FLIGHT"]
         methods = {}
         for row in history:
-            previous_plan = _proposal_event(self.store, self.program_id, row["proposal_event_id"])["payload"]["plan"]
+            previous_plan = _proposal_event(self.store, self.program_id, row["proposal_event_id"], events=events)["payload"]["plan"]
             previous_task = next(item for item in previous_plan["workpacks"] if item["workpack_id"] == row["workpack_id"])
             methods[row["attempt_id"]] = {key: previous_task.get(key) for key in ("goal", "executor", "local_argv")}
         context["repair_history"] = [{"attempt_id": row["attempt_id"], "status": row["status"],
@@ -853,7 +865,7 @@ class BuildController:
         context["budget_consumed"] = {"attempts": len(charged_attempts), "task_attempts": sum(
             bool(set(row.get("budget_workpack_ids", [row["workpack_id"]])) & set(prepared["task_budget_owners"][task["workpack_id"]]))
             for row in charged_attempts), "reset": False}
-        source = _event(events, prepared["source_event_id"], "BUILD_SOURCES_CAPTURED")["payload"]
+        source = self.store.hydrate_source_event(self.program_id, events, prepared["source_event_id"], include_text=False)["payload"]
         # Complete source bytes remain in the store and in these explicit
         # read-only files. Do not inline a multi-megabyte PRD into every model
         # prompt or silently truncate it to the current Atom excerpts.
@@ -1112,7 +1124,7 @@ class BuildController:
                            "service and preserve cumulative usage; existing observations remain recoverable")
                 attempt_id = self._attempt(prepared_id, task, prepared, events, feedback,
                                            codex_handoff=codex_handoff, reverify=reverify)
-                rows = self.store.list_events(self.program_id)
+                rows = self.store.list_control_events(self.program_id)
                 attempts, accepted = self._state(rows, prepared_id)
                 if (advance_mode == "ONE_ATTEMPT"
                         or attempts[attempt_id].get("failure_domain") == "EFFECTS_PREPARATION"):
@@ -1121,6 +1133,7 @@ class BuildController:
                     return self._step_result(rows, current, attempts, accepted, attempt_id)
             except (RequestValidationError, RevisionConflictError, OSError) as exc:
                 return {"status": "BUILD_STOPPED", "reason": str(exc),
+                        **({"reason_code": authorization_reason(exc)} if isinstance(exc, BuildAuthorizationError) else {}),
                         **({"codex_handoff_used": False, "codex_handoff_reason": "RECOVERED_EXISTING_ATTEMPT_CONTEXT"}
                            if recovering_attempt_id is not None and codex_handoff is not None else {})}
 
@@ -1210,7 +1223,7 @@ class BuildController:
                     status = self._verification_status(verification)
                     if status in {"ACCEPTED", "REJECTED"}:
                         self._check_product_copy_sources(workspace, (
-                            row["payload"] for row in self.store.list_events(self.program_id)
+                            row["payload"] for row in self.store.list_control_events(self.program_id)
                             if row["event_type"] == "BUILD_COMMAND_OBSERVED"
                             and row["payload"].get("attempt_id") == attempt_id))
             elif implementation.get("status") in {"VALIDATION_FAILED", "MODEL_PROCESS_FAILED"}:
@@ -1232,7 +1245,7 @@ class BuildController:
             verification.append({"diagnostic": str(exc)})
             status = "UNKNOWN_SIDE_EFFECT"
             if preparing_effects:
-                rows = self.store.list_events(self.program_id)
+                rows = self.store.list_control_events(self.program_id)
                 attempts, _ = self._state(rows, prepared_id)
                 if len(rows) == revision and self._no_command_intent(rows, prepared_id, attempts[attempt_id]):
                     status = "NOT_DISPATCHED"
@@ -1245,7 +1258,7 @@ class BuildController:
             # The old dispatcher's stale exception is not a new outcome and
             # cannot overwrite that decision or invalidate a newer acceptance.
             for _ in range(3):
-                rows = self.store.list_events(self.program_id)
+                rows = self.store.list_control_events(self.program_id)
                 attempts, _ = self._state(rows, prepared_id)
                 if attempts[attempt_id]["status"] != "IN_FLIGHT":
                     return attempt_id
@@ -1277,7 +1290,7 @@ class BuildController:
             identity = {**binding, "program_id": self.program_id, "command_id": command_id,
                         "case_id": invocation["case_id"]}
             checked_artifacts = next((row["payload"]["artifacts"]
-                for row in reversed(self.store.list_events(self.program_id))
+                for row in reversed(self.store.list_control_events(self.program_id))
                 if row["event_type"] == "BUILD_VERIFICATION_INPUTS"
                 and row["payload"].get("attempt_id") == binding["attempt_id"]), {})
             invocation, preparation_failure = prepare_resource_invocation(
@@ -1307,7 +1320,7 @@ class BuildController:
             # happens at dispatch, verification and acceptance boundaries.
             if self.clock() >= _utc(prepared["scope"]["expires_at"]):
                 return "BUILD_AUTHORIZATION_EXPIRED"
-            rows = self.store.list_events(self.program_id)
+            rows = self.store.list_control_events(self.program_id)
             if superseding_prepared(rows, binding["prepared_event_id"]) is not None:
                 return "BUILD_AUTHORIZATION_SUPERSEDED"
             if any(row["event_type"] == "BUILD_AUTHORIZATION_REVOKED"
@@ -1320,8 +1333,7 @@ class BuildController:
             try:
                 validate_authority_chain(rows, binding["prepared_event_id"], self.clock())
             except RequestValidationError as exc:
-                return ("BUILD_AUTHORIZATION_REVOKED" if "revoked" in str(exc) else
-                        "BUILD_AUTHORIZATION_EXPIRED" if "expired" in str(exc) else "BUILD_AUTHORIZATION_ABSENT")
+                return authorization_reason(exc)
             return None
 
         if preparation_failure is not None:
@@ -1357,7 +1369,7 @@ class BuildController:
         # Recording a completed effect is not a new permission. Retain it even
         # if authority was revoked while the finite process was running.
         for _ in range(3):
-            events = self.store.list_events(self.program_id)
+            events = self.store.list_control_events(self.program_id)
             existing = [row for row in events if row["event_type"] == kind
                         and row["payload"].get("command_id") == payload["command_id"]]
             if existing:

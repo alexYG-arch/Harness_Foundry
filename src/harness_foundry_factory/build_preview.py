@@ -74,8 +74,10 @@ def preview_build(request, control_db, *, clock=None):
     """Save complete nonexecuting host preparation; no controller is created."""
     now = (clock or _now)()
     required = {"preview_path", "document", "requirement_ir", "plan", "source_root", "manifest", "scope"}
-    _require(isinstance(request, dict) and required <= set(request) <= required | {"follow_codex_defaults"},
+    _require(isinstance(request, dict) and required <= set(request) <= required | {"follow_codex_defaults", "physical_format"},
              "invalid preview-build fields")
+    _require(request.get("physical_format") in (None, "REVISION_V1", "REVISION_BODIES_V1"),
+             "unsupported physical control storage format")
     request = deepcopy(request)
     path, database = _path(request["preview_path"]), _path(str(control_db))
     _require(path != database, "preview file cannot be the control database")
@@ -87,7 +89,7 @@ def preview_build(request, control_db, *, clock=None):
         _same_preparation(preview, now=now)
         return _preview_result(preview, path)
     if database.exists():
-        store = RevisionControlEventStore(database, read_only=True)
+        store = RevisionControlEventStore(database, read_only=True, physical_format=request.get("physical_format"))
         _require(not store.list_program_ids(), "complete initial preview cannot replace an existing Program")
     _document(request["document"])
     compiled = compile_build_plan(request["requirement_ir"], request["plan"])
@@ -192,7 +194,7 @@ def materialize_build_preview(request, control_db, *, clock=None):
         expected_types = ["BUILD_PREVIEW_CONFIRMED", "BUILD_PLAN_PROPOSED", "BUILD_SOURCES_CAPTURED", "BUILD_AUTHORIZATION_PREPARED"]
         _require([event["event_type"] for event in events] == expected_types[:len(events)],
                  "materialization stream changed; inspect current records before continuing")
-    store = RevisionControlEventStore(database)
+    store = RevisionControlEventStore(database, physical_format=preview["request"].get("physical_format"))
     if confirmed is None:
         confirmed = store.append_batch(program, [{"event_type": "BUILD_PREVIEW_CONFIRMED", "payload": {
             "request": deepcopy(request), "preview": deepcopy(preview), "document_review": review,
