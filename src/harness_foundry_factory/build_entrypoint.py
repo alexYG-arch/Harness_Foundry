@@ -121,6 +121,10 @@ def _scope_readback(event, events):
                         "reused_acceptance": {key: {field: record[field] for field in
                             ("attempt_id", "prepared_event_id", "proposal_event_id")}
                             for key, record in accepted.items() if record["prepared_event_id"] != prepared_id}}
+        if "budget_extension" in payload:
+            from .build_rebind import budget_extension_readback
+            previous = next(e["payload"] for e in events if e["event_id"] == payload["rebind_from"])
+            continuation["budget_extension"] = budget_extension_readback(previous, payload)
     return {"prepared_event_id": prepared_id, "proposal_event_id": payload["proposal_event_id"],
             "requirement_ir": proposal["payload"]["requirement_ir"], "plan": proposal["payload"]["plan"],
             "scope": payload["scope"], "source_binding": _source_summary(source),
@@ -208,7 +212,7 @@ def apply_build_request(command, request, control_db):
         required = MUTATIONS.get(command, set()) | {"expected_revision", "idempotency_key"}
         optional = ({"physical_format"} if command == "record-build-plan" else
                     {"continuation_of"} if command == "request-build-repair" else
-                    {"rebind_from", "follow_codex_defaults"} if command == "prepare-build-authorization" else
+                    {"rebind_from", "follow_codex_defaults", "budget_extension"} if command == "prepare-build-authorization" else
                     {"host_reconciliation"} if command == "resolve-build-attempt" else set())
         _require(command in MUTATIONS and required <= set(request) <= required | optional,
                  "build request has missing or unsupported fields")
@@ -261,6 +265,7 @@ def apply_build_request(command, request, control_db):
     elif command == "prepare-build-authorization":
         event = prepare_build_authorization(store, program, request["proposal_event_id"], request["source_event_id"], request["scope"],
                                              rebind_from=request.get("rebind_from"),
+                                             budget_extension=request.get("budget_extension"),
                                              follow_codex_defaults=request.get("follow_codex_defaults", False), **kwargs)
         status = "BUILD_SCOPE_APPROVAL_REQUIRED"
     elif command == "approve-build-authorization":

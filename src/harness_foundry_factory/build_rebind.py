@@ -29,7 +29,7 @@ def superseding_prepared(events, prepared_id):
                  and prepared_id in e["payload"].get("rebind", {}).get("superseded_prepared_ids", [])), None)
 
 
-def validate_rebind(events, previous_id, proposal, scope):
+def validate_rebind(events, previous_id, proposal, scope, *, budget_extension=None):
     """Validate the selected relationship, not a grant or acceptance import."""
     _require(isinstance(previous_id, str) and bool(previous_id.strip()), "rebind_from must identify an old preparation")
     old = _event(events, previous_id, "BUILD_AUTHORIZATION_PREPARED")["payload"]
@@ -42,8 +42,19 @@ def validate_rebind(events, previous_id, proposal, scope):
                  "rebind origin has no committed continuation")
     _require(Path(old["scope"]["workspace_root"]).resolve() == Path(scope["workspace_root"]).resolve(),
              "rebind keeps the same implementation workspace")
-    for key in ("max_attempts", "max_task_attempts"):
-        _require(scope[key] == old["scope"][key], "rebind preserves original budget ceilings; do not subtract old usage twice")
+    if budget_extension is not None:
+        _require(isinstance(budget_extension, dict) and set(budget_extension) == {
+            "additional_attempts", "additional_task_attempts", "reason"}, "invalid budget_extension fields")
+        _require(all(type(budget_extension[k]) is int and budget_extension[k] >= 0
+                     for k in ("additional_attempts", "additional_task_attempts"))
+                 and (budget_extension["additional_attempts"] > 0 or budget_extension["additional_task_attempts"] > 0),
+                 "budget extension requires nonnegative additions and at least one increase")
+        _require(isinstance(budget_extension["reason"], str) and bool(budget_extension["reason"].strip()),
+                 "budget extension needs an explicit reason for the later human decision")
+    for key, delta in (("max_attempts", "additional_attempts"), ("max_task_attempts", "additional_task_attempts")):
+        addition = budget_extension[delta] if budget_extension is not None else 0
+        _require(type(scope[key]) is int and scope[key] == old["scope"][key] + addition,
+                 "rebind preserves original budget ceilings unless an exact budget_extension is declared; do not subtract old usage twice")
     old_proposal = _event(events, old["proposal_event_id"], "BUILD_PLAN_PROPOSED")["payload"]
     before = {t["workpack_id"]: t for t in old_proposal["plan"]["workpacks"]}
     after = {t["workpack_id"]: t for t in proposal["plan"]["workpacks"]}
@@ -52,6 +63,14 @@ def validate_rebind(events, previous_id, proposal, scope):
         for field in ("job_id", "artifacts", "depends_on"):
             _require(before[key][field] == after[key][field], "rebind cannot reassign task outputs, Jobs or budget ownership")
     return old
+
+
+def budget_extension_readback(previous, prepared):
+    """Describe a requested addition, never grant it or change the usage ledger."""
+    return {**deepcopy(prepared["budget_extension"]),
+            "previous_limits": {k: previous["scope"][k] for k in ("max_attempts", "max_task_attempts")},
+            "new_limits": {k: prepared["scope"][k] for k in ("max_attempts", "max_task_attempts")},
+            "task_cap_applies_to": sorted(prepared["scope"]["task_write_roots"])}
 
 
 def _production_signature(events, proposal, prepared, task):
@@ -80,9 +99,12 @@ def _check_signature(prepared, task):
             scope["source_read_roots"], {r: profiles[r] for r in refs})
 
 
-def approval_rebind(events, previous_id, new_prepared, new_proposal, *, extra_candidates=None):
+def approval_rebind(events, previous_id, new_prepared, new_proposal, *, extra_candidates=None, human_budget_extension=False):
     """Freeze a current qualification at the approval CAS; no command executes."""
-    old = validate_rebind(events, previous_id, new_proposal, new_prepared["scope"])
+    extension = new_prepared.get("budget_extension")
+    _require(extension is None or human_budget_extension,
+             "budget extension requires a real human approval, not automatic correction")
+    old = validate_rebind(events, previous_id, new_proposal, new_prepared["scope"], budget_extension=extension)
     lineage = prepared_lineage(events, previous_id)
     for identity in lineage:
         attempts, _ = project_execution_state(events, identity)
@@ -136,7 +158,8 @@ def approval_rebind(events, previous_id, new_prepared, new_proposal, *, extra_ca
             record.pop(field, None)
     return {"from_prepared_event_id": previous_id, "superseded_prepared_ids": lineage,
             "accepted": reuse, "verification_pending": reverify, "rebuild_workpack_ids": sorted(rebuild),
-            "budget_reset": False, "old_authority_inherited": False}
+            "budget_reset": False, "old_authority_inherited": False,
+            **({"budget_extension": budget_extension_readback(old, new_prepared)} if extension is not None else {})}
 
 
 def reverification_candidates(events, prepared_id):

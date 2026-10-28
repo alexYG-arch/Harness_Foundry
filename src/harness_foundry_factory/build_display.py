@@ -81,6 +81,12 @@ def render_build_readback(result):
                      f"到期时间：{_value(grant['scope']['expires_at'])}")
         if grant.get("rebind_from"):
             lines.append(f"  接续来源：{_value(grant['rebind_from'])}；累计预算不重置；本范围已用 {budget['this_preparation_attempts']}。")
+        if grant.get("budget_extension"):
+            change = grant["budget_extension"]
+            old, new = change["previous_limits"], change["new_limits"]
+            lines.append(f"  增额声明（是否可执行见本范围授权状态）：总上限 {old['max_attempts']} → {new['max_attempts']}；"
+                         f"各任务统一上限 {old['max_task_attempts']} → {new['max_task_attempts']}。")
+            lines.append(f"  任务上限适用于 {_value(change['task_cap_applies_to'])}；原因：{_value(change['reason'])}")
         if grant.get("superseded_by"):
             lines.append(f"  后续范围：{_value(grant['superseded_by'])}")
         resources = grant["scope"].get("verification_resources")

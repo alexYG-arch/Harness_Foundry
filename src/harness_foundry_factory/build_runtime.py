@@ -351,9 +351,11 @@ def prepare_build_scope(store, ir, plan, source, scope, *, created_at,
 
 
 def prepare_build_authorization(store, program_id, proposal_event_id, source_event_id, scope, *,
-                                expected_revision, idempotency_key, created_at, rebind_from=None, follow_codex_defaults=False, prepared_preview=None):
+                                expected_revision, idempotency_key, created_at, rebind_from=None, follow_codex_defaults=False, prepared_preview=None,
+                                budget_extension=None):
     """Save a readable scope challenge, not authority. Creates no target paths."""
     _check(type(follow_codex_defaults) is bool, "follow_codex_defaults must be boolean")
+    _check(budget_extension is None or rebind_from is not None, "budget_extension requires an explicit rebind_from")
     proposal = _proposal_event(store, program_id, proposal_event_id)
     # Infer only a NEW preparation's selection policy. Persisted scopes retain
     # their old FIXED default in validation, dispatch and recovery.
@@ -366,6 +368,7 @@ def prepare_build_authorization(store, program_id, proposal_event_id, source_eve
                          "scope": deepcopy(scope), "expected_revision": expected_revision,
                          **({"follow_codex_defaults": True} if follow_codex_defaults else {}),
                          **({"rebind_from": rebind_from} if rebind_from is not None else {}),
+                         **({"budget_extension": deepcopy(budget_extension)} if budget_extension is not None else {}),
                          **({"prepared_preview": prepared_preview} if prepared_preview is not None else {})}
                         if "verification_resources" in scope or rebind_from is not None or follow_codex_defaults
                         or "model_policy" in scope or "model_service" in scope
@@ -383,12 +386,13 @@ def prepare_build_authorization(store, program_id, proposal_event_id, source_eve
     review = validate_build_review(proposal["payload"].get("document_review"))
     validate_review_sources(review, ir, source_root=source["payload"]["source_root"], snapshot=source["payload"]["snapshot"])
     if rebind_from is not None:
-        validate_rebind(events, rebind_from, proposal["payload"], scope)
+        validate_rebind(events, rebind_from, proposal["payload"], scope, budget_extension=budget_extension)
     prepared = prepare_build_scope(store, ir, plan, source["payload"], scope,
         created_at=created_at, follow_codex_defaults=follow_codex_defaults, prepared_preview=prepared_preview)
     return store.append_batch(program_id, [{"event_type": "BUILD_AUTHORIZATION_PREPARED", "payload": {
         "proposal_event_id": proposal_event_id, "source_event_id": source_event_id, **prepared,
         **({"rebind_from": rebind_from} if rebind_from is not None else {}),
+        **({"budget_extension": deepcopy(budget_extension)} if budget_extension is not None else {}),
         **({"resource_prepare_request": resource_request} if resource_request is not None else {})}}],
         expected_revision=expected_revision, idempotency_key=idempotency_key, created_at=created_at,
         exclusive_program=True)[0]
@@ -434,7 +438,8 @@ def approve_build_authorization(store, program_id, prepared_event_id, *, human_m
         _check(not any(e["event_type"] == "BUILD_AUTHORIZATION_APPROVED"
                        and e["payload"]["prepared_event_id"] == prepared_event_id for e in events),
                "rebind approval already committed; read its existing result")
-        extra["rebind"] = approval_rebind(events, prepared["payload"]["rebind_from"], prepared["payload"], latest["payload"])
+        extra["rebind"] = approval_rebind(events, prepared["payload"]["rebind_from"], prepared["payload"], latest["payload"],
+                                         human_budget_extension=True)
     return store.append_batch(program_id, [{"event_type": "BUILD_AUTHORIZATION_APPROVED", "payload": {
         "prepared_event_id": prepared_event_id, "human_message_ref": human_message_ref, **extra}}],
         expected_revision=expected_revision, idempotency_key=idempotency_key, created_at=created_at)[0]
