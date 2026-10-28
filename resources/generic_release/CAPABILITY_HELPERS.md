@@ -112,3 +112,20 @@ fullscreen; external/unspecified presentation detects each API independently.
 Version 4 is an explicitly selected capability package, not an implicit upgrade
 of older deployments or a new generic-runtime requirement. Counts, current
 acceptance, source isolation and business budgets are unchanged.
+
+## Optional external connections
+
+Use [connections.py](connections.py) and [CONNECTIONS.md](CONNECTIONS.md) for explicit instance/project connections to a local directory or ZIP. Startup loads only scoped catalogs and declared public base materials, then selected Skills. This is preparation, not native initialization, update, reporting or authority. No connection preserves the existing route; provider tools and RSI runtime handoff remain separate.
+
+外部原生入口：`examples/capability-adapters/native.py` 和显式提供的适配器 JSON；说明见 `examples/capability-adapters/NATIVE.md`。复用 prepare/consume 与原命令观察；连接或材料准备不授予执行、登录或上报权限。
+
+
+所选修复过程的案例关联、原报告取回及新知识集合准备见 [RSI_HANDOFF.md](RSI_HANDOFF.md)。它只整理材料，保留原修改责任、独立验收、预算和 外接包 生命周期；目标实际使用另验。
+
+非标准包使用[独立作者入口](AUTHORING.md)生成明确来源的候选映射，再复用 connections/native。原件、未知字段和改写差异保留；准备不执行，真实调用及交付仍独立验收。
+
+## External target delivery
+
+`delivery.py` stages selected external runtime layouts, original modes and relative links alongside optional built-in and RSI support. Use [EXTERNAL_DELIVERY.md](EXTERNAL_DELIVERY.md) for receiving-directory tool binding, original report recovery and existing C/G/N upgrades. Preparation is not target acceptance or permission; original providers still own initialization, reporting and updates.
+
+功能级 v2 入口见 `examples/capability-adapters/FEATURES.md`。本外接分支包含旁置映射与接收端子集校验；main 保持不含该外接集成。使用清单不代表生产服务已验收。

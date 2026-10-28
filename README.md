@@ -1,4 +1,5 @@
-# Harness Foundry 1.1.0
+# Harness Foundry 1.2.0-rc.1
+
 
 **用 Codex 为项目搭建可继续使用、可检查、可修复的 Harness。**
 
@@ -12,16 +13,18 @@ Foundry 不是另一套模型，也不是固定行业流水线。Codex 负责需
 
 | 项目 | 状态 |
 |---|---|
-| 当前产品版本 | **1.1.0**；协议仍为 **2.9**；[发布说明](docs/releases/v1.1.0.md) |
-| 本 README 的累计升级范围 | 以历史 v0.5.0 为基线，涵盖 `fd6f8a5` 的 RSI 实现及后续文档更新；现纳入1.1.0的参数诊断及A0–A5基础修补 |
-| 当前默认分支 | `main`；由原 `codex/latest-r3-main-repairs-20261021` 更名；固定发行以 `v1.1.0` 标签为准 |
+| 当前预发布版本 | **1.2.0-rc.1**；协议仍为 **2.9**；[发布说明](docs/releases/v1.2.0-rc.1.md) |
+| 本 README 的累计升级范围 | 以历史 v0.5.0 为基线，涵盖 `fd6f8a5` 的 RSI 实现及后续文档更新；包含1.1.0基础修补及本次通用能力接入 |
+| 当前默认分支 | `main`；由原 `codex/latest-r3-main-repairs-20261021` 更名；当前预发布固定为 `v1.2.0-rc.1`；稳定版仍为 `v1.1.0` |
 | 旧主线历史 | `history/main-before-rsi-20261024`，保留旧 main 提交 `00348ca8` 及其历史；旧标签和 Release 不变 |
 | 历史稳定版下载 | [v0.5.0 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.5.0)，2026-10-15 发布；原 tag 和附件保留 |
 | 协议与许可 | 协议 **2.9**；[MIT](LICENSE) |
 
-**当前产品版本为1.1.0。** 从 [v1.1.0 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v1.1.0) 下载固定运行包及校验值。 历史 v0.5.0 下载包不包含下述新增能力；它的标签、Release 和原附件保留。使用时仍需记录 Git 提交、所用固定包和能力包版本，不能只看版本号。源码已修、固定包已包含、项目实际部署已升级是三个不同状态。
+**当前为 1.2.0-rc.1 预发布，稳定版仍为 1.1.0。** 本版纳入通用连接、全部／按需选择、交付检查与8个内置能力新版本，不包含具体第三方提供方实现。可从 [预发布附件](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v1.2.0-rc.1) 获取固定运行包和独立能力包，或继续使用 [v1.1.0 稳定版](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v1.1.0)。
 
-1.1.0发布已提交的[A0–A5基础修补](docs/FOUNDATION_REPAIRS.md)及参数错误JSON诊断，不包含尚未提交的外接提供方实现。原v1.0.0包、标签和Release保留。2436项是原完整开发快照的跨批次工程归并，包含未提交的外接开发内容，不等于当前发行源码或CI的测试数量。真实旧库缩减、部署采用、模型消费新报告及收益仍未验，Coding继续搁置。
+工程实现不等于所有实际场景已验收：WP07的新会话完整搭建与使用、WP08的实际PRD／检索及外置浏览器仍未完成。原验收出口保持6/8（75%），收益未证实。详见[使用与验证边界](docs/CAPABILITY_ADAPTERS.md)。
+
+使用时记录 Git 提交、固定包和能力版本；源码已修、包已包含和目标部署已升级分别记录。旧标签、Release、附件及历史证据保留，原R3和分母不变。1.1.0的基础修补见[原发布说明](docs/releases/v1.1.0.md)，不将旧验证改绑为本版全部通过。
 
 ## 历史版本已有基础（v0.5.0）
 
@@ -48,7 +51,7 @@ Foundry 不是另一套模型，也不是固定行业流水线。Codex 负责需
 
 能力按名称和版本选择，项目配置保存本机位置与业务需求；第三方 SDK 仍由其原安装方式管理。能力准备不自动安装、授权或执行，升级也不会静默覆盖已固定的旧版本。
 
-| 可选能力 | 当前入口与用途 |
+| 可选能力 | 1.1.0基线入口与用途（本次新版本见第10节） |
 |---|---|
 | Qt/CMake | `qt-cmake@1/@2`：配置、构建、CTest、报告与环境适配；@2 补充可交付环境接入 |
 | Python 环境 | `python-environment@1`：解释器、依赖和原生库观察，绑定启动配置及实际探测交接 |
@@ -77,7 +80,7 @@ Foundry 不是另一套模型，也不是固定行业流水线。Codex 负责需
 
 看板可接入 Foundry 控制记录，也可接入目标 Harness 自身的运行记录。画中画与主页面共用状态，按窗口空间展示进度、当前步骤及详情；支持主题偏好和历史查看。
 
-最新版 `local-dashboard@4` 提供内嵌与外置显示地址：Chat 通过宿主工具打开 Codex 内嵌页或外置 Chrome；外置页在浏览器实际支持时提供画中画和全屏。页面不自行移动到 Codex 侧栏，也不依赖 User-Agent 猜测所有宿主能力。看板始终只读，不派发、修复、接受或重放业务。
+1.1.0基线的 `local-dashboard@4` 提供内嵌与外置显示地址：Chat 通过宿主工具打开 Codex 内嵌页或外置 Chrome；外置页在浏览器实际支持时提供画中画和全屏。页面不自行移动到 Codex 侧栏，也不依赖 User-Agent 猜测所有宿主能力。看板始终只读，不派发、修复、接受或重放业务。
 
 ### 6. 更灵活的模型与服务配置
 
@@ -112,10 +115,21 @@ Foundry 不是另一套模型，也不是固定行业流水线。Codex 负责需
 
 可选[增量报告入口](docs/RSI_REPORT_HANDOFF.md)使用固定基线与差异重建当前材料，支持分页及原文取回，保留旧失败、原条件、缺失来源和未验依赖。包内 `tools/report_rsi_view.py` 和通用交接辅助脚本只整理、关联和读取材料，不派发业务或生成接受决定。
 
+### 10. 通用连接、功能选择与交付（1.2.0-rc.1）
+
+通过 [connections.py](examples/capability-adapters/CONNECTIONS.md) 连接目录或ZIP，发现版本、基础资料和Skill；按原准备入口选择全部功能（ALL）或需求对应的功能（ON_DEMAND）。功能、共享文件、调用入口与工具环境分别记录，未选工具不会因共享脚本自动启用。
+
+[功能选择指南](examples/capability-adapters/FEATURES.md)说明真实冲突与决定复用、搭建期依赖及第三方映射。[交付接口](examples/capability-adapters/EXTERNAL_DELIVERY.md)携带所选依赖、公开说明与清单；接收端重新绑定工具，检查器保持隔离。原G/C/N流程保留定制，报告恢复沿原命令取回。
+
+新增 qt-cmake@3、python-environment@2、data-summary@2、doc-export@2、host-review@2、local-dashboard@5、text-count@2、reference-notes@2；旧版本均保留。本发行提供通用 adapter_path 接口，不预装或默认激活任何具体第三方提供方。
+
 ## 修复与可靠性改进
 
 | 修复方向 | 现在如何处理 |
 |---|---|
+| 最终交付依赖（1.2.0-rc.1） | 按最终形态核对运行与搭建期依赖，保留合法依赖组合 |
+| 旧Skill混入新选择（1.2.0-rc.1） | 只重算采用映射的连接，其他连接及旧入口保持原选择 |
+| 第三方决定缺少来源绑定（1.2.0-rc.1） | 绑定相关来源并在交付前复查；无关变化和同字节迁移复用原决定，不新增审批 |
 | 授权原因随错误措辞变化（1.1.0） | 使用稳定原因码区分未授权、撤销、过期、被替代和绑定错误；复用原校验，不放宽权限或清零预算 |
 | 参数错误输出不统一（1.1.0） | 公共CLI参数错误按约定输出JSON及非零退出码；帮助与正常调用保持原行为 |
 | 报告和库外材料缺口（1.1.0） | 目录遍历失败显式标为待核对，保留其他文件、合法空目录和链接事实；增量报告不因新差异省略旧条件和失败 |
@@ -148,9 +162,10 @@ Foundry 不是另一套模型，也不是固定行业流水线。Codex 负责需
 
 ## 如何开始
 
-### 选择当前源码或历史稳定版
+### 选择预发布或稳定版
 
-- **使用历史稳定版**：从 [v0.5.0 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.5.0) 下载 `Harness-Foundry-0.5.0-generic.zip` 和 `SHA256SUMS`，保留隐藏的 `.agents/` 目录。它提供上述 v0.5.0 基础，不包含本分支新增项。
+- **使用历史版本**：从 [v0.5.0 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.5.0) 下载 `Harness-Foundry-0.5.0-generic.zip` 和 `SHA256SUMS`，保留隐藏的 `.agents/` 目录。它提供上述 v0.5.0 基础，不包含本分支新增项。
+- **试用1.2.0-rc.1**：从 [预发布](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v1.2.0-rc.1) 下载 `Harness-Foundry-1.2.0-rc.1-generic.zip`、所需独立能力包及 `SHA256SUMS`。维护源码选同名标签；真实未验范围见[发布说明](docs/releases/v1.2.0-rc.1.md)。
 - **使用1.1.0**：从 [v1.1.0 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v1.1.0) 下载 `Harness-Foundry-1.1.0-generic.zip` 和 `SHA256SUMS`。维护源码时选取 `v1.1.0` 标签；记录实际提交和包身份。可选能力包从同标签的 `examples/capability-adapters/packages/` 按名称和版本选择，运行ZIP只含通用接入工具，不打包第三方SDK。
 
 GitHub 自动生成的 Source code ZIP 是源码快照，不等于已验收的通用运行包。旧项目不会因源码分支更新自动升级，切换前应核对实际加载路径、固定版本、交付材料和已有控制记录。
@@ -210,11 +225,13 @@ python3 tools/hffactory.py --help
 | [能力准备与交付](examples/capability-adapters/README.md) | 选择版本、绑定环境、准备调用、交付公开依赖 |
 | [技术栈接入](examples/capability-adapters/STACK_ENVIRONMENT.md) | Qt/Python 环境材料、实际探测和后续使用 |
 | [能力升级](examples/capability-adapters/UPGRADE.md) | 换版、定制保留、冲突、移除和合法接续 |
-| [看板使用](examples/capability-adapters/packages/local-dashboard/4/guide.md) | 当前看板组件、展示方式和只读边界 |
+| [看板使用](examples/capability-adapters/packages/local-dashboard/5/guide.md) | 当前看板组件、展示方式和只读边界 |
 
 示例和能力包不是替所有项目做好的业务系统。浏览器、搜索或其他宿主工具需要实际接入；CODEX 子进程不会自动继承主聊天工具。特别是 PRD／设计与市场调研，文件存在或模型自述不能代替实际交互、检索、语义审阅与来源核对。
 
 ## 验证状态
+
+1.2.0-rc.1 的所选源码已执行2569项完整回归：首轮2509 PASS、3 FAIL、57 SKIP。两项失败源于同一处包内文档链接，已修正；一项配置诊断在限时内未到达读取步骤，保留原代码和断言后定向复验通过。3项受影响复验均通过，归并覆盖为 **2512 PASS＋57 SKIP，非单轮全绿**；不把重叠验证相加。历史规范与Skill检查通过；57项跳过仍不计通过。源码检查、固定包与远端验证以[本版发布说明](docs/releases/v1.2.0-rc.1.md)和该标签CI为准。
 
 1.1.0以已提交的 `f6ba5a4` 为基础，仅更新产品版本、测试常量和发布说明。该基线的公开源码CI为[1004/1004通过](https://github.com/alexYG-arch/Harness_Foundry/actions/runs/40496841992)，零跳过；这是源码工程检查，不是完整原生或真实业务验收。最终版本的源码检查、CI和同一固定ZIP的隔离及下载核对另见[1.1.0发布说明](docs/releases/v1.1.0.md)。
 

@@ -343,6 +343,11 @@ class PortableLocalCliTests(unittest.TestCase):
             "pyproject.toml",
             "docs",
             "examples/harness-design",
+            "examples/capability-adapters/CONNECTIONS.md",
+            "examples/capability-adapters/NATIVE.md",
+            "examples/capability-adapters/RSI_HANDOFF.md",
+            "examples/capability-adapters/AUTHORING.md",
+            "examples/capability-adapters/FEATURES.md",
             ".agents",
             "schemas",
             "spec_lock",
@@ -354,6 +359,7 @@ class PortableLocalCliTests(unittest.TestCase):
             if source.is_dir():
                 shutil.copytree(source, destination)
             else:
+                destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source, destination)
 
 

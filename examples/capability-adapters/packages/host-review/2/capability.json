@@ -1,0 +1,96 @@
+{
+  "name": "host-review",
+  "version": "2",
+  "usage": "both",
+  "inputs": [
+    "Project task, named inputs and outputs, selected workflow, actual independent host observations"
+  ],
+  "outputs": [
+    "New byte snapshot for an independent check; no execution or acceptance identity"
+  ],
+  "materials": [
+    "guide.md",
+    "prd.md",
+    "market.md",
+    "target/INSTRUCTIONS.md"
+  ],
+  "tools": [
+    {
+      "id": "snapshot-host-review",
+      "path": "snapshot.py",
+      "interpreter": "python",
+      "interpreter_args": [
+        "-I",
+        "-B"
+      ]
+    }
+  ],
+  "environment": [
+    {
+      "id": "python",
+      "kind": "executable",
+      "version_min": "3.11"
+    }
+  ],
+  "verification_files": [
+    "check_review.py"
+  ],
+  "support": "The cooperating host performs the declared browser or search operations. This package preserves supplied observations and checks their binding, not their semantic truth or business acceptance.",
+  "descriptor_version": 2,
+  "features": [
+    {
+      "id": "prd-workflow",
+      "summary": "prd workflow",
+      "kind": "workflow",
+      "files": [
+        "prd.md"
+      ],
+      "default_form": "AS_IS",
+      "requires": [],
+      "conflict_tags": [
+        "REQUIRES_HOST_TOOL"
+      ],
+      "checks": [
+        "Check the declared result with independent project inputs and expectations."
+      ],
+      "environment_refs": []
+    },
+    {
+      "id": "market-workflow",
+      "summary": "market workflow",
+      "kind": "workflow",
+      "files": [
+        "market.md"
+      ],
+      "default_form": "AS_IS",
+      "requires": [],
+      "conflict_tags": [
+        "REQUIRES_HOST_TOOL"
+      ],
+      "checks": [
+        "Check the declared result with independent project inputs and expectations."
+      ],
+      "environment_refs": []
+    },
+    {
+      "id": "review-snapshot",
+      "summary": "review snapshot",
+      "kind": "tool",
+      "files": [
+        "snapshot.py"
+      ],
+      "default_form": "AS_IS",
+      "requires": [],
+      "conflict_tags": [],
+      "checks": [
+        "Check the declared result with independent project inputs and expectations."
+      ],
+      "entry": {
+        "tool": "snapshot-host-review"
+      }
+    }
+  ],
+  "delivery": {
+    "instruction_snippet": "target/INSTRUCTIONS.md"
+  }
+}

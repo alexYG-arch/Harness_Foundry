@@ -1,0 +1,34 @@
+{
+  "name": "reference-notes",
+  "version": "2",
+  "usage": "build",
+  "inputs": [
+    "Project-provided document requirements"
+  ],
+  "outputs": [
+    "Reference material for the existing build document"
+  ],
+  "materials": [
+    "guide.md"
+  ],
+  "support": "Preparation example only; does not decide project acceptance.",
+  "descriptor_version": 2,
+  "features": [
+    {
+      "id": "reference-material",
+      "summary": "reference material",
+      "kind": "material",
+      "files": [
+        "guide.md"
+      ],
+      "default_form": "BUILD_ONLY",
+      "requires": [],
+      "conflict_tags": [],
+      "checks": [
+        "Check the declared result with independent project inputs and expectations."
+      ],
+      "usage": "build",
+      "environment_refs": []
+    }
+  ]
+}

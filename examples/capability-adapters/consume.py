@@ -31,6 +31,8 @@ def _selected_tool(materials, tool_id):
                 if row['name'] == binding['package'] and row['version'] == binding['version']]
     _require(len(packages) == 1, 'tool package/version is not selected: ' + tool_id)
     selected = packages[0]
+    if 'feature_scope' in selected:
+        _require(tool_id in selected['feature_scope']['active_tools'], 'tool not selected by feature scope: ' + tool_id)
     root = Path(selected['directory'])
     listed = {row['path'] for row in selected['files']}
     _require('capability.json' in listed, 'selection lacks its descriptor: ' + tool_id)
@@ -63,6 +65,11 @@ def prepare_call(materials, tool_id, args=()):
              'args must be a list or tuple of strings')
     _require(materials['preparation']['readiness'] == 'READY', 'capability materials are not READY')
     _require(_prepare.check_selection(materials)['status'] == 'MATCH', 'selected capability files changed')
+    native = materials['tool_bindings'].get(tool_id, {}).get('native_connection')
+    if native is not None:
+        entry = materials['tool_bindings'][tool_id]
+        return _prepare._native.prepare_call(materials['native_bindings'][native], entry['operation'], args,
+                    cwd=materials.get('scope', {}).get('workspace_root') or materials['preparation']['environment']['project_root'])
     binding, _, _, prefix = _selected_tool(materials, tool_id)
     fragment = materials['scope_fragment']['executables']
     executables = materials.get('scope', materials['scope_fragment'])['executables']

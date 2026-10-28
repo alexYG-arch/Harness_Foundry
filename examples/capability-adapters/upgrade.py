@@ -153,10 +153,23 @@ def build_upgrade(previous_materials, config, output_root):
              'base_materials must be project materials, not capability-expanded materials')
     before = _packages(previous_materials)
     previous_check = _prepare.check_selection(previous_materials)
-    if config['selections']:
-        materials, files = _prepare.build_materials(config, output_root)
+    connections = config.get('connections')
+    loaded = _prepare._connections.load_connections(
+        connections['instance_root'], config['project_root'], connections.get('skills', [])) if connections is not None else None
+    # Removing native execution need not remove the connected public materials.
+    # A genuinely empty/disconnected registry still returns the project base.
+    if (config['selections'] or (connections or {}).get('native')
+            or loaded and loaded['connections']):
+        materials, files = _prepare.build_materials(config, output_root, connection_snapshot=loaded)
     else:
         materials, files = _without_capabilities(config, output_root)
+        if loaded:
+            # No available external materials: retain project facts and the
+            # loader's existing optional/required diagnostic distinction.
+            preparation = materials['preparation']
+            preparation['diagnostics'].extend(loaded['diagnostics'])
+            if any(row.get('severity') == 'ERROR' for row in loaded['diagnostics']):
+                preparation['readiness'] = 'INCOMPLETE'
     after = _packages(materials)
     package_changes = []
     for name in sorted(before.keys() | after.keys()):
@@ -189,6 +202,7 @@ def build_upgrade(previous_materials, config, output_root):
         'previous_selection_check': previous_check,
         'previous_diagnostics': deepcopy(previous_materials.get('preparation', {}).get('diagnostics', [])),
         'packages': package_changes,
+        'native_bindings': _differences(previous_materials.get('native_bindings', {}), materials.get('native_bindings', {})),
         'tools': _differences(previous_materials.get('tool_bindings', {}), materials.get('tool_bindings', {})),
         'environment': _differences(previous_materials.get('preparation', {}).get('environment', {}).get('bindings', {}),
                                     materials['preparation']['environment']['bindings']),
@@ -203,6 +217,16 @@ def build_upgrade(previous_materials, config, output_root):
         'commands_executed': False, 'target_modified': False, 'physical_files_removed': False,
         'acceptance_granted': False, 'authority_inherited': False, 'budget_modified': False,
     }
+    def features(value):
+        return {r['capability']+':'+r['feature']: r
+                for package in value['preparation'].get('selections', [])
+                for r in package.get('feature_scope', {}).get('features', [])} | {
+                r['capability']+':'+r['feature']: r
+                for projection in value['preparation'].get('external_features', {}).values()
+                for r in projection['features']}
+    old_features, new_features = features(previous_materials), features(materials)
+    if old_features or new_features:
+        transition['feature_changes'] = _differences(old_features, new_features)
     return materials, files, transition
 
 

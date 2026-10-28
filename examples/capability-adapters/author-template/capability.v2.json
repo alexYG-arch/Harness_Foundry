@@ -1,0 +1,16 @@
+{
+  "name": "stack-example",
+  "version": "2",
+  "descriptor_version": 2,
+  "usage": "both",
+  "inputs": ["project-owned public input"],
+  "outputs": ["result checked against independent expectations"],
+  "materials": ["guide.md", "target/INSTRUCTIONS.md"],
+  "tools": [{"id": "stack-example", "path": "environment.py", "interpreter": "stack-helper-python", "interpreter_args": ["-I", "-B"]}],
+  "runtime_files": ["stack_runtime.py"],
+  "verification_files": ["check_operation.py", {"path": "stack_runtime.py", "shared": true}],
+  "environment": [{"id": "stack-helper-python", "kind": "executable", "version_min": "3.11"}],
+  "features": [{"id": "operation", "summary": "Replace with the selected public operation", "kind": "tool", "files": ["environment.py", "stack_runtime.py"], "entry": {"tool": "stack-example"}, "environment_refs": ["stack-helper-python"], "requires": [], "conflict_tags": [], "default_form": "AS_IS", "checks": ["Run new public input against separately prepared expectations"]}],
+  "delivery": {"instruction_snippet": "target/INSTRUCTIONS.md"},
+  "support": "Template only; supply actual files, operations, environments and independent checks before use"
+}

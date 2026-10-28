@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.21)
+project(qt_environment_probe LANGUAGES CXX)
+find_package(Qt6 REQUIRED COMPONENTS Core)
+add_executable(qt_environment_probe main.cpp)
+target_link_libraries(qt_environment_probe PRIVATE Qt6::Core)
+enable_testing()
+add_test(NAME qt-environment-probe COMMAND qt_environment_probe)
+set_tests_properties(qt-environment-probe PROPERTIES PASS_REGULAR_EXPRESSION "QtCore:3")

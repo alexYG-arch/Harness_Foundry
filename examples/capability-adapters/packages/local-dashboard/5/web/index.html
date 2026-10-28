@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <title>任务进度</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="page-header">
+        <p class="eyebrow">本地只读看板</p>
+        <h1>任务进度</h1>
+        <p class="intro">查看已完成、正在关注和后续的步骤。</p>
+      </header>
+      <section class="controls" aria-label="运行与显示方式">
+        <label class="run-label" for="run-selector">查看的任务范围</label>
+        <select id="run-selector" disabled><option>正在读取运行列表…</option></select>
+        <div class="view-actions">
+          <button id="pip-button" type="button" hidden>画中画查看</button>
+          <button id="fullscreen-button" type="button" class="secondary" hidden>全屏查看</button>
+          <button id="reconnect-button" type="button" class="quiet">重新连接</button>
+        </div>
+        <p id="view-notice" class="view-notice" role="status"></p>
+      </section>
+      <div id="dashboard" aria-label="当前运行状态"></div>
+      <footer class="page-footer">看板只读取已有记录。关闭页面或浮窗，不会停止任务，也不会重新执行任务。</footer>
+    </main>
+  </body>
+</html>

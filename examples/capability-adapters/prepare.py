@@ -19,6 +19,12 @@ _spec = importlib.util.spec_from_file_location('capability_environment', Path(__
 _environment = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_environment)
 resolve_environment = _environment.resolve_environment
+_spec = importlib.util.spec_from_file_location('capability_connections', Path(__file__).with_name('connections.py'))
+_connections = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_connections)
+_spec = importlib.util.spec_from_file_location('capability_native', Path(__file__).with_name('native.py'))
+_native = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_native)
 _ID = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$')
 _TEXT = {'.md', '.markdown', '.txt', '.json'}
 
@@ -185,6 +191,9 @@ def check_selection(materials):
     changes = []
     for package in materials['preparation']['selections']:
         root = Path(package['directory'])
+        feature_scope = package.get('feature_scope')
+        if feature_scope is not None and _digest(_json(feature_scope)) != package.get('feature_scope_sha256'):
+            changes.append({'name': package['name'], 'version': package['version'], 'path': 'feature_scope'})
         for item in package['files']:
             try:
                 path = _file(root, item['path'])
@@ -193,6 +202,42 @@ def check_selection(materials):
                 matched = False
             if not matched:
                 changes.append({'name': package['name'], 'version': package['version'], 'path': item['path']})
+    for binding in materials['preparation'].get('external_connections', []):
+        try:
+            matched = _connections.check_binding(binding)
+        except (OSError, ValueError, KeyError, TypeError, _connections.zipfile.BadZipFile):
+            matched = False
+        if not matched:
+            changes.append({'name': binding['key'], 'version': binding['catalog']['version'], 'path': binding['source']})
+    for key, binding in materials.get('native_bindings', {}).items():
+        try:
+            _native.check_native(binding)
+        except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+            changes.append({'name': key, 'version': binding['connection']['catalog']['version'], 'path': binding['root']})
+    prep = materials['preparation']
+    if prep.get('external_features') and _digest(_json(prep['external_features'])) != prep.get('external_features_sha256'):
+        changes.append({'name': 'external', 'version': '', 'path': 'feature_scope'})
+    # Decisions can reference public runtime files outside a Skill catalog,
+    # including when the chosen representation has no native binding.
+    connections = {b['key']: b for b in prep.get('external_connections', [])}
+    for key, projection in prep.get('external_features', {}).items():
+        refs = {r['path']: r['sha256'] for request in projection['decision_requests']
+                for r in request.get('source_identity', {}).get('files', [])}
+        if not refs:
+            continue
+        try:
+            with _connections.source_files(connections[key]['source']) as (read, _):
+                matched = all(_digest(read(name)) == digest for name, digest in refs.items())
+        except (OSError, ValueError, KeyError, TypeError, RuntimeError, _connections.zipfile.BadZipFile):
+            matched = False
+        if not matched:
+            changes.append({'name': key, 'version': projection['version'], 'path': 'decision_sources'})
+    for mapping in prep.get('feature_mappings', []):
+        try:
+            matched = _digest(Path(mapping['path']).read_bytes()) == mapping['sha256']
+        except OSError:
+            matched = False
+        if not matched: changes.append({'name': mapping['key'], 'version': '', 'path': mapping['path']})
     for row in materials['preparation'].get('stack_profiles', []):
         try:
             path = Path(row['source'])
@@ -237,7 +282,7 @@ def _prepare_verifier_inputs(scope, protected, production, output):
     return protected
 
 
-def build_materials(config, output_root):
+def build_materials(config, output_root, *, connection_snapshot=None):
     """Return (materials, relative-file -> bytes) without writing or executing.
 
     output_root names a new host materials directory, never the target workspace.
@@ -288,8 +333,101 @@ def build_materials(config, output_root):
             add_source(row['source_id'], row['path'], source.read_bytes(), str(source))
             production.append(source)
 
+    external = deepcopy(previous.get('external_connections', []))
+    connection_config = config.get('connections')
+    external_features = deepcopy(previous.get('external_features', {}))
+    feature_mappings = deepcopy(previous.get('feature_mappings', []))
+    if connection_config is not None:
+        # Upgrade routing can pass its one read of this exact connection config.
+        loaded = connection_snapshot if connection_snapshot is not None else _connections.load_connections(
+            connection_config['instance_root'], project, connection_config.get('skills', []))
+        if connection_config.get('feature_selections'):
+            spec = importlib.util.spec_from_file_location('capability_feature_connections', Path(__file__).with_name('feature_connections.py'))
+            feature_connections = importlib.util.module_from_spec(spec); spec.loader.exec_module(feature_connections)
+            original_catalogs = {r['key']: r['catalog'] for r in loaded['connections']}
+            connection_config, projections, mappings = feature_connections.prepare(connection_config, loaded, config,
+                {r['source_id']: files['sources/' + r['path']] for r in manifest})
+            loaded = _connections.load_connections(connection_config['instance_root'], project, connection_config['skills'])
+            if original_catalogs != {r['key']: r['catalog'] for r in loaded['connections']}:
+                raise ValueError('external catalog changed during feature selection')
+            for key, projection in projections.items():
+                _merge(external_features, key, projection, 'external feature selection')
+                diagnostics.extend(projection['diagnostics'])
+            for mapping in mappings:
+                if mapping not in feature_mappings: feature_mappings.append(mapping)
+        diagnostics.extend(loaded['diagnostics'])
+        for binding in loaded['connections']:
+            existing = next((b for b in external if b['key'] == binding['key']), None)
+            if existing and any(existing[k] != binding[k] for k in ('source', 'resolved_source', 'catalog')):
+                raise ValueError('external connection differs from base materials: ' + binding['key'])
+            if existing is None:
+                external.append(binding)
+            key = binding['key']
+            entries = [('_connection/catalog.json', _json(binding['catalog']))]
+            if key in external_features:
+                entries.append(('_connection/feature-scope.json', _json(external_features[key])))
+            entries.extend(('materials/' + m['path'], m['text'].encode('utf-8')) for m in loaded['materials'] if m['connection'] == key)
+            for relative, raw in entries:
+                destination = 'external/' + key + '/' + relative
+                prior = next((r for r in manifest if r['path'] == destination), None)
+                if prior:
+                    if files['sources/' + destination] != raw:
+                        raise ValueError('external material differs from captured source: ' + destination)
+                    sid = prior['source_id']
+                else:
+                    index = 1
+                    while 'EXT-' + key + '-M' + str(index) in sources:
+                        index += 1
+                    sid = 'EXT-' + key + '-M' + str(index)
+                    add_source(sid, destination, raw, binding['source'])
+                for task in connection_config.get('workpack_ids', []):
+                    task_inputs.setdefault(_id(task), []).append({'kind': 'SOURCE', 'id': sid})
+            source_path = Path(binding['source']).resolve(strict=True)
+            production.extend([(source_path / f['path']).resolve(strict=True) for f in binding['catalog']['files']]
+                              if source_path.is_dir() else [source_path])
+        if request and loaded['connections'] and not connection_config.get('workpack_ids'):
+            diagnostics.append({'id': 'external', 'code': 'SOURCE_TASK_BINDING_MISSING', 'severity': 'ERROR',
+                                'message': 'choose production Workpack inputs for connected materials'})
+
+    native_bindings = deepcopy(base.get('native_bindings', {}))
+    for native_config in (connection_config or {}).get('native', []):
+        key = native_config['key']
+        rows = [b for b in external if b['key'] == key]
+        if len(rows) != 1:
+            raise ValueError('native connection is unavailable: ' + key)
+        bound = _native.bind_native(rows[0], native_config, project_root=project)
+        _merge(native_bindings, key, bound, 'native binding')
+    for key, bound in native_bindings.items():
+        runtime_files.append(bound['root'])
+        production.append(Path(bound['root']))
+        for role, invocation in bound['environment']['scope_fragment']['executables'].items():
+            identity = key + '.' + role
+            _merge_requirement(requirements, {'id': identity, 'kind': 'executable'})
+            _merge_executable(profile_tools, identity, invocation)
+        diagnostics.extend(bound['environment']['diagnostics'])
+        relative = 'external/' + key + '/native-handoff.json'
+        public = {'provider': bound['adapter']['provider'], 'adapter_version': bound['adapter']['version'],
+                  'version': bound['connection']['catalog']['version'],
+                  'native_identity': {'adapter_sha256': bound['adapter_sha256'], 'files_sha256': _digest(_connections.encoded(bound['files']))},
+                  'root': bound['root'], 'operations': {n: bound['adapter']['operations'][n] for n in bound['operations']},
+                  'skills': bound['adapter'].get('skills', {}), 'external_cli': bound['adapter'].get('external_cli', {}),
+                  'environment': bound['environment'], 'commands_executed': False, 'acceptance_granted': False}
+        if key in external_features:
+            selected_skills = {v for f in external_features[key]['features'] if f['final_form'] in ('AS_IS', 'BRIDGED', 'BUILD_ONLY') for v in f.get('skills', [])}
+            public['skills'] = {k: v for k, v in public['skills'].items() if k in selected_skills}
+        prior = next((r for r in manifest if r['path'] == relative), None)
+        raw = _json(public)
+        sid = prior['source_id'] if prior else 'EXT-' + key + '-NATIVE'
+        if prior:
+            if files['sources/' + relative] != raw:
+                raise ValueError('native handoff differs from base: ' + key)
+        else:
+            add_source(sid, relative, raw, bound['adapter_path'])
+        for task in (connection_config or {}).get('workpack_ids', []):
+            task_inputs.setdefault(_id(task), []).append({'kind': 'SOURCE', 'id': sid})
+
     chosen = config.get('selections', [])
-    if not chosen:
+    if not chosen and not external:
         raise ValueError('select at least one explicit capability directory')
     names = {row['name'] for row in selections}
     for selection in chosen:
@@ -310,6 +448,15 @@ def build_materials(config, output_root):
         for key in ('inputs', 'outputs'):
             if not isinstance(package[key], list) or not package[key] or not all(isinstance(v, str) and v for v in package[key]):
                 raise ValueError('describe applicable ' + key + ': ' + name)
+        feature_scope = None
+        new_features = package.get('descriptor_version') == 2 or any(
+            key in obj for obj in (selection, config) for key in ('integration_mode', 'feature_pins'))
+        if new_features:
+            spec = importlib.util.spec_from_file_location('capability_inventory', Path(__file__).with_name('inventory.py'))
+            inventory = importlib.util.module_from_spec(spec); spec.loader.exec_module(inventory)
+            source_bytes = {r['source_id']: files['sources/' + r['path']] for r in manifest}
+            feature_scope = inventory.select(package, selection, config, source_bytes, _digest(descriptor_bytes))
+            diagnostics.extend(feature_scope['diagnostics'])
         selected_files = {'capability.json': (descriptor, descriptor_bytes)}
         source_ids = []
         public_files = []
@@ -332,14 +479,16 @@ def build_materials(config, output_root):
                      'interpreter': tool.get('interpreter'), 'interpreter_args': tool.get('interpreter_args', [])}
             if not isinstance(entry['interpreter_args'], list) or not all(isinstance(v, str) for v in entry['interpreter_args']):
                 raise ValueError('interpreter_args must be a list of strings: ' + key)
-            _merge(tool_entries, key, entry, 'tool')
+            if feature_scope is None or key in feature_scope['active_tools']:
+                _merge(tool_entries, key, entry, 'tool')
             public_files.append({'path': tool['path'], 'sha256': _digest(raw)})
         for relative in package.get('runtime_files', []):
             path = _file(root, relative)
             raw = path.read_bytes()
             selected_files[relative] = (path, raw)
             production.append(path)
-            runtime_files.append(str(path))
+            if feature_scope is None or relative in feature_scope['public_files']:
+                runtime_files.append(str(path))
             public_files.append({'path': relative, 'sha256': _digest(raw)})
         if not package.get('materials') and not package.get('tools'):
             raise ValueError('capability requires a real material or tool entry: ' + name)
@@ -351,7 +500,7 @@ def build_materials(config, output_root):
             selected_files[relative] = (path, raw)
             protected.append({'source': str(path), 'path': 'capabilities/' + name + '/' + relative,
                               'sha256': _digest(raw), 'shared': shared})
-        for dependency in package.get('environment', []):
+        for dependency in (package.get('environment', []) if feature_scope is None else feature_scope['environment']):
             _merge_requirement(requirements, dependency)
         if selection.get('environment_profile'):
             spec = importlib.util.spec_from_file_location('stack_profile_prepare', Path(__file__).with_name('stack_runtime.py'))
@@ -383,6 +532,8 @@ def build_materials(config, output_root):
                     'inputs': package['inputs'], 'outputs': package['outputs'],
                     'files': public_files, 'tools': package.get('tools', []),
                     'environment': package.get('environment', []), 'support': package.get('support', '')}
+        if feature_scope is not None:
+            identity['feature_scope'] = feature_scope
         sid = 'CAP-' + name + '-VERSION'
         add_source(sid, 'capabilities/' + name + '/selected-version.json', _json(identity), str(descriptor))
         source_ids.append(sid)
@@ -394,6 +545,9 @@ def build_materials(config, output_root):
         selections.append({'name': name, 'version': version, 'directory': str(root), 'usage': package['usage'],
                            'files': [{'path': rel, 'resolved_path': str(path), 'sha256': _digest(raw)}
                                      for rel, (path, raw) in selected_files.items()]})
+        if feature_scope is not None:
+            selections[-1]['feature_scope'] = feature_scope
+            selections[-1]['feature_scope_sha256'] = _digest(_json(feature_scope))
 
     old_environment = previous.get('environment', {})
     bindings = {key: {'path': row.get('absolute_path') or row['path'],
@@ -435,6 +589,9 @@ def build_materials(config, output_root):
             _merge_executable(fragment['executables'], key, tool['path'])
             prefix = [key]
         _merge(calls, key, {'argv_prefix': prefix, 'package': tool['package'], 'version': tool['version']}, 'tool')
+    for key, bound in native_bindings.items():
+        for operation in bound['operations']:
+            _merge(calls, key + '.' + operation, {'native_connection': key, 'operation': operation}, 'tool')
     fragment['source_read_roots'] = list(dict.fromkeys([*fragment['source_read_roots'], *runtime_files,
                                                      *[t['path'] for t in tool_entries.values()]]))
     merged_scope = deepcopy(scope)
@@ -479,16 +636,21 @@ def build_materials(config, output_root):
     result = {'source_manifest': manifest,
               'scope_fragment': fragment,
               'request_fragment': {'sources': list(sources.values()), 'workpack_inputs': task_inputs},
-              'tool_bindings': calls,
+              'tool_bindings': calls, 'native_bindings': native_bindings,
               'preparation': {**deepcopy(base.get('preparation', {})), 'status': 'MATERIALS_ONLY_NOT_APPROVED',
                   'readiness': 'INCOMPLETE' if environment['status'] != 'READY' or any(d.get('severity') == 'ERROR' for d in diagnostics) else 'READY',
                   'source_root': str(output / 'sources'), 'source_origins': origins,
                   'selections': selections, 'environment': environment, 'diagnostics': diagnostics,
+                  'external_connections': external,
                   'stack_profiles': stack_profiles,
                   'retained_diagnostics': deepcopy(previous.get('diagnostics', [])),
                   'verifier_inputs': protected, 'checker_files_fragment': [p['path'] for p in protected],
                   'removed_request_context': review_removed, 'commands_executed': False,
                   'runtime_verified': False, 'protected_copy_created': False}}
+    if external_features:
+        result['preparation']['external_features'] = external_features
+        result['preparation']['external_features_sha256'] = _digest(_json(external_features))
+        result['preparation']['feature_mappings'] = feature_mappings
     old_sources = {r['source_id'] for r in base.get('source_manifest', [])}
     # base/request may have been assembled above: compare task inputs to the
     # untouched caller value, never to the output being constructed.

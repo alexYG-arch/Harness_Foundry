@@ -302,3 +302,57 @@ report recovery remain authoritative; no new mandatory query or approval step.
 For selected long report handoffs, see [baseline/delta report guidance](../../../docs/RSI_REPORT_HANDOFF.md).
 Use the delivered optional query/read-source tool; retain incomplete dependencies and original outcomes.
 A material view never grants acceptance or replay authority. Do not copy private reports into public knowledge.
+
+## Optional external connections
+
+Before selecting capabilities, use the bundled [connection loader](../../../examples/capability-adapters/CONNECTIONS.md)
+with the explicitly chosen instance and any existing project. Read its applicable
+catalogs and public base materials; expand relevant Skills by qualified name.
+No connection means the existing route, without a new file or prerequisite.
+Reuse unchanged actual reads. Do not infer organization identity, scan unrelated
+projects, initialize a target early or treat discovery as runtime authorization.
+For selected native tools follow the bundled [native handoff](../../../examples/capability-adapters/NATIVE.md).
+Bind the original installed layout and host tools through prepare/consume; preparation
+does not dispatch. Original project state, Git/authentication checks, init/update,
+telemetry and use-before-sync remain with the provider entries and existing authorized
+caller. Use its lifecycle proposal to retain selections and disabled states. A completed
+capture is read under its original command identity, never replayed for new logs.
+Do not silently run lifecycle commands or grant permissions from loaded prose.
+Connecting an external package does not select RSI. Selected RSI retains its existing entrypoints.
+
+
+## Selected repair RSI handoff
+
+When the task selects RSI, read the bundled [repair handoff](../../../examples/capability-adapters/RSI_HANDOFF.md).
+At the existing verification, child-return and safe-closeout points, the outer owner
+proactively associates available facts with `examples/capability-adapters/rsi_handoff.py capture`;
+do not wait for another user request to run RSI. Keep the same project/task/problem
+identity across prepared and checker-only continuations, and retain original budgets.
+Children return evidence; the outer owner retrieves original reports and registers the
+material reference. Do not interrupt a running child or add a controller pause.
+Before a repair with a knowledge gap, query the selected Wiki from the actual problem
+and conditions, inspect sources/limits and record adoption or non-adoption. No match,
+adequate existing methods or inapplicability does not block ordinary work.
+Reuse equivalent records and completed captures; never replay tests, models, updates
+or telemetry merely to fill records. Reference existing TDD/Reviewer/adoption evidence;
+external PASS does not become independent acceptance or RED/GREEN evidence.
+Keep raw cases in the analysis domain. Only explicitly selected/sanitized material may
+reach Worker, Reviewer or knowledge recipients. Use `collection` for a selected new
+queryable collection version; candidate creation alone is not query registration.
+Material failure is a visible handoff gap, not a new business failure or approval gate.
+No selected RSI means no new prerequisite. Target delivery and actual autonomous
+new-session use remain separately verified under the delivery contract.
+
+## External adapter authoring
+
+For a selected nonstandard provider, use the [author guide](../../../examples/capability-adapters/AUTHORING.md).
+Reuse existing adapters first. Generate a separate candidate from declared inputs;
+retain unknown behavior, original sources and explicit derived differences.
+Preparation does not execute, install or authorize an upstream command.
+Use existing connections/native handoffs and original command recovery for actual use.
+JSON/TOML field mappings are deterministic; raw YAML/README mappings remain author
+declarations, not automatic semantic parsing. Runtime and target delivery are verified separately.
+
+## Feature-scoped capability selection
+
+When using descriptor v2 or explicit feature selection, read the bundled [feature guide](../../../examples/capability-adapters/FEATURES.md). Choose ALL or ON_DEMAND from the actual requirement, preserve build-only and unselected entries, and distinguish file dependencies from invocation tools. Use a versioned sidecar for third-party sources; keep original lifecycle and disabled settings. Reuse applicable decisions; only concrete unresolved user-owned choices follow existing confirmation. Prepare public delivery plus independent expected files, reference its instructions in the target, then verify actual new-task use. Report current evidence, old failures and untested host/service work separately. This adds no controller, permission, budget or mandatory query.

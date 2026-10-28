@@ -1,5 +1,7 @@
 # 最小作者模板
 
+旧模板 `capability.json` 保持 v1；新功能级模板使用 `capability.v2.json`，复制到独立版本目录并命名为 `capability.json`。补齐它声明的文件和说明片段后再准备，不直接执行占位模板。`features.files` 是文件依赖，`entry.tool`/`tool_refs` 才是实际入口；共享文件不扩大调用选择。使用 SDK 等外部程序时声明 `EXTERNAL_BINARY` 和 `delivery.doctor`，并在该功能的文件或 requires 中列齐 doctor 的实际运行依赖。
+
 本目录是待填清单，不是可执行包。复制到新的 `packages/<name>/<version>/`，填写名称、操作和支持范围，补齐清单内的普通文件后才可prepare。不要直接把模板记为环境验证通过。
 
 - `guide.md`：输入、输出、发现/绑定、实际调用、重新绑定、失败及报告取回方式。

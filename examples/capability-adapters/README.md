@@ -149,3 +149,22 @@ Chat 可按用户要求在 Codex 浏览器面板或外置 Chrome 打开；内嵌
 不使用浏览器名称作可靠身份判断，原地址无提示时按接口支持处理。
 长身份和原状态移入详情，进度、当前检查和待处理事项保持分开；不改变累计计数、接受、
 恢复、权限或预算。旧部署须显式选用新版完整组件绑定，不自动改写旧固定包。
+
+## 可选持久外接连接
+
+[连接与自动加载](CONNECTIONS.md)提供实例／项目范围的本地目录或 ZIP 发现、版本绑定和公开材料接入。它复用本准备器，不执行插件或改变原运行授权；原显式选版仍可独立使用。E2–E3 原生调用与生命周期交接见 NATIVE.md；所选 RSI 的宿主材料交接见 [RSI_HANDOFF.md](RSI_HANDOFF.md)；完整目标交付和真实自动触发、服务验收继续按后续步骤推进。
+
+原生调用与生命周期的可选交接见 [NATIVE.md](NATIVE.md)。原 外接包 包不改写，执行仍由已有授权接收器负责；真实服务和交付验收分列。
+
+
+所选修复过程的案例关联、原报告取回及新知识集合准备见 [RSI_HANDOFF.md](RSI_HANDOFF.md)。它只整理材料，保留原修改责任、独立验收、预算和 外接包 生命周期；目标实际使用另验。
+
+非标准包使用[独立作者入口](AUTHORING.md)生成明确来源的候选映射，再复用 connections/native。原件、未知字段和改写差异保留；准备不执行，真实调用及交付仍独立验收。
+
+## External target delivery
+
+`delivery.py` stages selected external runtime layouts, original modes and relative links alongside optional built-in and RSI support. Use [EXTERNAL_DELIVERY.md](EXTERNAL_DELIVERY.md) for receiving-directory tool binding, original report recovery and existing C/G/N upgrades. Preparation is not target acceptance or permission; original providers still own initialization, reporting and updates.
+
+## 功能级接入 v2 工程候选
+
+本分支的 ALL / ON_DEMAND、决定复用、内外混用交付、接收绑定及报告入口见 [功能接入说明](FEATURES.md)。旧输入与旧包保留原语义；新版本和适用验证分列，不把候选材料记为部署或服务通过。
