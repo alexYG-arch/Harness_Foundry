@@ -125,6 +125,10 @@ def discover_dependencies(initial_files, *, tool, report_dir, environment,
             elif str(item.parent) not in result['library_dirs']:
                 result['library_dirs'].append(str(item.parent))
             for line in lines[1:]:
+                # Universal Mach-O output repeats the selected file header for
+                # each architecture; collect all slices without rerunning files.
+                if re.fullmatch(re.escape(str(item)) + r' \(architecture [A-Za-z0-9_]+\):', line.strip()):
+                    continue
                 match = re.match(r'\s+(.+?) \(compatibility version ', line)
                 if not match:
                     if line.strip():

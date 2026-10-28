@@ -12,6 +12,7 @@ import argparse
 import copy
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from socketserver import TCPServer
 import json
 import math
 from pathlib import Path
@@ -235,6 +236,12 @@ class _HTTPServer(ThreadingHTTPServer):
     daemon_threads = True
     block_on_close = False
     allow_reuse_address = False
+
+    def server_bind(self):
+        # This observer binds a literal loopback address. Reverse DNS is not
+        # needed for its URL or HTTP handling and may block offline startup.
+        TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
     def __init__(self, *args, **kwargs):
         self._owned_lock = threading.Lock()

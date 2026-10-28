@@ -114,6 +114,12 @@ if mode == "local-service":
 elif mode in {"local-tcp", "local-tcp-start-failure"}:
     import errno, http.client, socket, threading
     from http.server import BaseHTTPRequestHandler, HTTPServer
+    from socketserver import TCPServer
+    class LiteralHTTPServer(HTTPServer):
+        def server_bind(self):
+            TCPServer.server_bind(self)
+            self.server_name, self.server_port = self.server_address[:2]
+    HTTPServer = LiteralHTTPServer
     product_cwd = os.getcwd()
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
