@@ -1,5 +1,7 @@
 # 可选能力准备与接入
 
+当前1.2.0的通用功能选择、全部／按需接入及本机内置验收见[当前说明](../../docs/CAPABILITY_ADAPTERS.md)。以下早期WP01–WP08、I/V/F/H记录保留各自历史时点，不是当前补验待办；同名Workpack属于不同计划，不能直接互换进度或证据。
+
 WP01/02 提供纯 Python 材料 API 和 CLI：显式选择外置资料或工具版本，解析本机依赖，输出当前 Generic 接口可用的片段。它们不创建 Program、不安装、不执行所选工具、不签发批准或接受，也不调整预算。原来的文档直接搭建仍可使用。
 
 本目录保留资料与单文件工具小例，并已交付 [Qt/CMake@1](packages/qt-cmake/1/guide.md)、[DATA@1](packages/data-summary/1/guide.md) 及宿主消费核对入口。WP04 已补 [升级交接](UPGRADE.md) 与 `upgrade.py`，复用现有文件合并和原核心合法接续；WP05 已交付 [local-dashboard@1](packages/local-dashboard/1/guide.md) 公共观察服务与页面，实际调用见 [WP05 接口](WP05_INTERFACE.md)。当前工程测试支持 I1–I4 代码交付，不能关闭 V1–V12 的完整实际目标、升级、恢复或设备验收。

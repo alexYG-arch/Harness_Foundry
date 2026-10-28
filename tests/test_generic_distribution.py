@@ -91,7 +91,7 @@ class GenericDistributionTests(unittest.TestCase):
         help_result = self.run_python([launcher, "compile-build-plan", "--help", "--json"])
         self.assertEqual(help_result.returncode, 0, help_result.stderr)
         self.assertIn("usage:", help_result.stdout)
-        self.assertEqual(self.cli("version")["implementation_version"], "1.2.0-rc.3")
+        self.assertEqual(self.cli("version")["implementation_version"], "1.2.0")
 
     def test_reproducible_archive_never_overwrites(self):
         second = self.root / "second.zip"
@@ -386,11 +386,11 @@ print(json.dumps(first))
     def test_metadata_is_read_from_selected_source_not_building_interpreter(self):
         root = self.source_copy()
         path = root / "src/harness_foundry_factory/identity.py"
-        path.write_text(path.read_text().replace('FACTORY_VERSION = "1.2.0-rc.3"', 'FACTORY_VERSION = "9.8.7"'))
+        path.write_text(path.read_text().replace('FACTORY_VERSION = "1.2.0"', 'FACTORY_VERSION = "9.8.7"'))
         with self.assertRaisesRegex(ValueError, "product version differs"):
             packager.collect_files(root)
         project = root / "pyproject.toml"
-        project.write_text(project.read_text().replace('version = "1.2.0-rc.3"', 'version = "9.8.7"'))
+        project.write_text(project.read_text().replace('version = "1.2.0"', 'version = "9.8.7"'))
         product = root / "FACTORY_MANIFEST.json"
         manifest = json.loads(product.read_text())
         manifest["version"] = "9.8.7"

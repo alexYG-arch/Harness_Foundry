@@ -1,4 +1,4 @@
-# Harness Foundry 1.2.0-rc.3
+# Harness Foundry 1.2.0
 
 
 **用 Codex 为项目搭建可继续使用、可检查、可修复的 Harness。**
@@ -13,16 +13,16 @@ Foundry 不是另一套模型，也不是固定行业流水线。Codex 负责需
 
 | 项目 | 状态 |
 |---|---|
-| 当前预发布版本 | **1.2.0-rc.3**；协议仍为 **2.9**；[发布说明](docs/releases/v1.2.0-rc.3.md) |
+| 当前稳定版本 | **1.2.0**；协议仍为 **2.9**；[发布说明](docs/releases/v1.2.0.md) |
 | 本 README 的累计升级范围 | 以历史 v0.5.0 为基线，涵盖 `fd6f8a5` 的 RSI 实现及后续文档更新；包含1.1.0基础修补及本次通用能力接入 |
-| 当前默认分支 | `main`；由原 `codex/latest-r3-main-repairs-20261021` 更名；当前预发布固定为 `v1.2.0-rc.3`；稳定版仍为 `v1.1.0` |
+| 当前默认分支 | `main`；由原 `codex/latest-r3-main-repairs-20261021` 更名；当前稳定版固定为 `v1.2.0`；旧预发布和稳定版保留 |
 | 旧主线历史 | `history/main-before-rsi-20261024`，保留旧 main 提交 `00348ca8` 及其历史；旧标签和 Release 不变 |
 | 历史稳定版下载 | [v0.5.0 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.5.0)，2026-10-15 发布；原 tag 和附件保留 |
 | 协议与许可 | 协议 **2.9**；[MIT](LICENSE) |
 
-**当前为 1.2.0-rc.3 预发布，稳定版仍为 1.1.0。** 本版纳入通用连接、全部／按需选择、交付检查与8个内置能力新版本，不包含具体第三方提供方实现。可从 [预发布附件](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v1.2.0-rc.3) 获取固定运行包和独立能力包，或继续使用 [v1.1.0 稳定版](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v1.1.0)。
+**当前稳定版为 1.2.0。** 本版纳入通用连接、全部／按需选择、交付检查与8个内置能力新版本，不包含具体第三方提供方实现。从 [正式版附件](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v1.2.0) 获取固定运行包、所需独立能力包及校验清单；[rc.3](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v1.2.0-rc.3)和[v1.1.0](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v1.1.0)继续保留。
 
-工程实现不等于所有实际场景已验收：WP07的新会话完整搭建与使用、WP08的实际PRD／检索及外置浏览器仍未完成。原验收出口保持6/8（75%），收益未证实。详见[使用与验证边界](docs/CAPABILITY_ADAPTERS.md)。
+WP07/WP08的本机标准内置范围已补齐：全部／按需搭建及新会话使用、实际PRD交互与检索、DOC导出、Qt/Python原生调用、看板全屏／画中画和报告恢复。原8个Workpack的工程及限定出口均为8/8；这不是所有平台、生产服务或部署均通过，**收益仍未证实**。真实执行绑定rc.3；正式版只更新版本与说明，按逐文件差异复用适用证据，另核对正式包入口。详见[使用与验证边界](docs/CAPABILITY_ADAPTERS.md)。
 
 使用时记录 Git 提交、固定包和能力版本；源码已修、包已包含和目标部署已升级分别记录。旧标签、Release、附件及历史证据保留，原R3和分母不变。1.1.0的基础修补见[原发布说明](docs/releases/v1.1.0.md)，不将旧验证改绑为本版全部通过。
 
@@ -115,7 +115,7 @@ Foundry 不是另一套模型，也不是固定行业流水线。Codex 负责需
 
 可选[增量报告入口](docs/RSI_REPORT_HANDOFF.md)使用固定基线与差异重建当前材料，支持分页及原文取回，保留旧失败、原条件、缺失来源和未验依赖。包内 `tools/report_rsi_view.py` 和通用交接辅助脚本只整理、关联和读取材料，不派发业务或生成接受决定。
 
-### 10. 通用连接、功能选择与交付（1.2.0-rc.3）
+### 10. 通用连接、功能选择与交付（1.2.0）
 
 通过 [connections.py](examples/capability-adapters/CONNECTIONS.md) 连接目录或ZIP，发现版本、基础资料和Skill；按原准备入口选择全部功能（ALL）或需求对应的功能（ON_DEMAND）。功能、共享文件、调用入口与工具环境分别记录，未选工具不会因共享脚本自动启用。
 
@@ -127,9 +127,9 @@ Foundry 不是另一套模型，也不是固定行业流水线。Codex 负责需
 
 | 修复方向 | 现在如何处理 |
 |---|---|
-| 最终交付依赖（1.2.0-rc.3） | 按最终形态核对运行与搭建期依赖，保留合法依赖组合 |
-| 旧Skill混入新选择（1.2.0-rc.3） | 只重算采用映射的连接，其他连接及旧入口保持原选择 |
-| 第三方决定缺少来源绑定（1.2.0-rc.3） | 绑定相关来源并在交付前复查；无关变化和同字节迁移复用原决定，不新增审批 |
+| 最终交付依赖（1.2.0） | 按最终形态核对运行与搭建期依赖，保留合法依赖组合 |
+| 旧Skill混入新选择（1.2.0） | 只重算采用映射的连接，其他连接及旧入口保持原选择 |
+| 第三方决定缺少来源绑定（1.2.0） | 绑定相关来源并在交付前复查；无关变化和同字节迁移复用原决定，不新增审批 |
 | 授权原因随错误措辞变化（1.1.0） | 使用稳定原因码区分未授权、撤销、过期、被替代和绑定错误；复用原校验，不放宽权限或清零预算 |
 | 参数错误输出不统一（1.1.0） | 公共CLI参数错误按约定输出JSON及非零退出码；帮助与正常调用保持原行为 |
 | 报告和库外材料缺口（1.1.0） | 目录遍历失败显式标为待核对，保留其他文件、合法空目录和链接事实；增量报告不因新差异省略旧条件和失败 |
@@ -162,10 +162,10 @@ Foundry 不是另一套模型，也不是固定行业流水线。Codex 负责需
 
 ## 如何开始
 
-### 选择预发布或稳定版
+### 选择稳定版或历史版本
 
 - **使用历史版本**：从 [v0.5.0 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.5.0) 下载 `Harness-Foundry-0.5.0-generic.zip` 和 `SHA256SUMS`，保留隐藏的 `.agents/` 目录。它提供上述 v0.5.0 基础，不包含本分支新增项。
-- **试用1.2.0-rc.3**：从 [预发布](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v1.2.0-rc.3) 下载 `Harness-Foundry-1.2.0-rc.3-generic.zip`、所需独立能力包及 `SHA256SUMS`。维护源码选同名标签；真实未验范围见[发布说明](docs/releases/v1.2.0-rc.3.md)。
+- **使用1.2.0**：从 [正式版](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v1.2.0) 下载 `Harness-Foundry-1.2.0-generic.zip`、所需独立能力包及 `SHA256SUMS`。维护源码选同名标签；验证与适用范围见[发布说明](docs/releases/v1.2.0.md)。
 - **使用1.1.0**：从 [v1.1.0 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v1.1.0) 下载 `Harness-Foundry-1.1.0-generic.zip` 和 `SHA256SUMS`。维护源码时选取 `v1.1.0` 标签；记录实际提交和包身份。可选能力包从同标签的 `examples/capability-adapters/packages/` 按名称和版本选择，运行ZIP只含通用接入工具，不打包第三方SDK。
 
 GitHub 自动生成的 Source code ZIP 是源码快照，不等于已验收的通用运行包。旧项目不会因源码分支更新自动升级，切换前应核对实际加载路径、固定版本、交付材料和已有控制记录。
@@ -230,6 +230,12 @@ python3 tools/hffactory.py --help
 示例和能力包不是替所有项目做好的业务系统。浏览器、搜索或其他宿主工具需要实际接入；CODEX 子进程不会自动继承主聊天工具。特别是 PRD／设计与市场调研，文件存在或模型自述不能代替实际交互、检索、语义审阅与来源核对。
 
 ## 验证状态
+
+1.2.0沿用rc.3已验收实现，变化仅为产品身份、版本测试常量、打包文档选择和交付说明。原包及原报告不覆盖；新包另行固定、逐文件比较、检查实际加载位置和包内入口，并核对远端CI及发布后下载。没有重新派发已接受的模型或业务任务。
+
+本轮rc.3补验的两项USE及两项零模型reviewed均已接受；原生Qt、Python及实际浏览器操作完成，成功临时区、测试窗口与服务已清理。USE消耗分别2/2、1/2，首次超时与Python首轮缺读取根失败均保留；恢复只取回原报告。其他相同能力文件的适用旧证据直接复用，不把跨批次结果合称新版本单轮全绿。57项默认SKIP仍按原记录解释；详见[正式版说明](docs/releases/v1.2.0.md)。
+
+正式版本地公开源码检查1257项按两批归并通过（首轮1245＋回环权限补验12），零跳过，Skill 13处引用通过；首轮失败记录保留，不称本地单轮全绿。远端CI另行核对。
 
 1.2.0-rc.3的产品实现提交 `f72222f` 已完成单轮2572项完整回归：**2515 PASS＋57 SKIP，零失败／错误**；另有90项受影响测试通过。Ubuntu公开检查1256项、macOS1257项通过；Linux另列1项macOS专用不适用，macOS真实执行该断言。不同组有重叠，不相加，SKIP不计通过。
 
