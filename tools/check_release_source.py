@@ -87,6 +87,27 @@ REQUIRED_MODULES = (
     "test_release_acceptance_adapters",
 )
 
+# This assertion invokes the real macOS otool. It remains required on macOS;
+# the Linux job reports it as not applicable, never as a pass or ignored skip.
+MACOS_ONLY_TESTS = frozenset({
+    "test_capability_feature_versions.PythonV2Tests.test_native_observation_uses_selected_module_dependencies_and_then_actual_probe",
+})
+
+
+def platform_suite(suite, platform):
+    selected = unittest.TestSuite()
+    not_applicable = []
+    for item in suite:
+        if isinstance(item, unittest.TestSuite):
+            nested, excluded = platform_suite(item, platform)
+            selected.addTest(nested)
+            not_applicable.extend(excluded)
+        elif platform != "darwin" and item.id() in MACOS_ONLY_TESTS:
+            not_applicable.append({"test": item.id(), "reason": "Requires actual macOS otool; covered by the macOS CI job"})
+        else:
+            selected.addTest(item)
+    return selected, not_applicable
+
 
 class RequiredResult(unittest.TextTestResult):
     """unittest's ordinary success permits skips/xfail; this gate must not."""
@@ -139,7 +160,8 @@ def source_checks() -> dict:
         if not loaded.countTestCases():
             empty.append(module)
         suites.append(loaded)
-    tests = check_suite(unittest.TestSuite(suites))
+    selected, not_applicable = platform_suite(unittest.TestSuite(suites), sys.platform)
+    tests = check_suite(selected)
     skill = subprocess.run(
         [sys.executable, "-B", str(ROOT / "tools/validate_skill.py")],
         cwd=ROOT, capture_output=True, text=True, check=False, timeout=60,
@@ -160,6 +182,8 @@ def source_checks() -> dict:
         "empty_modules": empty,
         "load_errors": loader.errors,
         "tests": tests,
+        "platform": sys.platform,
+        "platform_not_applicable": not_applicable,
         "skill": skill_result,
         "release_accepted": False,
         "harness_e2e_verified": False,

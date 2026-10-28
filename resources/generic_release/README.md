@@ -1,6 +1,6 @@
 # Harness Foundry — generic Codex runtime
 
-Product version **1.2.0-rc.1**; protocol **2.9**. This is the v1.2.0-rc.1 pre-release runtime. Engineering validation is separate from real new-session and host workflow acceptance; see examples/capability-adapters/FEATURES.md.
+Product version **1.2.0-rc.2**; protocol **2.9**. This is the v1.2.0-rc.2 pre-release runtime. Engineering validation is separate from real new-session and host workflow acceptance; see examples/capability-adapters/FEATURES.md.
 It preserves declared verification resources, protected product copies, controlled
 repair and single-attempt handoff. It adds on-demand control reads, optional
 revision-body deduplication for new databases and baseline/delta report tools.
@@ -119,7 +119,7 @@ archive checksum or successful CLI command is not evidence that a target Harness
 meets its requirements. Complete release acceptance needs the declared same-package
 new-project and existing-project evidence, plus closure of known in-scope defects.
 PACKAGE_MANIFEST.json describes files and interfaces, not business acceptance.
-The [v1.2.0-rc.1 release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v1.2.0-rc.1)
+The [v1.2.0-rc.2 release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v1.2.0-rc.2)
 identifies the selected commit, exact archive and applicable validation. Historical
 2436-case coverage is cross-batch evidence for a broader development snapshot,
 not this runtime's test count; benefits and real old-database adoption remain unverified.

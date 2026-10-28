@@ -31,6 +31,22 @@ class ReleaseSourceGateTests(unittest.TestCase):
         self.assertEqual(result["status"], "FAIL")
         self.assertEqual(result["skipped"][0]["reason"], "not configured")
         self.assertEqual(result["passed"], 0)
+        class Native(unittest.TestCase):
+            def runTest(self):
+                self.skipTest("actual tool is unavailable")
+            def id(self):
+                return next(iter(gate.MACOS_ONLY_TESTS))
+        class Ordinary(unittest.TestCase):
+            def runTest(self):
+                self.skipTest("unexpected missing dependency")
+        linux, excluded = gate.platform_suite(unittest.TestSuite([unittest.TestSuite([Native()]), Ordinary()]), "linux")
+        self.assertEqual(linux.countTestCases(), 1)
+        self.assertEqual(len(excluded), 1)
+        self.assertEqual(gate.check_suite(linux, stream=io.StringIO())["status"], "FAIL")
+        mac, excluded = gate.platform_suite(unittest.TestSuite([Native()]), "darwin")
+        self.assertEqual(mac.countTestCases(), 1)
+        self.assertEqual(excluded, [])
+        self.assertEqual(gate.check_suite(mac, stream=io.StringIO())["status"], "FAIL")
 
     def test_assertion_crash_and_failed_subtest_are_not_passes(self):
         def crash(test):
