@@ -23,6 +23,7 @@ from .build_types import (RequestValidationError, RevisionConflictError,
                           IdempotencyConflictError, canonical_json)
 from .revision_store import RevisionControlEventStore
 from .source_intake import load_local_sources
+from .build_state import budget_planning_readback
 
 
 def _require(condition, message):
@@ -132,6 +133,7 @@ def _verify_envelope(preview):
 def _preview_result(preview, path):
     return {"status": "BUILD_PREVIEW_NOT_AUTHORIZED", "preview_id": preview["preview_id"],
             "preview_path": str(path), "preview_sha256": preview["sha256"], "readback": deepcopy(preview),
+            "budget_planning": budget_planning_readback(preview["request"]["plan"], preview["prepared"]["scope"]),
             "control_state_write": False, "target_write": False, "execution_started": False,
             "harness_e2e_verified": False}
 

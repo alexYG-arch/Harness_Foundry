@@ -54,6 +54,7 @@ REQUIRED_MODULES = (
     "test_python_startup",
     "test_build_rebind",
     "test_build_budget_extension",
+    "test_build_budget_planning",
     "test_build_check_protocol",
     "test_portable_local_cli",
     "test_skill_contract",

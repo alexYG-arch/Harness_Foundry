@@ -219,6 +219,39 @@ class CodingProcessTests(unittest.TestCase):
         self.assertEqual(result["missing_read_paths"], [])
         self.assertFalse((self.cwd / "not-created").exists())
 
+    def test_linked_override_shadows_directory_and_binds_actual_read_target(self):
+        target = self.root / 'guidance.txt'
+        target.write_text('TEST ONLY override')
+        (self.cwd / 'AGENTS.override.md').symlink_to(target)
+        (self.cwd / 'AGENTS.md').mkdir()
+        result = instruction_read_preflight(self.cwd, [self.cwd])
+        self.assertEqual(result['instruction_files'], [str(target)])
+        self.assertEqual(result['missing_read_paths'], [str(target)])
+        self.assertFalse(result['permissions_added'])
+
+    def test_empty_linked_override_keeps_fallback_read_and_nonfile_rejection(self):
+        target = self.cwd / 'empty.txt'
+        target.write_text('')
+        (self.cwd / 'AGENTS.override.md').symlink_to(target.name)
+        fallback = self.cwd / 'AGENTS.md'
+        fallback.write_text('TEST ONLY fallback')
+        result = instruction_read_preflight(self.cwd, [self.cwd])
+        self.assertEqual(result['instruction_files'], [str(target), str(fallback)])
+        fallback.unlink()
+        fallback.mkdir()
+        with self.assertRaisesRegex(LocalProcessError, 'not a regular file'):
+            instruction_read_preflight(self.cwd, [self.cwd])
+
+    def test_missing_linked_override_keeps_fallback_without_creating_target(self):
+        target = self.cwd / 'not-created'
+        (self.cwd / 'AGENTS.override.md').symlink_to(target.name)
+        fallback = self.cwd / 'AGENTS.md'
+        fallback.write_text('TEST ONLY fallback')
+        result = instruction_read_preflight(self.cwd, [self.cwd])
+        self.assertEqual(result['instruction_files'], [str(fallback)])
+        self.assertFalse(target.exists())
+        self.assertFalse(result['permissions_added'])
+
     def test_instruction_drift_after_probe_stops_before_dispatch(self):
         def add_instruction(*args, **kwargs):
             (self.client_home / "AGENTS.md").write_text("new global guidance")

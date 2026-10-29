@@ -79,6 +79,24 @@ def render_build_readback(result):
                      + AUTHORIZATION_LABELS.get(state, "未识别状态，请查看原始 JSON"))
         lines.append(f"  尝试次数：已用 {budget['attempts_consumed']}，剩余 {budget['attempts_remaining']}；"
                      f"到期时间：{_value(grant['scope']['expires_at'])}")
+        planning = grant.get("budget_planning")
+        if planning:
+            first = planning["first_pass_reference"]
+            lines.append(f"  完整计划首次执行参考：{first['production_attempts']} 次生产尝试、"
+                         f"{first['model_invocations']} 次模型调用、{first['independent_check_commands']} 条独立检查命令；"
+                         "不含返修，不是实际消耗或费用估算。")
+            if planning['basis'] != 'INITIAL_EXECUTION':
+                lines.append("  接续提示：上述完整计划参考不是剩余工作量；先复用已接受结果、取回完整报告及处理只复验。")
+            for warning in planning['warnings']:
+                messages = {
+                    'TOTAL_BELOW_INITIAL_PASS': '总尝试上限小于完整计划各任务首次执行所需次数，请核对是否仅计划有限执行。',
+                    'NO_TOTAL_REPAIR_RESERVE': '总尝试上限仅覆盖完整计划首轮，尚无总返修余量。',
+                    'NO_TASK_REPAIR_RESERVE': '各任务上限为一次，尚无单任务返修余量。',
+                }
+                lines.append("  预算参考（不阻断）：" + messages[warning])
+            lines.append(f"  单次限时：{planning['command_timeout_seconds']} 秒；模型思考、内部工具调用和交接共用整次限时，"
+                         "LOCAL 与独立检查分别按各自命令计时；还会被授权剩余有效期截短。")
+            lines.append("  计数说明：未启动模型的准备失败也可能占用尝试；尝试数不等于实际模型调用、Token 或金额。")
         if grant.get("rebind_from"):
             lines.append(f"  接续来源：{_value(grant['rebind_from'])}；累计预算不重置；本范围已用 {budget['this_preparation_attempts']}。")
         if grant.get("budget_extension"):

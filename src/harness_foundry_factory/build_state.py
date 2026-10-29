@@ -100,6 +100,40 @@ def attempt_budget(scope, attempts):
                                         for key, count in usage.items()}, "reset": False}
 
 
+def budget_planning_readback(plan, scope, *, initial_execution=True):
+    """Nonbinding first-pass reference, never a remaining-work or cost estimate.
+
+    Reuse, checker-only rounds and unresolved captures must follow their existing
+    projections. Do not infer that every task needs another production attempt.
+    """
+    tasks = plan["workpacks"]
+    warnings = []
+    if initial_execution:
+        if scope["max_attempts"] < len(tasks):
+            warnings.append("TOTAL_BELOW_INITIAL_PASS")
+        elif scope["max_attempts"] == len(tasks):
+            warnings.append("NO_TOTAL_REPAIR_RESERVE")
+        if scope["max_task_attempts"] == 1:
+            warnings.append("NO_TASK_REPAIR_RESERVE")
+    return {
+        "advisory_only": True,
+        "basis": "INITIAL_EXECUTION" if initial_execution else "PLAN_REFERENCE_NOT_REMAINING_WORK",
+        "first_pass_reference": {
+            "production_attempts": len(tasks),
+            "model_invocations": sum(t["executor"] == "CODEX" for t in tasks),
+            "independent_check_commands": sum(len(t["verification"]) for t in tasks),
+            "declared_environment_preflights": sum("environment" in t for t in tasks),
+        },
+        "warnings": warnings,
+        "command_timeout_seconds": scope["command_timeout_seconds"],
+        "timeout_applies_to": "WHOLE_MODEL_INVOCATION_OR_LOCAL_COMMAND",
+        "expires_at": scope["expires_at"],
+        "effective_timeout_rule": "MIN_COMMAND_TIMEOUT_AND_REMAINING_AUTHORIZATION",
+        "duration_and_monetary_cost_estimated": False,
+        "authority_or_budget_changed": False,
+    }
+
+
 def affected_workpacks(plan, producers):
     affected = set(producers)
     while True:

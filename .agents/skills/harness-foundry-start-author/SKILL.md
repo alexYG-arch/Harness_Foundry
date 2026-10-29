@@ -22,6 +22,25 @@ and approved write roots, without Foundry-local links or new files/tasks just fo
 style. Do not rewrite reviewed/accepted history or block tasks without guidance
 artifacts. The runtime embeds the policy; it grants no extra reads or approval.
 
+## Prepare realistic budgets
+
+Use the Plan's actual tasks, selected model/tool work, independent checks and
+applicable previous timings to choose attempt limits, command time and expiry.
+Do not copy two/three attempts or 900 seconds from an example as universal defaults.
+The CLI's budget_planning is advisory only: its full first-pass reference is not
+remaining work after continuation or acceptance reuse, nor a monetary estimate.
+Allow justified repair and handoff room, without a mandatory multiplier or gate.
+CODEX time covers the whole model invocation (reasoning, tools and final return),
+not each inner tool call; authorization expiry can shorten it further. Separate
+production reservations, real model calls and checks in the existing Readback.
+Catch known layout/read-binding mistakes during preparation where possible;
+never run a target probe without authority or refund historical preparation failures.
+Use explicit rebind_from and budget_extension for approved additional attempts;
+for time-only extensions rebind timeout/expiry while retaining attempt ceilings.
+Reuse the existing confirmation once for the changed scope, not per internal step.
+Preserve completed captures, accepted outputs and unresolved effects when resuming.
+See the existing CLI budget/time guidance; do not add another controller or approval.
+
 ## Select work without implicit execution
 
 For source engineering or status, inspect the current Tracker and relevant tests.

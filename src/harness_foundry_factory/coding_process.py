@@ -55,6 +55,25 @@ def check_configuration_sources(cwd: Path) -> None:
                 raise LocalProcessError(f"additional Codex configuration requires explicit hydration: {path}")
 
 
+def instruction_file_candidates(directory: Path):
+    """Resolve default candidates in read order, including absent file targets.
+
+    Preparation uses absent targets to catch write-directory collisions. Runtime
+    reads skip them, but still inspect empty overrides before trying the fallback.
+    Nonregular sources are returned for the existing read preflight to reject.
+    """
+    for name in ("AGENTS.override.md", "AGENTS.md"):
+        path = Path(directory) / name
+        try:
+            size = path.stat().st_size
+        except FileNotFoundError:
+            size = None
+        resolved = path.resolve()
+        yield resolved, size
+        if size and resolved.is_file():
+            break
+
+
 def instruction_read_preflight(cwd: Path, read_roots, write_roots=()) -> dict:
     """Check default instruction discovery against declared reads; never grant them.
 
@@ -69,17 +88,12 @@ def instruction_read_preflight(cwd: Path, read_roots, write_roots=()) -> dict:
     directories = [client_state_root(), *reversed(lineage[:lineage.index(root) + 1])]
     files = []
     for directory in directories:
-        for name in ("AGENTS.override.md", "AGENTS.md"):
-            path = directory / name
-            try:
-                size = path.stat().st_size
-            except FileNotFoundError:
+        for path, size in instruction_file_candidates(directory):
+            if size is None:
                 continue
             if not path.is_file():
                 raise LocalProcessError(f"instruction source is not a regular file: {path}")
-            files.append(path.resolve())
-            if size:
-                break
+            files.append(path)
     roots = tuple(Path(path).resolve() for path in (*read_roots, *write_roots))
     missing = [str(path) for path in files if not _within(path, roots)]
     return {"status": "READ_SCOPE_MISSING" if missing else "READ_SCOPE_COVERED",

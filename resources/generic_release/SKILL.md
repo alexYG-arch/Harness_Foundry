@@ -73,6 +73,25 @@ for each defect. A core/checker fault does not grant the target self-modificatio
 authority. Stop once agreed delivery is met; further optimization is follow-up,
 not a reason to reopen completed work or ask for per-task Hash confirmations.
 
+## Prepare realistic budgets
+
+Use the Plan's actual tasks, selected model/tool work, independent checks and
+applicable previous timings to choose attempt limits, command time and expiry.
+Do not copy two/three attempts or 900 seconds from an example as universal defaults.
+The CLI's budget_planning is advisory only: its full first-pass reference is not
+remaining work after continuation or acceptance reuse, nor a monetary estimate.
+Allow justified repair and handoff room, without a mandatory multiplier or gate.
+CODEX time covers the whole model invocation (reasoning, tools and final return),
+not each inner tool call; authorization expiry can shorten it further. Separate
+production reservations, real model calls and checks in the existing Readback.
+Catch known layout/read-binding mistakes during preparation where possible;
+never run a target probe without authority or refund historical preparation failures.
+Use explicit rebind_from and budget_extension for approved additional attempts;
+for time-only extensions rebind timeout/expiry while retaining attempt ceilings.
+Reuse the existing confirmation once for the changed scope, not per internal step.
+Preserve completed captures, accepted outputs and unresolved effects when resuming.
+See the existing CLI budget/time guidance; do not add another controller or approval.
+
 ## Optional verification resources
 
 Use Plan 1.2 resource_profile_ref and an explicit verification_resources scope
@@ -231,8 +250,12 @@ responsibilities; private verifier:// references do not grant implementer reads.
 The independent checker actually loads its declared frozen dependencies.
 
 For explicit same-Program/same-database continuation, prepare may supply top-level
-rebind_from. Preserve original budget ceilings and task/output/Job/dependency
-identities; cumulative unique attempts retain old usage, including NOT_DISPATCHED.
+rebind_from. Preserve task/output/Job/dependency identities and cumulative unique
+attempt usage, including NOT_DISPATCHED. Budget ceilings stay unchanged unless
+the request explicitly supplies budget_extension and a real later decision
+approves the exact additions under the existing CLI rules. Time/expiry changes
+also need the existing explicit rebind approval; time-only changes retain attempt
+ceilings. Never mutate old grants or reset use by creating a new Program.
 Show this relationship in the existing Readback/approval flow. Fresh approval
 supersedes the linked old scopes atomically, without inheriting old authority.
 Unknown/in-flight effects still require reconciliation. Qualified unchanged

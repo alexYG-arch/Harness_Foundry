@@ -11,7 +11,7 @@ from pathlib import Path
 from .build_authoring import read_build_plan_proposal, record_build_plan_proposal
 from .build_plan import compile_build_plan, validate_compiled_build_plan
 from .build_repair import request_build_repair
-from .build_state import attempt_budget, project_readback_attempts, project_budget_attempts, project_execution_state
+from .build_state import attempt_budget, project_readback_attempts, project_budget_attempts, project_execution_state, budget_planning_readback
 from .build_rebind import superseding_prepared, reverification_candidates
 from .build_review import validate_build_review, validate_review_sources, review_summary
 from .build_runtime import (
@@ -109,7 +109,8 @@ def _scope_readback(event, events):
     proposal = next(row for row in events if row["event_id"] == payload["proposal_event_id"])
     attempts = [row["payload"] for row in events if row["event_type"] == "BUILD_ATTEMPT_STARTED"
                 and row["payload"]["prepared_event_id"] == prepared_id]
-    budget = attempt_budget(payload["scope"], list(project_budget_attempts(events, prepared_id).values()))
+    cumulative_attempts = list(project_budget_attempts(events, prepared_id).values())
+    budget = attempt_budget(payload["scope"], cumulative_attempts)
     continuation = {}
     if payload.get("rebind_from"):
         # Include untouched original owners; their allowance was not reduced.
@@ -134,6 +135,8 @@ def _scope_readback(event, events):
             "coding_instruction_preflight": payload.get("coding_instruction_preflight"),
             "acceptance_contracts": payload.get("acceptance_contracts"),
             "budget": {**budget, "this_preparation_attempts": len(attempts)}, **continuation,
+            "budget_planning": budget_planning_readback(proposal["payload"]["plan"], payload["scope"],
+                initial_execution=not cumulative_attempts and not payload.get("rebind_from")),
             **({"superseded_by": successor} if successor else {}),
             "directory_creation": ("CHECKER_SNAPSHOT_DURING_PREPARE_RESOURCES_DURING_APPROVED_ADVANCE"
                                    if "verifier_source" in payload else "ONLY_DURING_APPROVED_ADVANCE"),
