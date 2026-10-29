@@ -3,7 +3,7 @@
 这份指南面向希望用 Codex 为自己的项目搭建 Harness 的使用者。
 运行包、案例需求和本文说明不自动启动任务；先确认要做什么，再批准具体执行范围。
 
-当前稳定版本为 **1.2.1**，协议仍为 **2.9**。下载和固定版本见[1.2.1发布说明](releases/v1.2.1.md)。历史业务证据不改绑为新版本全部验收通过；收益未证实及各层验证边界见 [README](../README.md#验证状态)。
+当前稳定版本为 **1.2.2**，协议仍为 **2.9**。下载和固定版本见[1.2.2发布说明](releases/v1.2.2.md)。历史业务证据不改绑为新版本全部验收通过；收益未证实及各层验证边界见 [README](../README.md#验证状态)。
 已发布的历史稳定版为 **0.5.0**，于 **2026-10-15** 发布。
 资源接入和续修功能已进入 v0.5.0 运行包；旧版 tag、Release 和附件保持不变。
 
@@ -70,10 +70,10 @@ Windows 也不是本版已支持的同等执行环境。不要为了启动而关
 
 ## 第一次使用
 
-### 1. 获取1.2.1固定运行包或源码
+### 1. 获取1.2.2固定运行包或源码
 
-使用1.2.1时从 [v1.2.1 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v1.2.1)
-下载 Assets 中的 `Harness-Foundry-1.2.1-generic.zip` 和 `SHA256SUMS`，核对校验值；维护源码使用同名标签。
+使用1.2.2时从 [v1.2.2 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v1.2.2)
+下载 Assets 中的 `Harness-Foundry-1.2.2-generic.zip` 和 `SHA256SUMS`，核对校验值；维护源码使用同名标签。
 可选能力版本从同一源码标签的 `examples/capability-adapters/packages/` 获取，按声明准备；第三方SDK不随运行ZIP交付。
 保留隐藏的 `.agents/` 目录完整解压。
 旧 [v0.5.0 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.5.0)、
@@ -104,7 +104,7 @@ python3 tools/hffactory.py version --json
 python3 tools/hffactory.py --help
 ```
 
-当前版本应输出 `implementation_version: 1.2.1`；历史 v0.5.0 运行包应输出 `implementation_version: 0.5.0`，v0.4.0 历史包仍输出 `0.4.0`；
+当前版本应输出 `implementation_version: 1.2.2`；历史 v0.5.0 运行包应输出 `implementation_version: 0.5.0`，v0.4.0 历史包仍输出 `0.4.0`；
 上述三个版本的 `product_route` 均为 `GENERIC_REVIEWED_BUILD`，协议均为 `2.9`。
 这两条命令不会创建业务工程或调用模型。旧 v0.3.0、v0.2.0 包保持各自的版本。
 历史 v0.5.0 的功能、发布来源与检查依据见[v0.5.0 发布说明](releases/v0.5.0.md)，
