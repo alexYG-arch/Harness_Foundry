@@ -26,6 +26,13 @@ Use advance-build for bounded implementation, checking, repair and continuation,
 and read-build for persisted generic context. Do not ask per-Workpack permission.
 Do not silently alter requirements, checker criteria, model, paths or budget.
 
+For requested continuous Chat follow-up, keep following the same authorized run
+through existing waits, read-build and captured results; a background CONTINUOUS
+launch is not completion or a Chat subscription. On a native return, diagnose
+and use applicable repair/resume entries within authority, not an automatic
+human gate for every HELD state. Do not repeat dispatch to obtain progress.
+See [continuous follow-up and handoff](GENERIC_BUILD_RUNTIME.md#持续执行与外层接续).
+
 ## TRUE_GATE_ONLY
 
 Stop for user-owned missing decisions, document review, missing/expanded runtime

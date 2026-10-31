@@ -72,12 +72,16 @@ class BuildAuthoringTests(unittest.TestCase):
         first = self.record()
         self.plan["revision"] = 2
         self.plan["workpacks"][1]["goal"] = "Changed future implementation method"
+        self.plan["workpacks"][1]["artifacts"][0]["path"] = "outputs/renamed.json"
         self.record(1, "new-method")
         context = read_build_task_context(self.store, self.ir["program_id"], "IMPLEMENT-READER",
                                           event_id=first["event_id"])
         consumer = context["downstream_obligations"][0]
         original = first["payload"]["plan"]["workpacks"][1]
         self.assertEqual(consumer["goal"], original["goal"])
+        self.assertEqual(consumer["artifacts"], original["artifacts"])
+        self.assertNotEqual(consumer["artifacts"], self.plan["workpacks"][1]["artifacts"])
+        self.assertEqual(consumer["depends_on"], original["depends_on"])
         self.assertEqual(consumer["input_artifact_ids"], ["READER-SOURCE"])
         self.assertEqual(consumer["requirements"], [self.ir["atoms"][1]])
         self.assertEqual(consumer["cases"], [self.ir["acceptance_cases"][1]])
@@ -87,6 +91,12 @@ class BuildAuthoringTests(unittest.TestCase):
         self.assertFalse(context["execution_started"])
         self.assertEqual(read_build_task_context(self.store, self.ir["program_id"], "MAKE-REPORT",
                          event_id=first["event_id"])["downstream_obligations"], [])
+        consumer["artifacts"][0]["path"] = "caller-only.json"
+        consumer["depends_on"].clear()
+        again = read_build_task_context(self.store, self.ir["program_id"], "IMPLEMENT-READER",
+                                        event_id=first["event_id"])["downstream_obligations"][0]
+        self.assertEqual(again["artifacts"], original["artifacts"])
+        self.assertEqual(again["depends_on"], original["depends_on"])
 
     def test_requirement_change_requires_a_new_revision_but_does_not_approve_it(self):
         self.record()

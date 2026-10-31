@@ -266,6 +266,36 @@ class BuildRuntimeTests(unittest.TestCase):
             self.assertEqual(invocation["scope"][key], self.scope[key])
         self.assertEqual(self.runner.invocations, [], "prompt assembly must not execute")
 
+    def test_downstream_declarations_reach_producer_without_authority_or_dispatch_changes(self):
+        from harness_foundry_factory.build_authoring import read_build_task_context
+        self.prepare()
+        controller = self.controller()
+        _, prepared, plan = controller._current(self.prepared_id)
+        task, consumer = plan["workpacks"]
+        events = self.events()
+        before = self.store.database_path.read_bytes()
+        def old_context(*args, **kwargs):
+            context = read_build_task_context(*args, **kwargs)
+            for row in context["downstream_obligations"]:
+                row.pop("artifacts")
+                row.pop("depends_on")
+            return context
+        with patch("harness_foundry_factory.build_runtime.read_build_task_context", old_context):
+            baseline = controller._invocation(prepared, task, task["local_argv"])
+        invocation = controller._invocation(prepared, task, task["local_argv"])
+        payload = json.loads(invocation["prompt"].split("\n", 1)[1])
+        downstream = payload["task"]["downstream_obligations"][0]
+        self.assertEqual(downstream.pop("artifacts"), consumer["artifacts"])
+        self.assertEqual(downstream.pop("depends_on"), consumer["depends_on"])
+        self.assertEqual(payload, json.loads(baseline["prompt"].split("\n", 1)[1]))
+        self.assertEqual({key: value for key, value in invocation.items() if key != "prompt"},
+                         {key: value for key, value in baseline.items() if key != "prompt"})
+        self.assertEqual(invocation["write_roots"], [str(self.workspace / "src")])
+        self.assertEqual(before, self.store.database_path.read_bytes())
+        self.assertEqual(events, self.events())
+        self.assertFalse((self.workspace / "outputs/summary.json").exists())
+        self.assertEqual(self.runner.invocations, [])
+
     def test_communication_projection_changes_only_prompt_text_not_scope_or_json(self):
         self.prepare()
         controller = self.controller()

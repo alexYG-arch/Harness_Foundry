@@ -171,6 +171,25 @@ implements its assigned task and reports this attempt's evidence and increment;
 the Harness controls execution, budgets and independent acceptance. Do not ask
 every child to review the entire delivery or let a report certify acceptance.
 
+When continuous Chat follow-up is requested, keep the outer session following the
+same run until scoped completion or a genuine boundary. Native CONTINUOUS is the
+task loop, not a Chat subscription. Use existing process waits, read-build and
+captured output for meaningful progress; do not end the turn merely because the
+controller was launched in the background. Do not create periodic automation
+unless requested; stopping monitoring alone does not cancel authorized building.
+While a controller is active, observe without another advance or replacing its
+code, checker or approved inputs. On return, read the actual result and continue
+in-scope diagnosis, repair and lawful resume; HELD alone is not a human gate.
+Use the existing same-scope correction or technical-disposition entry only after
+verifying its conditions. A true plan/interface gap needs a legal plan/producer
+repair, not unchanged retries or a false-block label. Ask only for an actual
+missing decision, authority, budget or other existing stop condition. Preserve
+counts, accepted versions and complete captures; continue unaffected authorized
+work where possible. If the host cannot keep following, give a truthful handoff
+with run identity, last observed state and remaining action; do not promise
+automatic Chat updates after the session ends. See the existing runtime contract's
+continuous-follow-up section; no new controller, polling schedule or approval.
+
 Confirm an extra finding against the original requirement, current version,
 reachable trigger, observable difference and counterevidence. Repair confirmed
 in-scope defects automatically when the existing authority, a real repair entry,

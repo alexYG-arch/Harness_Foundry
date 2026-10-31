@@ -945,6 +945,11 @@ class BuildController:
                   "Use the explicit tool_bindings paths, especially the bound Python interpreter; "
                   "do not assume bare python3 or rg is installed. These bindings add no permissions. "
                   + CHECKER_GUIDANCE +
+                  "For shared entrypoints, use the pinned downstream_obligations artifacts and depends_on "
+                  "to align proposed call targets with their declared producers; these are declarations, not existing files "
+                  "or extra authority. Use an approved existing/tool provider or a declared implementation path, "
+                  "rather than inventing a module that no task supplies. Shared modules and deferred registration are valid; "
+                  "a behavior required by the current case cannot depend on an unfinished later task. "
                   "Read downstream_obligations before producing reusable tests: assert only the current public contract, "
                   "not extra prohibitions on approved later features (for example, do not use a later valid command as "
                   "an unknown-command negative case). Do not implement a later feature early. Preserve accepted tests "

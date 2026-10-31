@@ -133,6 +133,7 @@ def read_build_task_context(store: ControlEventStore, program_id: str, workpack_
         source_ids.update(case["acceptance_contract"]["source_id"] for case in declarations
                           if "acceptance_contract" in case)
         consumers.append({"workpack_id": consumer["workpack_id"], "goal": consumer["goal"],
+                          "depends_on": consumer["depends_on"], "artifacts": consumer["artifacts"],
                           "input_artifact_ids": sorted(consumed), "requirements": requirements,
                           "cases": declarations, "replacement_artifacts": [item for item in consumer["artifacts"]
                               if item.get("replaces_artifact_id") in consumed]})

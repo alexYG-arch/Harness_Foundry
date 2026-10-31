@@ -17,6 +17,11 @@ Within it, proceed through implementation, checking, repair and resume without p
 approvals. Changed requirements, expanded authority, exhausted budget, expiry and
 unresolved side effects stop affected work.
 
+For requested continuous Chat follow-up, retain outer ownership after launching
+native CONTINUOUS; follow the same run and handle returns using existing repair/resume
+entries. HELD alone is not a human gate. See `docs/GENERIC_BUILD_RUNTIME.md`,
+continuous follow-up; do not duplicate dispatch or promise updates after an ended session.
+
 The CLI is `python3 tools/hffactory.py`. Read `docs/GENERIC_BUILD_PLAN.md` and
 `docs/GENERIC_BUILD_CLI.md` for the public fields. Use one revision control database
 outside target write roots. Never edit that database, invent a human message or turn,

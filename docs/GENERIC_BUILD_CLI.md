@@ -178,6 +178,8 @@ Requirement/Plan 见 [Plan 合同](GENERIC_BUILD_PLAN.md)，manifest 见
 ## 可选单次交回与子任务交接
 
 `advance-build` 省略 `advance_mode` 或设为 `CONTINUOUS`，保持原连续行为。
+它不自动提供 Chat 持续通知。外层仍负责跟进原进程，读取交回原因并在现有授权内接续；
+`HELD` 本身不等于需要新的人类批准，见[持续执行与外层接续](GENERIC_BUILD_RUNTIME.md#持续执行与外层接续)。
 外层需在修复链每次尝试后接管判断时显式用 `ONE_ATTEMPT`：
 
 ```json
