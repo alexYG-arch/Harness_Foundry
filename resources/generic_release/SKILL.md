@@ -269,7 +269,7 @@ responsibilities; private verifier:// references do not grant implementer reads.
 The independent checker actually loads its declared frozen dependencies.
 
 For explicit same-Program/same-database continuation, prepare may supply top-level
-rebind_from. Preserve task/output/Job/dependency identities and cumulative unique
+rebind_from. Preserve task/existing-output/Job/dependency identities and cumulative unique
 attempt usage, including NOT_DISPATCHED. Budget ceilings stay unchanged unless
 the request explicitly supplies budget_extension and a real later decision
 approves the exact additions under the existing CLI rules. Time/expiry changes
@@ -285,6 +285,13 @@ native product repair; old BLOCKED diagnostics do not automatically reblock the
 new repaired scope. Readback separates cumulative and current-preparation usage,
 reused_acceptance and reverification_pending. This is not cross-database migration,
 arbitrary task renaming or a G1/G2 extension; ordinary preparation stays unchanged.
+An omitted output may be appended to the same task inside its original write
+roots using a revised Plan and the existing actual approval flow. Readback lists
+artifact_additions. Preserve all old declarations; existing Plan validation still
+checks output coverage, effects and explicit replacement lineage. Additions do
+not grant permission or extra attempts. An affected accepted/pending producer
+uses existing rebuild qualification; old PASS never covers its additional output.
+Checker-only automatic correction cannot authorize this production change.
 
 ## Global model defaults and interrupted observations
 

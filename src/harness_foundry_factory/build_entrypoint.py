@@ -122,9 +122,14 @@ def _scope_readback(event, events):
                         "reused_acceptance": {key: {field: record[field] for field in
                             ("attempt_id", "prepared_event_id", "proposal_event_id")}
                             for key, record in accepted.items() if record["prepared_event_id"] != prepared_id}}
+        from .build_rebind import artifact_additions_readback
+        previous = next(e["payload"] for e in events if e["event_id"] == payload["rebind_from"])
+        previous_proposal = next(e["payload"] for e in events if e["event_id"] == previous["proposal_event_id"])
+        additions = artifact_additions_readback(previous_proposal["plan"], proposal["payload"]["plan"])
+        if additions:
+            continuation["artifact_additions"] = additions
         if "budget_extension" in payload:
             from .build_rebind import budget_extension_readback
-            previous = next(e["payload"] for e in events if e["event_id"] == payload["rebind_from"])
             continuation["budget_extension"] = budget_extension_readback(previous, payload)
     return {"prepared_event_id": prepared_id, "proposal_event_id": payload["proposal_event_id"],
             "requirement_ir": proposal["payload"]["requirement_ir"], "plan": proposal["payload"]["plan"],

@@ -129,10 +129,10 @@ def request_build_repair(controller, request):
         _require(path.is_file() and file_identity(path) == {key: identity[key] for key in ("size", "sha256")},
                  "repair target bytes differ from the current accepted version")
         owners.add(owner)
-    check_accepted_files(workspace, plan, accepted, project_budget_attempts(events, prepared_id))
+    check_accepted_files(workspace, plan, accepted, project_budget_attempts(events, prepared_id), events=events)
     affected = affected_workpacks(plan, owners)
     required = affected | pending
-    superseded = superseded_artifacts(plan, project_budget_attempts(events, prepared_id))
+    superseded = superseded_artifacts(plan, project_budget_attempts(events, prepared_id), events=events)
     _require(not target_ids.intersection(superseded) and not any(
         item["kind"] == "ARTIFACT" and item["id"] in superseded
         for key in required for item in tasks[key]["inputs"]), "repair needs a consumed artifact version")

@@ -445,7 +445,7 @@ def approve_build_authorization(store, program_id, prepared_event_id, *, human_m
                        and e["payload"]["prepared_event_id"] == prepared_event_id for e in events),
                "rebind approval already committed; read its existing result")
         extra["rebind"] = approval_rebind(events, prepared["payload"]["rebind_from"], prepared["payload"], latest["payload"],
-                                         human_budget_extension=True)
+                                         human_budget_extension=True, human_artifact_additions=True)
     return store.append_batch(program_id, [{"event_type": "BUILD_AUTHORIZATION_APPROVED", "payload": {
         "prepared_event_id": prepared_event_id, "human_message_ref": human_message_ref, **extra}}],
         expected_revision=expected_revision, idempotency_key=idempotency_key, created_at=created_at)[0]
@@ -712,13 +712,13 @@ class BuildController:
                        "declared product copy source inputs changed or became unavailable; prior command evidence retained")
 
     def _invalidate_changed_outputs(self, prepared_id, workspace, plan, events, accepted, attempts):
-        changed = self._changed_accepted_files(workspace, plan, accepted, project_budget_attempts(events, prepared_id))
+        changed = self._changed_accepted_files(workspace, plan, accepted, project_budget_attempts(events, prepared_id), events=events)
         if not changed:
             return False
         affected = affected_workpacks(plan, changed)
         # No historical byte store exists. Rebuilding a consumer of an already
         # replaced physical version requires an explicit new plan, not fiction.
-        superseded = self._superseded_artifacts(plan, project_budget_attempts(events, prepared_id))
+        superseded = self._superseded_artifacts(plan, project_budget_attempts(events, prepared_id), events=events)
         _check(not any(item["kind"] == "ARTIFACT" and item["id"] in superseded
                        for task in plan["workpacks"] if task["workpack_id"] in affected for item in task["inputs"]),
                "affected task needs a consumed artifact version; explicit rebuild plan required")
@@ -759,7 +759,7 @@ class BuildController:
                 return {"status": "HELD_REPAIR_SCOPE", "attempt_id": failure["attempt_id"],
                         "reason": "repair targets must be declared inputs from currently accepted producers"}
             affected = affected_workpacks(plan, {producers[item] for item in targets})
-            superseded = self._superseded_artifacts(plan, project_budget_attempts(events, prepared_id))
+            superseded = self._superseded_artifacts(plan, project_budget_attempts(events, prepared_id), events=events)
             if targets.intersection(superseded) or any(
                     item["kind"] == "ARTIFACT" and item["id"] in superseded
                     for key in affected for item in tasks[key]["inputs"]):
@@ -832,7 +832,7 @@ class BuildController:
             # execution_started and behavior_verified retain their false values.
         attempts, accepted = self._state(events, prepared["prepared_event_id"])
         plan = _proposal_event(self.store, self.program_id, prepared["proposal_event_id"], events=events)["payload"]["plan"]
-        superseded = self._superseded_artifacts(plan, project_budget_attempts(events, prepared["prepared_event_id"]))
+        superseded = self._superseded_artifacts(plan, project_budget_attempts(events, prepared["prepared_event_id"]), events=events)
         context["accepted_inputs"] = []
         for artifact_id, declaration in context["artifact_inputs"].items():
             owner = accepted.get(declaration["workpack_id"])
@@ -1186,7 +1186,7 @@ class BuildController:
             _check(len(observed) == revision, "control state changed before command dispatch")
             if check_content:
                 attempts, accepted = self._state(observed, prepared_id)
-                self._check_accepted_files(Path(prepared["scope"]["workspace_root"]), plan, accepted, project_budget_attempts(observed, prepared_id))
+                self._check_accepted_files(Path(prepared["scope"]["workspace_root"]), plan, accepted, project_budget_attempts(observed, prepared_id), events=observed)
 
         def run(invocation):
             nonlocal revision
@@ -1605,7 +1605,7 @@ class BuildController:
         _check(self._artifacts(Path(prepared["scope"]["workspace_root"]), task["artifacts"]) == artifacts,
                "cannot recover checks against changed output bytes")
         attempts, accepted = self._state(events, prepared_id)
-        self._check_accepted_files(Path(prepared["scope"]["workspace_root"]), plan, accepted, project_budget_attempts(events, prepared_id))
+        self._check_accepted_files(Path(prepared["scope"]["workspace_root"]), plan, accepted, project_budget_attempts(events, prepared_id), events=events)
         verification = [{"case_id": row["case_id"], "result": row["result"]} for row in commands[1:]]
         if any(self._failure_status(row["result"]) in {"BLOCKED", "UNKNOWN_SIDE_EFFECT"}
                or row["result"].get("status") == "MODEL_TURN_COMPLETED" for row in verification):

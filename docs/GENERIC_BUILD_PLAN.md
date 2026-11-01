@@ -358,3 +358,6 @@ Plan 1.2 资源检查使用已有 `FOUNDRY_SCRATCH_DIR` 和
 需要精确保留额度的同 Program 重新绑定，可在现有 prepare 请求中显式给出 `rebind_from`，
 按[CLI 接续说明](GENERIC_BUILD_CLI.md#显式同-program-接续)展示累计预算、接受处理和新范围。
 它不自动继承旧权限，不改变普通新建行为，也不提供跨库迁移。
+同一任务确实缺少必要产物声明时，可在原任务写域内追加新 ID，保留全部旧声明，
+沿[追加产物说明](GENERIC_BUILD_CLI.md#同-program-追加产物声明)绑定新 Plan、来源和实际批准。
+原 Plan 编译器继续核对独立检查及合法替换；旧 PASS 不自动覆盖新增产物，累计消耗不重置。

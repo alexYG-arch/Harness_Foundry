@@ -166,7 +166,7 @@ def reassess_build_attempt(controller, prepared_id, attempt_id, *, evidence, hum
     workspace = Path(prepared["scope"]["workspace_root"])
     artifacts = controller._artifacts(workspace, task["artifacts"])
     require(artifacts == evidence["artifacts"], "reviewed output bytes changed")
-    controller._check_accepted_files(workspace, plan, accepted, budget_attempts)
+    controller._check_accepted_files(workspace, plan, accepted, budget_attempts, events=events)
     require(attempt.get("effects", {}).get("status") in {"NOT_DECLARED", "PASS"},
             "unresolved implementation effects cannot be corrected by reinterpreting events")
     binding = {key: attempt[key] for key in

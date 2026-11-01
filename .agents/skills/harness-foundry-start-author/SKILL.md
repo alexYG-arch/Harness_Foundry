@@ -41,6 +41,12 @@ Reuse the existing confirmation once for the changed scope, not per internal ste
 Preserve completed captures, accepted outputs and unresolved effects when resuming.
 See the existing CLI budget/time guidance; do not add another controller or approval.
 
+For omitted outputs, the existing rebind route can append declarations inside
+the original task write roots after a revised Plan and actual scope approval.
+Preserve old declarations and usage; inspect artifact_additions in Readback.
+Old acceptance does not cover new outputs; existing qualification decides
+rebuild/reverification. Checker-only correction cannot grant this production change.
+
 ## Select work without implicit execution
 
 For source engineering or status, inspect the current Tracker and relevant tests.

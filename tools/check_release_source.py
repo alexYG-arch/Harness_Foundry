@@ -53,6 +53,7 @@ REQUIRED_MODULES = (
     "test_build_model_service",
     "test_python_startup",
     "test_build_rebind",
+    "test_build_artifact_additions",
     "test_build_budget_extension",
     "test_build_budget_planning",
     "test_build_check_protocol",

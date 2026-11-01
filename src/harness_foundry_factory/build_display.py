@@ -99,6 +99,11 @@ def render_build_readback(result):
             lines.append("  计数说明：未启动模型的准备失败也可能占用尝试；尝试数不等于实际模型调用、Token 或金额。")
         if grant.get("rebind_from"):
             lines.append(f"  接续来源：{_value(grant['rebind_from'])}；累计预算不重置；本范围已用 {budget['this_preparation_attempts']}。")
+        for addition in grant.get("artifact_additions", []):
+            lines.append(f"  追加产物（是否可执行见本范围授权状态）：任务 {_value(addition['workpack_id'])}，"
+                         f"产物 {_value(addition['artifact_id'])}，路径 {_value(addition['path'])}。")
+            if addition.get("replaces_artifact_id"):
+                lines.append(f"    声明替换原版本：{_value(addition['replaces_artifact_id'])}；旧验收不自动覆盖新增版本。")
         if grant.get("budget_extension"):
             change = grant["budget_extension"]
             old, new = change["previous_limits"], change["new_limits"]

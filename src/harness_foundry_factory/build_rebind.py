@@ -29,6 +29,14 @@ def superseding_prepared(events, prepared_id):
                  and prepared_id in e["payload"].get("rebind", {}).get("superseded_prepared_ids", [])), None)
 
 
+def artifact_additions_readback(before_plan, after_plan):
+    """Describe additions in pinned Plans; this does not authorize or accept them."""
+    existing = {a["artifact_id"] for task in before_plan["workpacks"] for a in task["artifacts"]}
+    return [{"workpack_id": task["workpack_id"], **deepcopy(artifact)}
+            for task in after_plan["workpacks"] for artifact in task["artifacts"]
+            if artifact["artifact_id"] not in existing]
+
+
 def validate_rebind(events, previous_id, proposal, scope, *, budget_extension=None):
     """Validate the selected relationship, not a grant or acceptance import."""
     _require(isinstance(previous_id, str) and bool(previous_id.strip()), "rebind_from must identify an old preparation")
@@ -60,8 +68,24 @@ def validate_rebind(events, previous_id, proposal, scope, *, budget_extension=No
     after = {t["workpack_id"]: t for t in proposal["plan"]["workpacks"]}
     _require(before.keys() == after.keys(), "explicit rebind keeps task identities; split/merge remains in its existing route")
     for key in before:
-        for field in ("job_id", "artifacts", "depends_on"):
+        for field in ("job_id", "depends_on"):
             _require(before[key][field] == after[key][field], "rebind cannot reassign task outputs, Jobs or budget ownership")
+        original_ids = {a["artifact_id"] for a in before[key]["artifacts"]}
+        retained = [a for a in after[key]["artifacts"] if a["artifact_id"] in original_ids]
+        _require(retained == before[key]["artifacts"],
+                 "rebind preserves original artifact declarations, owners and order")
+    additions = artifact_additions_readback(old_proposal["plan"], proposal["plan"])
+    if additions:
+        workspace = Path(old["scope"]["workspace_root"]).resolve()
+        for addition in additions:
+            path = relative_path(workspace, addition["path"])
+            _require(any(path.is_relative_to(relative_path(workspace, root))
+                         for root in old["scope"]["task_write_roots"][addition["workpack_id"]]),
+                     "added artifact must stay in its original owner's write roots")
+        for identity in prepared_lineage(events, previous_id):
+            attempts, _ = project_execution_state(events, identity)
+            _require(not any(a["status"] in {"IN_FLIGHT", "UNKNOWN_SIDE_EFFECT"} for a in attempts.values()),
+                     "artifact additions cannot bypass unresolved effects; reconcile the original command first")
     return old
 
 
@@ -99,12 +123,17 @@ def _check_signature(prepared, task):
             scope["source_read_roots"], {r: profiles[r] for r in refs})
 
 
-def approval_rebind(events, previous_id, new_prepared, new_proposal, *, extra_candidates=None, human_budget_extension=False):
+def approval_rebind(events, previous_id, new_prepared, new_proposal, *, extra_candidates=None,
+                    human_budget_extension=False, human_artifact_additions=False):
     """Freeze a current qualification at the approval CAS; no command executes."""
     extension = new_prepared.get("budget_extension")
     _require(extension is None or human_budget_extension,
              "budget extension requires a real human approval, not automatic correction")
     old = validate_rebind(events, previous_id, new_proposal, new_prepared["scope"], budget_extension=extension)
+    old_proposal = _event(events, old["proposal_event_id"], "BUILD_PLAN_PROPOSED")["payload"]
+    additions = artifact_additions_readback(old_proposal["plan"], new_proposal["plan"])
+    _require(not additions or human_artifact_additions,
+             "artifact additions require a real human approval, not automatic checker correction")
     lineage = prepared_lineage(events, previous_id)
     for identity in lineage:
         attempts, _ = project_execution_state(events, identity)
@@ -112,11 +141,10 @@ def approval_rebind(events, previous_id, new_prepared, new_proposal, *, extra_ca
                  "rebind cannot bypass unresolved effects; reconcile the original command first")
     _, accepted = project_execution_state(events, previous_id)
     candidates = {**(extra_candidates or {}), **reverification_candidates(events, previous_id), **accepted}
-    old_proposal = _event(events, old["proposal_event_id"], "BUILD_PLAN_PROPOSED")["payload"]
     after = {t["workpack_id"]: t for t in new_proposal["plan"]["workpacks"]}
     reuse, reverify, rebuild = {}, {}, set()
     history = project_budget_attempts(events, previous_id)
-    superseded = superseded_artifacts(old_proposal["plan"], history)
+    superseded = superseded_artifacts(old_proposal["plan"], history, events=events)
     workspace = Path(new_prepared["scope"]["workspace_root"])
     for key, record in candidates.items():
         # A task may have been harmlessly replanned before its acceptance. Use
@@ -159,6 +187,7 @@ def approval_rebind(events, previous_id, new_prepared, new_proposal, *, extra_ca
     return {"from_prepared_event_id": previous_id, "superseded_prepared_ids": lineage,
             "accepted": reuse, "verification_pending": reverify, "rebuild_workpack_ids": sorted(rebuild),
             "budget_reset": False, "old_authority_inherited": False,
+            **({"artifact_additions": additions} if additions else {}),
             **({"budget_extension": budget_extension_readback(old, new_prepared)} if extension is not None else {})}
 
 
