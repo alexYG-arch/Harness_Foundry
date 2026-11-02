@@ -83,6 +83,36 @@ class RSIDeliveryTests(unittest.TestCase):
         self.assertFalse((self.output/'private.json').exists())
         self.assertFalse(any(b'PRIVATE EXPECTATION' in p.read_bytes() for p in self.output.rglob('*') if p.is_file()))
 
+    def test_calibration_candidate_delivers_sources_and_allows_applicable_or_not_adopted_use(self):
+        examples = ROOT / 'examples/rsi-calibration'
+        manifest = json.loads((examples / 'selection.json').read_text())
+        receipt = prepare_delivery(ROOT, manifest, examples, self.output)
+        moved = self.root / 'new session support'; self.output.rename(moved); self.output = moved
+        for name, sha in receipt['files'].items():
+            self.assertEqual(hashlib.sha256((moved/name).read_bytes()).hexdigest(), sha)
+        choices = [('structured-result', '结构化结果 null 缺省 合同 校准',
+                    {'task_kind':'structured-result','contract':'explicit'}, 'result-shapes','ADOPT'),
+                   ('file-batch', '批处理 文件 原子失败 部分成功 独立观察',
+                    {'task_kind':'file-batch','failure_policy':'atomic'}, 'batch-semantics','NOT_ADOPT')]
+        for name, question, conditions, identity, action in choices:
+            with self.subTest(task=name):
+                report = self.root / (name+'-query.json')
+                self.cli('rsi_wiki.py','query','--config',moved/'wiki.json','--question',question,
+                         '--conditions',json.dumps(conditions),'--output',report)
+                row = next(r for r in json.loads(report.read_text())['matches'] if r['entry']['id']==identity)
+                self.assertEqual(row['current_declared_state'], 'CANDIDATE')
+                self.assertFalse(row['independently_verified'])
+                self.assertTrue(all(s['binding']=='MATCH' for s in row['sources']))
+                decisions = self.root / (name+'-decisions.json')
+                decisions.write_text(json.dumps([{'collection':'calibration','id':identity,'version':'1',
+                    'sha256':row['entry_sha256'],'action':action,
+                    'reason':'TEST ONLY: current public contract checked; independent business outcome remains separate'}]))
+                adopted = self.root / (name+'-adoption.json')
+                self.cli('rsi_wiki.py','record','--query',report,'--decisions',decisions,'--output',adopted)
+                saved = json.loads(adopted.read_text())
+                self.assertEqual(saved['decisions'][0]['read_snapshot'], row)
+                self.assertEqual(saved['decisions'][0]['decision']['action'], action)
+
     def test_missing_file_and_escaping_path_fail_before_output(self):
         for value in ('knowledge/missing.txt','../private.txt','/private.txt'):
             self.manifest['knowledge_files']=[value]

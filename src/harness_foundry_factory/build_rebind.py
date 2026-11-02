@@ -10,6 +10,7 @@ from pathlib import Path
 from .build_artifacts import file_identity, relative_path, superseded_artifacts
 from .build_state import project_execution_state, project_budget_attempts, prepared_lineage, affected_workpacks
 from .build_types import RequestValidationError, canonical_json
+from .verification_resources import checker_files_for_case
 
 
 def _require(condition, message):
@@ -117,10 +118,14 @@ def _check_signature(prepared, task):
     names = {arg.removeprefix("verifier://") for c in task["verification"] for arg in c["argv"] if arg.startswith("verifier://")}
     if refs:
         names.update(scope["verification_resources"].get("checker_files", []))
+    case_files = None
+    if "case_checker_files" in scope.get("verification_resources", {}):
+        case_files = {c["case_id"]: checker_files_for_case(scope["verification_resources"], c) for c in task["verification"]}
+        names.update(name for selected in case_files.values() for name in selected)
     tools = {c["argv"][0] for c in task["verification"]}
     tools.update(arg.removeprefix("executable://") for c in task["verification"] for arg in c["argv"] if arg.startswith("executable://"))
     return (task["verification"], {n: prepared["verifier_files"][n] for n in names}, {n: scope["executables"][n] for n in tools},
-            scope["source_read_roots"], {r: profiles[r] for r in refs})
+            scope["source_read_roots"], {r: profiles[r] for r in refs}, case_files)
 
 
 def approval_rebind(events, previous_id, new_prepared, new_proposal, *, extra_candidates=None,

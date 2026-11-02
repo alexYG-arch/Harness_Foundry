@@ -79,6 +79,34 @@ class CodingProtocolTests(unittest.TestCase):
         self.assertEqual(result["status"], "MODEL_TURN_COMPLETED")
         self.assertEqual(result["final_message"], "中文跨块")
 
+    def test_multi_message_blocker_is_bound_to_final_capture_and_keeps_usage(self):
+        events = deepcopy(EVENTS)
+        earlier = deepcopy(events[2]); earlier["item"].update(id="m0", text="已核对公开条件；此消息不是完整终态。")
+        events.insert(2, earlier)
+        events[3]["item"]["text"] = json.dumps({"foundry_blocker": CONTRACT_BLOCKER})
+        raw = capture(events)
+        observer = CodingEventObserver()
+        for offset in range(0, len(raw), 7):
+            observer.feed(raw[offset:offset + 7])
+        expected = observe_coding_process(raw, exit_code=0)
+        result = observer.finish(exit_code=0)
+        self.assertEqual(result, expected)
+        self.assertEqual(result["model_blocker"], CONTRACT_BLOCKER)
+        self.assertEqual(result["usage"], EVENTS[-1]["usage"])
+        self.assertEqual(result["reason_code"], "CODEX_REPORTED_CONTRACT_GAP")
+        # The same complete capture is interpretation, not another model turn.
+        self.assertEqual(observe_coding_process(raw, exit_code=0), expected)
+        self.assertEqual(observe_coding_process(raw, exit_code=None)["status"], "UNKNOWN_SIDE_EFFECT")
+
+    def test_intermediate_blocker_does_not_replace_a_different_complete_last_message(self):
+        events = deepcopy(EVENTS)
+        earlier = deepcopy(events[2]); earlier["item"].update(id="m0", text=json.dumps({"foundry_blocker": CONTRACT_BLOCKER}))
+        events.insert(2, earlier)
+        result = observe_coding_process(capture(events), exit_code=0)
+        self.assertEqual(result["final_message"], "PASS")
+        self.assertNotIn("model_blocker", result)
+        self.assertFalse(result["workpack_accepted"])
+
     def test_event_limit_is_a_protocol_failure_not_a_display_limit(self):
         observer = CodingEventObserver(max_event_bytes=128)
         observer.feed(b"x" * 129)

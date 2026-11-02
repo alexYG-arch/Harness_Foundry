@@ -1,6 +1,6 @@
 # Harness Foundry — generic Codex runtime
 
-Product version **1.2.2**; protocol **2.9**. This patch adds advisory first-pass budget planning, whole-model-invocation time context, and consistent instruction-file precedence and symlink diagnostics. Guidance does not change approved budgets or add per-step approvals; cumulative usage, existing extension authority and recovery remain unchanged. See docs/GENERIC_BUILD_CLI.md for preparation and continuation. The eight built-in capability versions and their rc.3 real-use evidence remain unchanged; this patch has engineering and isolated-package validation, not a new real-model timing or benefit claim.
+Product version **1.3.0**; protocol **2.9**. This release adds optional per-Case checker dependencies, contract/sample calibration guidance and selected RSI calibration material. It includes continuous host follow-up and same-Program output-declaration continuation. Existing approval, cumulative usage, checker-only correction and complete-report recovery remain in force; no new controller or per-step approval is introduced. See docs/GENERIC_BUILD_CLI.md and docs/GENERIC_CALIBRATION_HANDOFF_VALIDATION.md. The eight capability package versions remain unchanged.
 It preserves declared verification resources, protected product copies, controlled
 repair and single-attempt handoff. It adds on-demand control reads, optional
 revision-body deduplication for new databases and baseline/delta report tools.
@@ -119,8 +119,8 @@ archive checksum or successful CLI command is not evidence that a target Harness
 meets its requirements. Complete release acceptance needs the declared same-package
 new-project and existing-project evidence, plus closure of known in-scope defects.
 PACKAGE_MANIFEST.json describes files and interfaces, not business acceptance.
-The [v1.2.2 release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v1.2.2)
-identifies the selected commit, exact archive and applicable validation. The repair source has a single full regression of 2556 PASS + 57 SKIP; release identity and package checks are separate, overlapping evidence. The 57 skips remain skips. Real-model time allocation, complex-project budget sufficiency and benefit remain unverified. Historical
+The [v1.3.0 release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v1.3.0)
+identifies the selected commit, exact archive and applicable validation. Engineering coverage is 2606 PASS + 57 SKIP across batches, not one full green run on the final patch. T22 verified bounded real-model correction/handoff; T23 completed four builds and four new-session uses. These results bind the recorded engineering candidate; release-version and same-package checks are separate. The 57 skips remain skips; general benefit, complex-project budget sufficiency and deployment remain unverified. Historical
 2436-case coverage is cross-batch evidence for a broader development snapshot,
 not this runtime's test count; benefits and real old-database adoption remain unverified.
 Existing tags and archives remain available from

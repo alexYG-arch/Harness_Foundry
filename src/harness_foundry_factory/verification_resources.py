@@ -108,8 +108,8 @@ def validate_resources(config, plan, protected_paths=()):
             validate_resource_references(None, plan)
         return None
     _require(plan["schema_version"] == "1.2", "verification resources require Plan 1.2")
-    _require(isinstance(config, dict) and set(config) in ({"schema_version", "root", "profiles"},
-             {"schema_version", "root", "profiles", "checker_files"})
+    _require(isinstance(config, dict) and {"schema_version", "root", "profiles"} <= set(config)
+             <= {"schema_version", "root", "profiles", "checker_files", "case_checker_files"}
              and config["schema_version"] == "1.0", "unsupported verification resources fields or version")
     _require(isinstance(config["root"], str) and not any(ord(char) < 32 for char in config["root"]),
              "resource root must be a plain path")
@@ -166,12 +166,31 @@ def validate_resources(config, plan, protected_paths=()):
                  and len(files) == len(set(files)), "checker_files must contain unique relative paths")
         for item in files:
             _relative(item)
+    if "case_checker_files" in config:
+        mapping = config["case_checker_files"]
+        cases = {check["case_id"] for task in plan["workpacks"] for check in task["verification"]}
+        _require(isinstance(mapping, dict) and mapping.keys() <= cases,
+                 "case_checker_files must map declared Case identities")
+        for files in mapping.values():
+            _require(isinstance(files, list) and all(isinstance(item, str) for item in files)
+                     and len(files) == len(set(files)), "Case checker files must contain unique relative paths")
+            for item in files:
+                _relative(item)
     normalized = deepcopy(config)
     normalized["root"] = str(root)
     for profile in normalized["profiles"].values():
         profile["network"] = _network(profile["network"])
     validate_resource_references(normalized, plan)
     return normalized
+
+
+def checker_files_for_case(config, check):
+    """Explicit files only; shared declarations remain part of every Case."""
+    names = {arg.removeprefix("verifier://") for arg in check["argv"][1:] if arg.startswith("verifier://")}
+    names.update(config.get("checker_files", []))
+    if "case_checker_files" in config:
+        names.update(config["case_checker_files"].get(check["case_id"], []))
+    return sorted(names)
 
 
 def validate_resource_references(config, plan):

@@ -24,6 +24,11 @@ CHECKER_GUIDANCE = (
     "adapter only when explicitly available; its workdir and interpreter parameters are optional adapter "
     "interfaces, not a new requirement for every tool. Prepare goals for the current case only unless "
     "the approved scope explicitly requires multiple cases; examples are not cumulative requirements. "
+    "When preparing checks, distinguish a normal sample missing a required precondition from an intentional "
+    "invalid-input example. Setup omissions are not product assertion failures; intentional invalid inputs "
+    "must still exercise the declared rejection behavior. Compare observable effects as well as response "
+    "shape. Equivalent representations are valid only when the public contract allows them; never infer "
+    "a new business rule from private checker guesses or another project's example. "
 )
 
 

@@ -31,8 +31,8 @@ from .build_types import (RequestValidationError, RevisionConflictError, Idempot
 from .process_observation import CommandObservation
 from .source_intake import load_local_sources, validate_requirement_source_bindings
 from .build_effects import snapshot_effects, compare_effects, environment_probe_argv, effect_path
-from .verification_resources import validate_resources, validate_product_copy_sources
-from .verification_snapshot import snapshot_verifier
+from .verification_resources import validate_resources, validate_product_copy_sources, checker_files_for_case
+from .verification_snapshot import snapshot_verifier, case_verifier_binding, validate_case_views
 from .build_resource_lifecycle import (
     prepare_resource_invocation, resource_dispatch_hooks,
     finish_command_observation, recover_command_observation)
@@ -238,8 +238,10 @@ def _validate_scope(store, plan, scope):
             store.database_path, store.database_path.with_suffix(".commands"),
             store.database_path.with_suffix(".verifiers"), Path(__file__).resolve().parent,
             *scope["source_read_roots"], *scope["executables"].values(), scope["codex_executable"]])
-        for name in scope["verification_resources"].get("checker_files", []):
-            verifier_files[name] = _file_identity(_relative(verifier, name))
+        for task in plan["workpacks"]:
+            for check in task["verification"]:
+                for name in checker_files_for_case(scope["verification_resources"], check):
+                    verifier_files[name] = _file_identity(_relative(verifier, name))
     else:
         validate_resources(None, plan)
     _check_native_layout(store, scope)
@@ -347,6 +349,7 @@ def prepare_build_scope(store, ir, plan, source, scope, *, created_at,
                **({"model_defaults_source": model_defaults_source} if model_defaults_source is not None else {}),
                "acceptance_contracts": contracts,
                **({"verifier_source": verifier_source} if verifier_source else {}), **startup}
+    validate_case_views(payload, plan)
     if prepared_preview is not None:
         _check({key: value for key, value in payload.items() if key != "model_defaults_source"}
                == {key: value for key, value in prepared_preview.items() if key != "model_defaults_source"},
@@ -672,6 +675,7 @@ class BuildController:
             for name, identity in prepared["verifier_files"].items():
                 _check(_file_identity(_relative(Path(prepared["scope"]["verification_root"]).resolve(), name)) == identity,
                        "independent verifier bytes changed")
+            validate_case_views(prepared, proposal["payload"]["plan"])
         _check(_directory(prepared["scope"]["verification_root"]) == Path(prepared["scope"]["verification_root"]),
                "approved verifier binding changed")
         for root in prepared["scope"]["source_read_roots"]:
@@ -813,6 +817,12 @@ class BuildController:
             }
         scope = prepared["scope"]
         workspace = Path(scope["workspace_root"]).resolve()
+        case_binding = None
+        if verification and "case_checker_files" in scope.get("verification_resources", {}):
+            check = next(c for c in task["verification"] if c["case_id"] == case_id)
+            verifier_root, verifier_files = case_verifier_binding(prepared, check)
+            case_binding = {"verifier_root": verifier_root, "verifier_files": verifier_files}
+            scope = {**scope, "verification_root": verifier_root}
         reads = [str(workspace), *scope["source_read_roots"], *scope["executables"].values(), scope["codex_executable"]]
         executor = "LOCAL" if verification else task["executor"]
         if executor == "CODEX":
@@ -970,6 +980,8 @@ class BuildController:
         return {"executor": executor, "argv": command, "cwd": str(workspace), "read_roots": reads,
                 "write_roots": writes, "timeout_seconds": timeout_seconds,
                 "scope": scope, "prompt": prompt, "workpack_id": task["workpack_id"], "job_id": task["job_id"],
+                **({"case_verifier_binding": case_binding,
+                    "environment": {"FOUNDRY_VERIFIER_ROOT": case_binding["verifier_root"]}} if case_binding else {}),
                 **({"model_defaults_source": prepared["model_defaults_source"]} if "model_defaults_source" in prepared else {}),
                 "case_id": case_id, "phase": "VERIFICATION" if verification else "IMPLEMENTATION",
                 **({"resource_profile_ref": next(check["resource_profile_ref"] for check in task["verification"]
@@ -1322,9 +1334,11 @@ class BuildController:
             invocation, preparation_failure = prepare_resource_invocation(
                 invocation, config=prepared["scope"]["verification_resources"], identity=identity,
                 workspace_root=workspace, checked_artifacts=checked_artifacts,
-                verifier_files=prepared["verifier_files"],
-                verifier_root=prepared["scope"]["verification_root"])
+                verifier_files=invocation.get("case_verifier_binding", {}).get("verifier_files", prepared["verifier_files"]),
+                verifier_root=invocation.get("case_verifier_binding", {}).get("verifier_root", prepared["scope"]["verification_root"]))
             command["resource_binding"] = invocation["resource_binding"]
+        if "case_verifier_binding" in invocation:
+            command["case_verifier_binding"] = invocation["case_verifier_binding"]
 
         def current():
             rows, _, _ = self._current(binding["prepared_event_id"])
@@ -1401,7 +1415,7 @@ class BuildController:
             if existing:
                 fields = ("prepared_event_id", "proposal_event_id", "attempt_id", "workpack_id",
                           "job_id", "command_id", "phase", "case_id", "executor", "observation_root",
-                          "resource_binding")
+                          "resource_binding", "case_verifier_binding")
                 _check(len(existing) == 1 and all(existing[0]["payload"].get(field) == payload.get(field)
                                                 for field in fields),
                        "existing command observation has conflicting binding")

@@ -15,6 +15,76 @@ from test_build_plan import request_fixture
 import test_build_runtime as support
 
 
+class SampleCalibrationTests(TestCase):
+    """Independent fixed examples, not a universal business response schema."""
+    def test_public_single_and_equivalent_representations_are_distinct_contracts(self):
+        examples = [
+            {"name": "string", "input": "ready", "accepted": True},
+            {"name": "object", "input": {"state": "ready"}, "accepted": True},
+            {"name": "wrong-state", "input": {"state": "other"}, "accepted": False},
+            {"name": "missing", "input": {}, "accepted": False},
+        ]
+        def equivalent(value):
+            assert value == "ready" or value == {"state": "ready"}
+        def string_only(value):
+            assert value == "ready"
+        self.assertEqual(check_contract_examples(equivalent, examples)["status"], "CONTRACT_EXAMPLES_MATCHED")
+        self.assertEqual(check_contract_examples(string_only, examples)["status"], "CONTRACT_EXAMPLES_MISMATCH")
+        strict = deepcopy(examples); strict[1]["accepted"] = False
+        self.assertEqual(check_contract_examples(string_only, strict)["status"], "CONTRACT_EXAMPLES_MATCHED")
+        self.assertEqual(check_contract_examples(equivalent, strict)["status"], "CONTRACT_EXAMPLES_MISMATCH")
+
+    def test_missing_null_and_error_location_follow_explicit_public_examples(self):
+        examples = [{"name": name, "input": value, "accepted": accepted} for name, value, accepted in [
+            ("absent-optional", {}, True), ("explicit-null", {"note": None}, True),
+            ("error", {"errors": [{"code": "INVALID"}]}, True),
+            ("wrong-location", {"result": {"errors": [{"code": "INVALID"}]}}, False),
+            ("wrong-type", {"note": []}, False)]]
+        def checker(value):
+            assert value in ({}, {"note": None}, {"errors": [{"code": "INVALID"}]})
+        self.assertEqual(check_contract_examples(checker, examples)["status"], "CONTRACT_EXAMPLES_MATCHED")
+
+    def test_normal_setup_error_is_distinct_from_intentional_invalid_input(self):
+        def checker(sample):
+            if sample["purpose"] == "NORMAL" and not sample["registered"]:
+                raise ValueError("fixture preparation: registration absent")
+            expected = "REJECTED" if sample["purpose"] == "INVALID_INPUT" else "STORED"
+            assert sample["observed"] == expected
+        bad = {"purpose": "NORMAL", "registered": False, "observed": "REJECTED"}
+        with self.assertRaisesRegex(ValueError, "fixture preparation"):
+            check_contract_examples(checker, [{"name": "not-a-product-red", "input": bad, "accepted": True}])
+        examples = [
+            {"name":"normal", "input":{"purpose":"NORMAL","registered":True,"observed":"STORED"}, "accepted":True},
+            {"name":"intentional-invalid", "input":{**bad,"purpose":"INVALID_INPUT"}, "accepted":True},
+            {"name":"real-product-defect", "input":{"purpose":"NORMAL","registered":True,"observed":"REJECTED"}, "accepted":False},
+        ]
+        self.assertEqual(check_contract_examples(checker, examples)["status"], "CONTRACT_EXAMPLES_MATCHED")
+
+    def test_valid_response_does_not_substitute_for_observed_effect(self):
+        examples = [
+            {"name":"stored", "input":{"response":"STORED","files":["record.txt"]}, "accepted":True},
+            {"name":"only-claimed", "input":{"response":"STORED","files":[]}, "accepted":False},
+        ]
+        def checker(value):
+            assert value["response"] == "STORED" and value["files"] == ["record.txt"]
+        self.assertEqual(check_contract_examples(checker, examples)["status"], "CONTRACT_EXAMPLES_MATCHED")
+        self.assertEqual(check_contract_examples(lambda value: None, examples)["status"], "CONTRACT_EXAMPLES_MISMATCH")
+        def always_reject(value):
+            raise AssertionError("all denied")
+        self.assertEqual(check_contract_examples(always_reject, examples)["status"], "CONTRACT_EXAMPLES_MISMATCH")
+
+    def test_partial_and_atomic_failure_have_separate_expected_effects(self):
+        partial = {"completed":["item-a"],"errors":["item-b"]}
+        atomic = {"completed":[],"errors":["item-b"]}
+        for expected, other in ((partial, atomic), (atomic, partial)):
+            with self.subTest(expected=expected):
+                def checker(value):
+                    assert value == expected
+                rows = [{"name":"contract-behavior","input":expected,"accepted":True},
+                        {"name":"other-contract","input":other,"accepted":False}]
+                self.assertEqual(check_contract_examples(checker, rows)["status"], "CONTRACT_EXAMPLES_MATCHED")
+
+
 class ContractExamplesTests(TestCase):
     def setUp(self):
         self.examples = [

@@ -248,6 +248,7 @@ def _same_scope(events, previous, prepared, proposal):
             # Declared helper files are copied into the same protected root;
             # their list is not a new host read/write or network capability.
             scope["verification_resources"].pop("checker_files", None)
+            scope["verification_resources"].pop("case_checker_files", None)
     require(old_scope == new_scope, "same-scope correction cannot change execution, resources, budgets or expiry")
     old_source = _event(events, previous["source_event_id"], "BUILD_SOURCES_CAPTURED")["payload"]
     new_source = _event(events, prepared["source_event_id"], "BUILD_SOURCES_CAPTURED")["payload"]
@@ -318,6 +319,9 @@ def derive_checker_authorization(store, program_id, prepared_id, *, evidence,
         for name, identity in binding["verifier_files"].items():
             require(file_identity(relative_path(Path(binding["scope"]["verification_root"]), name)) == identity,
                     "old or corrected checker bytes changed after preparation")
+        from .verification_snapshot import validate_case_views
+        binding_plan = _event(events, binding["proposal_event_id"], "BUILD_PLAN_PROPOSED")["payload"]["plan"]
+        validate_case_views(binding, binding_plan)
     candidates = completed_implementation_candidates(events, previous_id, evidence["completed_attempts"])
     rebind = approval_rebind(events, previous_id, prepared, proposal_event["payload"], extra_candidates=candidates)
     for record in rebind["verification_pending"].values():

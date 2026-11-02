@@ -79,6 +79,7 @@ REQUIRED_MODULES = (
     "test_build_replan",
     "test_verification_resources",
     "test_build_resources",
+    "test_case_checker_dependencies",
     "test_resource_network",
     "test_resource_credentials",
     "test_resource_credential_observation",

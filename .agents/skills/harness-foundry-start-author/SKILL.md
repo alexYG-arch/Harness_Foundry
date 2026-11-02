@@ -305,6 +305,17 @@ Do not rerun/advance merely to recover a report. Preserve unresolved findings an
 unknown counts rather than assume zero; missing history does not block a first
 lawful repair or unrelated authorized work.
 
+For a suspected checker/contract mismatch, review the actual public contract and
+sample prerequisites before another production attempt. A deliberately invalid
+input still needs its promised rejection check; a broken normal fixture is not a
+product defect. A normative final foundry_blocker is machine-readable; ordinary
+prose is evidence for host review, not a new stop protocol. A real contract change
+keeps its existing decision boundary. A completed producer with a checker fault
+uses eligible checker-only correction; an implementation false block uses the
+existing technical disposition and remaining production budget. Only the explicit
+same-scope checker correction round is free of production-attempt charge; later
+ordinary rebinds and historical reverifications retain their original accounting.
+
 Keep the task's selected finite budget, cumulative failed rounds and pending
 rounds in its existing work record; children report increments. Reopening with new
 evidence, changing sessions, replaying requests or another finding's success does
@@ -341,7 +352,6 @@ Original checks may remain green while an extra defect remains unresolved; repor
 both. Let the controller commit acceptance and demonstrate actual Harness use.
 Stop when agreed delivery is met. Report which cases passed and remain unverified;
 PLAN_CHECKS_ACCEPTED is not whole-PRD, installed-Harness or release acceptance.
-
 
 ## Historical records, not a second build route
 

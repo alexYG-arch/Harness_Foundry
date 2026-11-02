@@ -1,0 +1,19 @@
+{
+  "version": "calibration-methods-1",
+  "wiki": {
+    "collections": [
+      {
+        "id": "calibration",
+        "path": "knowledge/calibration",
+        "version": "1",
+        "visibility": "PUBLIC"
+      }
+    ]
+  },
+  "knowledge_files": [
+    "knowledge/calibration/collection.json",
+    "knowledge/calibration/methods.md",
+    "knowledge/calibration/result-shapes.json",
+    "knowledge/calibration/batch-semantics.json"
+  ]
+}

@@ -251,6 +251,8 @@ DB 替换为已有控制库的绝对路径，ID 替换为真实 Program ID。此
 
 ## Scope
 
+启用下述 Case 文件映射时，同一 Case 仍可由多个 Workpack 检查。各检查入口按自己的有效文件集合使用保护副本；入口集合相同可共享只读副本，入口不同则分别绑定。不要求 Case 在整个 Plan 中只出现一次，也不将一个任务的专属入口混入其他任务的复用签名。
+
 scope 必须完整列出以下基础字段，`model` 可省略；可另提供 `model_reasoning_effort`，Plan 1.2 可提供下述 `verification_resources`：
 
 - `workspace_root`：绝对目标目录，可尚不存在；不使用 Foundry 自身源码目录。
@@ -401,6 +403,20 @@ CODEX 范围准备结果包含 `coding_instruction_preflight`：列出当前默�
 ```
 
 这是 scope 片段，须替换实际路径与检查义务。`checker_files` 可省略；存在时列出影响判定的辅助文件，相对原 `verification_root`。准备阶段将它们及全部 `verifier://` 文件复制并绑定到宿主 `.verifiers` 目录。`checker_files` 只声明复制；检查器须通过绝对 `verifier://` 参数、`FOUNDRY_VERIFIER_ROOT` 或受保护入口的 `__file__` 实际读取判定依赖，修改产品侧源文件才不会改变本次判定。替换判定仍走原合同/范围流程。文件只读与独立进程提供普通功能验收保证，共享解释器导入被测代码不构成对抗隔离。
+
+资源配置另可选 `case_checker_files`，例如 `{"READ-ROWS":["fixtures/rows.json"],"REPORT-COUNT":["helpers/report.py"]}`。
+启用后每个 Case 使用其 argv 中的 `verifier://` 文件、全局 `checker_files` 和该 Case 列表的并集，
+由宿主复制到独立文件视图；相对目录、包结构及合法内部链接对应的文件字节保留。
+`FOUNDRY_VERIFIER_ROOT`、argv 和命令回执绑定同一视图。空映射、空列表和未列专属文件的 Case 合法，
+共享文件不被覆盖。省略字段保留旧行为，普通无资源配置不强制改造。需要包初始化文件、传递 helper
+或预期数据时应列入共享或对应 Case 的集合；不会猜测动态导入，也不会从其他 Case/开发目录补依赖。
+动态依赖不明确时仍可用原全局声明。该字段是新候选的可选能力，旧固定包不被声明为支持它。
+
+专属文件变化影响相关 Workpack，共享变化影响全部依赖者及原有后继；接受仍按 Workpack，
+不是单 Case 缓存。旧粗粒度首次改用新映射需要必要复验，不能回写旧接受。映射调整与文件差异
+一起参与同范围审阅；移走预期不证明语义等价。只复验、普通重绑定的计数继续按各自原规则，
+完整报告按原 Case/command/prepared 取回，成功清理不触发重执行。工具、公开输入和资源 profile
+等原失效条件仍有效。本节不新增权限、接受层或逐步确认。
 
 默认运行 cwd 仍为产品工作区，验收时产品只读。宿主为每 command 分配新的短名称目录，默认只有其 `scratch` 和 `report-staging` 叶子可写；需要项目内生成目录时可选用下述 `product_copy`。实际身份在 command 绑定中保留。资源根与产品、检查器、控制记录及声明依赖分开，不放在共享 `/tmp`。argv 独立元素可用 `resource://scratch/test.sqlite3` 或 `resource://report-staging/summary.json`；不插值 shell。实施命令尚不消费该引用，其原有合法可写区保持不变。
 

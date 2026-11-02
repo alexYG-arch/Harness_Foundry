@@ -343,6 +343,7 @@ class PortableLocalCliTests(unittest.TestCase):
             "pyproject.toml",
             "docs",
             "examples/harness-design",
+            "examples/rsi-calibration",
             "examples/capability-adapters/CONNECTIONS.md",
             "examples/capability-adapters/NATIVE.md",
             "examples/capability-adapters/RSI_HANDOFF.md",
