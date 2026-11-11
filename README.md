@@ -1,4 +1,4 @@
-# Harness Foundry 1.3.0
+# Harness Foundry 1.3.1
 
 
 **用 Codex 为项目搭建可继续使用、可检查、可修复的 Harness。**
@@ -13,18 +13,26 @@ Foundry 不是另一套模型，也不是固定行业流水线。Codex 负责需
 
 | 项目 | 状态 |
 |---|---|
-| 当前稳定版本 | **1.3.0**；协议仍为 **2.9**；[发布说明](docs/releases/v1.3.0.md) |
-| 本 README 的累计升级范围 | 以历史 v0.5.0 为基线，涵盖 `fd6f8a5` 的 RSI 实现及后续文档更新；包含1.1.0基础修补、1.2.0通用能力接入、1.2.1累计预算增额、1.2.2预算／限时准备与目录诊断修复，以及1.3.0持续跟进、追加产物声明、合同校准、Case依赖与RSI新任务复用 |
-| 当前默认分支 | `main`；由原 `codex/latest-r3-main-repairs-20261021` 更名；当前稳定版固定为 `v1.3.0`；旧预发布和稳定版保留 |
+| 当前稳定版本 | **1.3.1**；协议仍为 **2.9**；[发布说明](docs/releases/v1.3.1.md) |
+| 本 README 的累计升级范围 | 以历史 v0.5.0 为基线，涵盖 `fd6f8a5` 的 RSI 实现及后续文档更新；包含1.1.0基础修补、1.2.0通用能力接入、1.2.1累计预算增额、1.2.2预算／限时准备与目录诊断修复，以及1.3.0持续跟进、追加产物声明、合同校准、Case依赖与RSI新任务复用；1.3.1补齐沙箱启动与接收器接续修复 |
+| 当前默认分支 | `main`；由原 `codex/latest-r3-main-repairs-20261021` 更名；当前稳定版固定为 `v1.3.1`；旧预发布和稳定版保留 |
 | 旧主线历史 | `history/main-before-rsi-20261024`，保留旧 main 提交 `00348ca8` 及其历史；旧标签和 Release 不变 |
 | 历史稳定版下载 | [v0.5.0 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.5.0)，2026-10-15 发布；原 tag 和附件保留 |
 | 协议与许可 | 协议 **2.9**；[MIT](LICENSE) |
 
-**当前稳定版为 1.3.0。** 本版补齐持续跟进与 HELD 合法接续、同 Program 追加产物声明、合同／样本校准，以及可选 Case 检查依赖绑定。保留真实批准、累计消耗和完整报告取回；不增加控制器、审批层或通用重试门禁。从[正式版附件](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v1.3.0)获取固定运行包、所需独立能力包及校验清单。旧[v1.2.2](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v1.2.2)及更早标签、Release和附件保留。
+**当前稳定版为 1.3.1。** 本版修正Codex沙箱启动入口绑定、准备检查与失败交回，以及接收器声明在Readback和合法接续中的保留。明确更换入口沿用真实批准，默认同范围修正不增加逐次确认；累计预算与完整报告取回保持原语义。从[正式版附件](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v1.3.1)获取固定运行包、所需独立能力包及校验清单。旧[v1.3.0](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v1.3.0)及更早标签、Release和附件保留。
 
 WP07/WP08的本机标准内置范围已补齐：全部／按需搭建及新会话使用、实际PRD交互与检索、DOC导出、Qt/Python原生调用、看板全屏／画中画和报告恢复。原8个Workpack的工程及限定出口均为8/8；这不是所有平台、生产服务或部署均通过，**收益仍未证实**。这些真实执行绑定rc.3；1.2.0只更新版本与说明。1.2.1另含预算增额修复，按逐文件差异复用未变能力证据，修后工程与包内验证另列，不声称重新完成了真实模型增额。1.2.2继续保留这些边界；新增预算／限时提示与目录诊断只取得工程及包内验证，真实模型时间分配和收益仍未验。详见[使用与验证边界](docs/CAPABILITY_ADAPTERS.md)。
 
 使用时记录 Git 提交、固定包和能力版本；源码已修、包已包含和目标部署已升级分别记录。旧标签、Release、附件及历史证据保留，原R3和分母不变。1.1.0的基础修补见[原发布说明](docs/releases/v1.1.0.md)，不将旧验证改绑为本版全部通过。
+
+### 1.3.1：沙箱启动与接收器接续修复
+
+- 绑定Codex声明入口、实际执行路径与文件身份；普通二进制解析实际路径，脚本包装器及普通Python虚拟环境入口保持原语义。
+- 将可确定的状态目录、材料路径和配置冲突提前检查；启动探测共用原命令时限。明确启动前失败与父进程启动后失败分开记录，不伪造退出、退款或自动重试资格。
+- 默认接续保留原声明并重新核验；明确改选用已有重绑定入口的 `replace_codex_receiver`，必须取得真实批准，保留旧prepared兼容、累计消耗、只复验和完整报告取回。
+
+修复源码由 `2abecf0` 与CI断言补正 `7caece6` 固定。保留 **2643 PASS＋57 SKIP** 原完整回归，以及 **42项受影响补验**；两者有重叠，不相加。已有真实模型验证绑定v2工程候选，**v5新增分支真实模型未验，收益仍未证实**。发布包版本及下载检查另列，不把发布等同旧部署自动升级。见[发布说明](docs/releases/v1.3.1.md)及[实施记录](docs/FOUNDRY_CODEX_SANDBOX_STARTUP_IMPLEMENTATION_2026_11_11_V1.md)。
 
 ### 1.3.0：合同校准、可靠交回与 Case 依赖
 
@@ -176,7 +184,8 @@ WP07/WP08的本机标准内置范围已补齐：全部／按需搭建及新会�
 ### 选择稳定版或历史版本
 
 - **使用历史版本**：从 [v0.5.0 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.5.0) 下载 `Harness-Foundry-0.5.0-generic.zip` 和 `SHA256SUMS`，保留隐藏的 `.agents/` 目录。它提供上述 v0.5.0 基础，不包含本分支新增项。
-- **使用1.3.0**：从[正式版](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v1.3.0)下载 `Harness-Foundry-1.3.0-generic.zip`、所需独立能力包及 `SHA256SUMS`。能力包版本与1.2.0一致；新Case映射可选，旧配置保持原行为。升级和验证边界见[发布说明](docs/releases/v1.3.0.md)。
+- **使用1.3.1**：从[正式版](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v1.3.1)下载 `Harness-Foundry-1.3.1-generic.zip`、所需独立能力包及 `SHA256SUMS`。能力版本不变；升级时保留原控制库和累计消耗，核对实际入口与接收器声明。见[启动与接续升级说明](docs/releases/v1.3.1.md)。
+- **使用历史1.3.0**：从[正式版](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v1.3.0)下载 `Harness-Foundry-1.3.0-generic.zip`、所需独立能力包及 `SHA256SUMS`。能力包版本与1.2.0一致；新Case映射可选，旧配置保持原行为。升级和验证边界见[发布说明](docs/releases/v1.3.0.md)。
 - **使用1.2.2**：从 [正式版](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v1.2.2) 下载 `Harness-Foundry-1.2.2-generic.zip`、所需独立能力包及 `SHA256SUMS`。能力包版本与1.2.0一致；旧项目需明确切换运行入口，保留原控制库和累计消耗。见[预算准备与升级说明](docs/releases/v1.2.2.md)。
 - **使用历史1.2.0**：从 [正式版](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v1.2.0) 下载 `Harness-Foundry-1.2.0-generic.zip`、所需独立能力包及 `SHA256SUMS`。维护源码选同名标签；验证与适用范围见[发布说明](docs/releases/v1.2.0.md)。
 - **使用1.1.0**：从 [v1.1.0 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v1.1.0) 下载 `Harness-Foundry-1.1.0-generic.zip` 和 `SHA256SUMS`。维护源码时选取 `v1.1.0` 标签；记录实际提交和包身份。可选能力包从同标签的 `examples/capability-adapters/packages/` 按名称和版本选择，运行ZIP只含通用接入工具，不打包第三方SDK。
@@ -243,6 +252,12 @@ python3 tools/hffactory.py --help
 示例和能力包不是替所有项目做好的业务系统。浏览器、搜索或其他宿主工具需要实际接入；CODEX 子进程不会自动继承主聊天工具。特别是 PRD／设计与市场调研，文件存在或模型自述不能代替实际交互、检索、语义审阅与来源核对。
 
 ## 验证状态
+
+1.3.1修复的原完整回归为2700个唯一测试，**2643 PASS＋57 SKIP**；随后仅调整一项公开入口的跨平台路径断言，**42项补验通过**。42项均在原测试集合内，不重复累加；最终源码依据原完整回归、受影响补验及双平台CI归并，不称断言调整后或发布版本上又跑了完整单轮全绿。`7caece6`的源码CI为macOS1380项、Linux1379项通过，均零SKIP；Linux另列1项macOS专用不适用。
+
+57项SKIP保留原身份：11项有未变运行路径的历史原生补充证据，其余46项没有本轮适用原生补验，不因此改记57项通过。v2工程候选的真实模型验证已耗1/2次生产、1/2个turn、2/4次检查，旧报告与累计消耗保留；**v5新增接续／改选分支真实模型未验**，其他设备、旧部署升级及收益仍未证实。1.3.1仅调整产品身份、版本断言和交付说明，版本／分发检查、最终main和标签CI、固定包与下载核对单列于[发布说明](docs/releases/v1.3.1.md)及Release正文，不重放已接受任务。
+
+以下为1.3.0及更早版本的原验证记录，不改绑为1.3.1新执行。
 
 1.3.0工程证据为 **2606 PASS＋57 SKIP，共2663个唯一身份，跨批次归并**：完整回归第2批2605 PASS＋57 SKIP，最终补丁174项受影响复验含1项新增测试。不是最终补丁单轮全绿，不与定向、源码CI或真实模型样本相加。已保存源码检查1343项、Skill13处引用、规范101文件核对通过；T22实际误报纠正／只复验和规范交回、T23四个BUILD与四个新会话USE完成有限验收。**收益未证实**；57项SKIP、持续Chat效果、复杂项目预算充分性及生产部署等边界保留。发布版本检查、最终提交CI、固定包及下载核对单列于[1.3.0发布说明](docs/releases/v1.3.0.md)与Release正文，不重放已接受任务。
 
