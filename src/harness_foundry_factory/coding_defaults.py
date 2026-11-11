@@ -17,7 +17,7 @@ import time
 from urllib.parse import urlsplit
 
 from .coding_process import DISABLED_FEATURES
-from .local_process import CodexSandboxRunner, LocalProcessError
+from .local_process import CodexSandboxRunner, LocalProcessError, bind_codex_receiver
 
 
 def _configuration_read(executable: Path, timeout_seconds: float) -> dict:
@@ -226,7 +226,7 @@ def resolve_codex_defaults(executable, *, timeout_seconds=15, require_explicit=T
         raise LocalProcessError("CODEX_DEFAULTS_READ_FAILED: an absolute executable Codex path on POSIX is required")
     if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float)) or not 0 < timeout_seconds <= 60:
         raise LocalProcessError("CODEX_DEFAULTS_READ_FAILED: configuration read timeout must be positive and at most 60 seconds")
-    path = path.resolve()
+    path = Path(bind_codex_receiver(path)["executable"])
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     result = _configuration_read(path, timeout_seconds)
     config = result.get("config")

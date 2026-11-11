@@ -13,7 +13,8 @@ elif args == ["sandbox", "--help"]:
     print("--permission-profile --include-managed-config --cd [COMMAND]")
 elif args and args[0] == "sandbox":
     # A capability fixture only, not a sandbox emulator.
-    assert args[args.index("--") + 1:] == ["/usr/bin/true"]
+    target = args[args.index("--") + 1:]
+    assert target == ["/usr/bin/true"] or target == [sys.argv[0], "exec", "--help"]
 elif args and args[0] == "exec":
     prompt = sys.stdin.read()
     marker = Path("fixture-calls.txt")

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import codecs
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -59,6 +60,33 @@ def _path(value: str | Path, *, directory: bool = False) -> Path:
 
 def _within(path: Path, roots: Sequence[Path]) -> bool:
     return any(path == root or root.is_dir() and path.is_relative_to(root) for root in roots)
+
+
+def bind_codex_receiver(executable):
+    """Bind only the receiver, never a workload interpreter or wrapper target."""
+    path = _path(executable)
+    if not path.is_file() or not os.access(path, os.X_OK):
+        raise LocalProcessError("Codex sandbox receiver is not executable")
+    with path.open("rb") as stream:
+        scripted = stream.read(2) == b"#!"
+        stream.seek(0)
+        digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    # Script wrappers may select behavior from argv[0]/their installation path.
+    # Never inspect their bodies to find and bypass another executable.
+    effective = str(executable) if scripted else str(path)
+    return {"declared_executable": str(executable), "executable": effective,
+            "resolved_executable": str(path), "sha256": digest,
+            "entry_kind": "SCRIPT" if scripted else "BINARY"}
+
+
+def validate_codex_receiver(binding):
+    try:
+        current = bind_codex_receiver(binding["declared_executable"])
+    except (KeyError, TypeError, OSError, ValueError) as exc:
+        raise LocalProcessError("CODEX_RECEIVER_CHANGED: bound entry is unavailable; prepare again") from exc
+    if current != binding:
+        raise LocalProcessError("CODEX_RECEIVER_CHANGED: bound entry or bytes changed; prepare again")
+    return current
 
 
 @dataclass(frozen=True)
@@ -154,9 +182,12 @@ class CodexSandboxRunner:
 
     def __init__(self, executable: str | Path, *, output_limit_bytes: int = 65536,
                  stream_limit_bytes: int = 128 * 1024 * 1024):
-        self.executable = _path(executable)
-        if not self.executable.is_file() or not os.access(self.executable, os.X_OK):
+        resolved = _path(executable)
+        if not resolved.is_file() or not os.access(resolved, os.X_OK):
             raise LocalProcessError("Codex sandbox receiver is not executable")
+        with resolved.open("rb") as stream:
+            scripted = stream.read(2) == b"#!"
+        self.executable = Path(executable) if scripted else resolved
         if not isinstance(output_limit_bytes, int) or isinstance(output_limit_bytes, bool) or output_limit_bytes < 1:
             raise LocalProcessError("output limit must be a positive integer")
         self.output_limit_bytes = output_limit_bytes
@@ -310,10 +341,15 @@ class CodexSandboxRunner:
             return result
 
     def run(self, command: LocalCommand, *, before_dispatch: Callable[[], None] | None = None,
-            observation=None, cancellation_reason=None, credential_provider=None) -> dict[str, Any]:
+            observation=None, cancellation_reason=None, credential_provider=None,
+            receiver_binding=None) -> dict[str, Any]:
         # Resource preparation and native capability probes spend this same
         # command budget. Legacy commands keep their existing timeout meaning.
-        deadline = time.monotonic() + command.timeout_seconds if command.network is not None else None
+        deadline = time.monotonic() + command.timeout_seconds if command.network is not None or receiver_binding else None
+        if receiver_binding is not None:
+            validate_codex_receiver(receiver_binding)
+            if str(self.executable) != receiver_binding["executable"]:
+                raise LocalProcessError("CODEX_RECEIVER_CHANGED: receiver differs from preparation")
 
         def remaining(maximum):
             return maximum if deadline is None else max(0, min(maximum, deadline - time.monotonic()))
@@ -391,10 +427,18 @@ class CodexSandboxRunner:
                                     "VERIFICATION_CREDENTIAL_UNAVAILABLE", workload_started=False)
         if before_dispatch is not None:
             before_dispatch()
+        if receiver_binding is not None:
+            validate_codex_receiver(receiver_binding)
         hooks = ({"on_started": observation.started, "stream_sink": observation.write,
                   "on_capture": observation.captured} if observation is not None else {})
         if cancellation_reason is not None:
             hooks["cancellation_reason"] = cancellation_reason
+        if receiver_binding is not None:
+            def captured(value):
+                value["codex_receiver_binding"] = receiver_binding
+                if observation is not None:
+                    observation.captured(value)
+            hooks["on_capture"] = captured
         if command.environment:
             hooks["environment"] = dict(command.environment)
         if secret_environment:

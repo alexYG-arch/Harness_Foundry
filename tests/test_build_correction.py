@@ -4,12 +4,13 @@ from datetime import datetime
 import json
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 from harness_foundry_factory.build_correction import (
     POLICY, REVERIFY_KIND, TECHNICAL_POLICY, completed_implementation_candidates,
     derive_checker_authorization, resolve_technical_attempt, validate_authority_chain,
 )
-from harness_foundry_factory.build_runtime import (prepare_build_authorization,
+from harness_foundry_factory.build_runtime import (prepare_build_authorization, prepare_build_scope,
     approve_build_authorization, revoke_build_authorization, classify_verification_result)
 from harness_foundry_factory.build_state import project_execution_state, project_budget_attempts, attempt_budget
 from harness_foundry_factory.build_types import RequestValidationError, IdempotencyConflictError, RevisionConflictError
@@ -73,6 +74,315 @@ class CheckerCorrectionTests(unittest.TestCase):
 
     def derive(self, new, evidence, key='derive'):
         return derive_checker_authorization(self.f.store,self.f.program,new,evidence=evidence,**self.f.kwargs(key))
+
+    def receiver(self):
+        # An identity-only fixture; the durable runner executes LOCAL Python,
+        # never this file, a real receiver or a model.
+        path = self.f.root / 'receiver'
+        path.write_bytes(b'TEST receiver version one')
+        path.chmod(0o700)
+        self.f.scope['codex_executable'] = str(path)
+        return path
+
+    @staticmethod
+    def legacy_scope(*args, **kwargs):
+        # Produce a historical shape before append, without rewriting events.
+        payload = prepare_build_scope(*args, **kwargs)
+        payload.pop('codex_receiver_binding')
+        return payload
+
+    def test_receiver_changed_bytes_cannot_inherit_approval_or_change_budget(self):
+        receiver = self.receiver(); self.prepare_failure(); f = self.f
+        receiver.write_bytes(b'TEST receiver version two')
+        new, evidence = self.new_binding(complete=self.attempt_id)
+        before = f.events()
+        budget = attempt_budget(f.scope, list(project_budget_attempts(before, f.prepared_id).values()))
+        with self.assertRaisesRegex(RequestValidationError, 'Codex receiver identity'):
+            self.derive(new, evidence)
+        self.assertEqual(f.events(), before)
+        self.assertEqual(attempt_budget(f.scope, list(project_budget_attempts(f.events(), f.prepared_id).values())), budget)
+        self.assertEqual(budget['attempts_consumed'], 1)
+
+    def test_receiver_declared_alias_change_is_not_hidden_by_same_effective_path(self):
+        receiver = self.receiver(); f = self.f
+        first, second = f.root / 'first-alias', f.root / 'second-alias'
+        first.symlink_to(receiver); second.symlink_to(receiver)
+        f.scope['codex_executable'] = str(first); f.prepare()
+        f.scope['codex_executable'] = str(second)
+        new, evidence = self.new_binding()
+        before = f.events()
+        with self.assertRaisesRegex(RequestValidationError, 'Codex receiver identity'):
+            self.derive(new, evidence)
+        self.assertEqual(f.events(), before)
+
+    def test_bound_receiver_cannot_be_dropped_during_correction(self):
+        self.receiver(); self.f.prepare()
+        with patch('harness_foundry_factory.build_runtime.prepare_build_scope', side_effect=self.legacy_scope):
+            new, evidence = self.new_binding()
+        before = self.f.events()
+        with self.assertRaisesRegex(RequestValidationError, 'Codex receiver identity'):
+            self.derive(new, evidence)
+        self.assertEqual(self.f.events(), before)
+
+    def test_legacy_receiver_scope_can_inherit_without_new_required_field(self):
+        self.receiver()
+        with patch('harness_foundry_factory.build_runtime.prepare_build_scope', side_effect=self.legacy_scope):
+            self.f.prepare(); new, evidence = self.new_binding()
+        approved = self.derive(new, evidence)
+        self.assertEqual(approved['payload']['derived_authority']['source_prepared_event_id'], self.f.prepared_id)
+        self.assertFalse(any('codex_receiver_binding' in row['payload']
+                             for row in self.f.events('BUILD_AUTHORIZATION_PREPARED')))
+
+    def test_legacy_scope_can_add_binding_and_reverify_without_replaying_production(self):
+        self.receiver()
+        with patch('harness_foundry_factory.build_runtime.prepare_build_scope', side_effect=self.legacy_scope):
+            self.prepare_failure()
+        f = self.f; historical = deepcopy(f.events())
+        new, evidence = self.new_binding(complete=self.attempt_id)
+        self.derive(new, evidence)
+        before = len(self.runner.invocations)
+        result = f.controller().advance(new, advance_mode='ONE_ATTEMPT')
+        self.assertEqual(result['attempt_status'], 'ACCEPTED', result)
+        self.assertEqual([c['phase'] for c in self.runner.invocations[before:]], ['VERIFICATION', 'VERIFICATION'])
+        self.assertEqual(f.events()[:len(historical)], historical)
+        self.assertEqual(attempt_budget(f.scope, list(project_budget_attempts(f.events(), new).values()))['attempts_consumed'], 1)
+
+    def test_restored_receiver_allows_correction_and_complete_report_reads_after_removal(self):
+        from harness_foundry_factory.build_entrypoint import read_build
+        receiver = self.receiver(); original = receiver.read_bytes()
+        self.prepare_failure(); f = self.f; historical = deepcopy(f.events())
+        receiver.write_bytes(b'TEST receiver version two')
+        rejected, evidence = self.new_binding(key='changed', complete=self.attempt_id)
+        with self.assertRaisesRegex(RequestValidationError, 'Codex receiver identity'):
+            self.derive(rejected, evidence)
+        receiver.write_bytes(original)
+        new, evidence = self.new_binding(key='restored', complete=self.attempt_id)
+        approved = self.derive(new, evidence)
+        calls = len(self.runner.invocations)
+        result = f.controller().advance(new, advance_mode='ONE_ATTEMPT')
+        self.assertEqual(result['attempt_status'], 'ACCEPTED', result)
+        self.assertEqual([c['phase'] for c in self.runner.invocations[calls:]], ['VERIFICATION', 'VERIFICATION'])
+        receiver.unlink()
+        before = deepcopy(f.events()); calls = len(self.runner.invocations)
+        with patch('subprocess.Popen', side_effect=AssertionError('report retrieval must not dispatch')):
+            first = read_build(f.store.database_path, f.program)
+            self.assertEqual(read_build(f.store.database_path, f.program), first)
+        self.assertEqual(f.events(), before)
+        self.assertEqual(len(self.runner.invocations), calls)
+        self.assertEqual(f.events()[:len(historical)], historical)
+        self.assertEqual(attempt_budget(f.scope, list(project_budget_attempts(f.events(), new).values()))['attempts_consumed'], 1)
+        self.assertNotIn('human_message_ref', approved['payload'])
+
+    def readback_binding(self, *, key='readback-correction', complete=None):
+        from harness_foundry_factory.build_entrypoint import read_build
+        f = self.f
+        old = next(row for row in read_build(f.store.database_path, f.program)['authorizations']
+                   if row['prepared_event_id'] == f.prepared_id)
+        scope = deepcopy(old['scope'])
+        root = f.root / key; root.mkdir()
+        (root / 'check.py').write_text(support.VERIFIER + '\n# ' + key + '\n')
+        scope['verification_root'] = str(root)
+        submitted = deepcopy(scope)
+        kwargs = f.kwargs(key + '-prepare')
+        prepared = prepare_build_authorization(f.store, f.program, f.proposal_id, f.source_id,
+            scope, rebind_from=f.prepared_id, **kwargs)
+        self.assertEqual(scope, submitted, 'preparation must not rewrite caller scope')
+        before = f.events()
+        replay = prepare_build_authorization(f.store, f.program, f.proposal_id, f.source_id,
+            scope, rebind_from=f.prepared_id, **kwargs)
+        self.assertEqual(replay, prepared)
+        self.assertEqual(f.events(), before)
+        return prepared, self.evidence(f.prepared_id, prepared['event_id'], complete=complete)
+
+    def check_readback_alias_continuation(self, *, parent_alias=False, scripted=False):
+        from harness_foundry_factory.build_entrypoint import read_build
+        receiver = self.receiver(); f = self.f
+        if scripted:
+            receiver.write_bytes(b'#!/bin/sh\n# TEST wrapper identity only\nexit 0\n')
+        alias = f.root / 'receiver-alias'
+        alias.symlink_to(receiver.parent if parent_alias else receiver,
+                         target_is_directory=parent_alias)
+        declared = alias / receiver.name if parent_alias else alias
+        f.scope['codex_executable'] = str(declared)
+        self.prepare_failure()
+        historical = deepcopy(f.events())
+        old = f.events('BUILD_AUTHORIZATION_PREPARED')[0]['payload']
+        self.assertEqual(old['scope']['codex_executable'], str(declared if scripted else receiver))
+        prepared, evidence = self.readback_binding(complete=self.attempt_id)
+        self.assertEqual(prepared['payload']['codex_receiver_binding'], old['codex_receiver_binding'])
+        self.assertEqual(prepared['payload']['scope']['executables'], f.scope['executables'])
+        new = prepared['event_id']; approved = self.derive(new, evidence)
+        calls = len(self.runner.invocations)
+        result = f.controller().advance(new, advance_mode='ONE_ATTEMPT')
+        self.assertEqual(result['attempt_status'], 'ACCEPTED', result)
+        self.assertEqual([c['phase'] for c in self.runner.invocations[calls:]], ['VERIFICATION', 'VERIFICATION'])
+        self.assertNotIn('human_message_ref', approved['payload'])
+        alias.unlink(); receiver.unlink()
+        before = deepcopy(f.events()); calls = len(self.runner.invocations)
+        with patch('subprocess.Popen', side_effect=AssertionError('readback must not dispatch')):
+            first = read_build(f.store.database_path, f.program)
+            self.assertEqual(read_build(f.store.database_path, f.program), first)
+        self.assertEqual(f.events(), before)
+        self.assertEqual(len(self.runner.invocations), calls)
+        self.assertEqual(f.events()[:len(historical)], historical)
+        self.assertEqual(attempt_budget(f.scope, list(project_budget_attempts(f.events(), new).values()))['attempts_consumed'], 1)
+
+    def test_readback_file_alias_keeps_identity_and_only_reverifies_then_retrieves(self):
+        self.check_readback_alias_continuation()
+
+    def test_readback_parent_alias_keeps_identity_and_only_reverifies_then_retrieves(self):
+        self.check_readback_alias_continuation(parent_alias=True)
+
+    def test_readback_script_alias_preserves_wrapper_and_tool_interpreter(self):
+        self.check_readback_alias_continuation(scripted=True)
+
+    def test_readback_receiver_changed_bytes_still_cannot_inherit(self):
+        receiver = self.receiver(); f = self.f
+        alias = f.root / 'alias'; alias.symlink_to(receiver)
+        f.scope['codex_executable'] = str(alias); f.prepare()
+        receiver.write_bytes(b'TEST updated bytes')
+        prepared, evidence = self.readback_binding()
+        self.assertEqual(prepared['payload']['codex_receiver_binding']['declared_executable'], str(alias))
+        before = f.events()
+        with self.assertRaisesRegex(RequestValidationError, 'Codex receiver identity'):
+            self.derive(prepared['event_id'], evidence)
+        self.assertEqual(f.events(), before)
+
+    def test_readback_retargeted_alias_with_same_bytes_still_cannot_inherit(self):
+        receiver = self.receiver(); f = self.f
+        alias = f.root / 'alias'; alias.symlink_to(receiver)
+        f.scope['codex_executable'] = str(alias); f.prepare()
+        other = f.root / 'other'; other.write_bytes(receiver.read_bytes()); other.chmod(0o700)
+        alias.unlink(); alias.symlink_to(other)
+        prepared, evidence = self.readback_binding()
+        self.assertEqual(prepared['payload']['codex_receiver_binding']['resolved_executable'], str(other))
+        before = f.events()
+        with self.assertRaisesRegex(RequestValidationError, 'same-scope correction'):
+            self.derive(prepared['event_id'], evidence)
+        self.assertEqual(f.events(), before)
+
+    def test_readback_missing_declared_alias_cannot_silently_use_old_target(self):
+        receiver = self.receiver(); f = self.f
+        alias = f.root / 'alias'; alias.symlink_to(receiver)
+        f.scope['codex_executable'] = str(alias); f.prepare()
+        alias.unlink(); before = f.events()
+        with self.assertRaises(RequestValidationError):
+            self.readback_binding()
+        self.assertEqual(f.events(), before)
+
+    def replacement_fixture(self, *, legacy=False, accepted=False):
+        receiver = self.receiver(); f = self.f
+        alias = f.root / 'original-alias'; alias.symlink_to(receiver)
+        f.scope['codex_executable'] = str(alias)
+        if legacy:
+            with patch('harness_foundry_factory.build_runtime.prepare_build_scope', side_effect=self.legacy_scope):
+                f.prepare()
+        else:
+            f.prepare()
+        if accepted:
+            result = f.controller().advance(f.prepared_id, advance_mode='ONE_ATTEMPT')
+            self.assertEqual(result['attempt_status'], 'ACCEPTED', result)
+        alias.unlink()
+        return receiver, {**f.scope, 'codex_executable': str(receiver)}
+
+    def test_explicit_receiver_replacement_public_readback_and_request_identity(self):
+        from harness_foundry_factory.build_entrypoint import apply_build_request, read_build
+        from harness_foundry_factory.build_display import render_build_readback
+        self.f.scope['expires_at'] = '2099-01-01T00:00:00Z'
+        receiver, scope = self.replacement_fixture(); f = self.f
+        submitted = deepcopy(scope)
+        request = {'program_id': f.program, 'proposal_event_id': f.proposal_id,
+                   'source_event_id': f.source_id, 'scope': scope, 'rebind_from': f.prepared_id,
+                   'replace_codex_receiver': True, 'expected_revision': len(f.events()),
+                   'idempotency_key': 'explicit-receiver'}
+        with patch('subprocess.Popen', side_effect=AssertionError('prepare must not execute')):
+            result = apply_build_request('prepare-build-authorization', request, f.store.database_path)
+            before = f.events()
+            self.assertEqual(apply_build_request('prepare-build-authorization', request, f.store.database_path), result)
+        self.assertEqual(result['status'], 'BUILD_SCOPE_APPROVAL_REQUIRED')
+        self.assertTrue(result['readback']['replace_codex_receiver'])
+        self.assertEqual(result['readback']['codex_receiver_binding']['declared_executable'], str(receiver))
+        self.assertFalse(result['execution_started'])
+        rendered = render_build_readback(read_build(f.store.database_path, f.program))
+        self.assertIn('明确改选 Codex 接收器', rendered)
+        self.assertIn('不自动继承旧授权', rendered)
+        self.assertEqual(scope, submitted)
+        changed = {**request, 'replace_codex_receiver': False}
+        with self.assertRaises(IdempotencyConflictError):
+            apply_build_request('prepare-build-authorization', changed, f.store.database_path)
+        self.assertEqual(f.events(), before)
+
+    def test_explicit_receiver_replacement_requires_human_even_for_legacy(self):
+        receiver, scope = self.replacement_fixture(legacy=True); f = self.f
+        prepared = prepare_build_authorization(f.store, f.program, f.proposal_id, f.source_id,
+            scope, rebind_from=f.prepared_id, replace_codex_receiver=True, **f.kwargs('replacement'))
+        before = f.events()
+        with self.assertRaisesRegex(RequestValidationError, 'explicit Codex receiver replacement requires human approval'):
+            self.derive(prepared['event_id'], self.evidence(f.prepared_id, prepared['event_id']))
+        self.assertEqual(f.events(), before)
+        self.assertEqual(attempt_budget(scope, list(project_budget_attempts(before, prepared['event_id']).values()))['attempts_consumed'], 0)
+
+    def test_explicit_receiver_replacement_human_approval_reuse_and_later_only_reverification(self):
+        from harness_foundry_factory.build_entrypoint import read_build
+        receiver, scope = self.replacement_fixture(accepted=True); f = self.f
+        historical = deepcopy(f.events()); old = f.prepared_id
+        prepared = prepare_build_authorization(f.store, f.program, f.proposal_id, f.source_id,
+            scope, rebind_from=old, replace_codex_receiver=True, **f.kwargs('replacement'))
+        new = prepared['event_id']; before = f.events(); calls = len(self.runner.invocations)
+        with self.assertRaisesRegex(RequestValidationError, 'explicit Codex receiver replacement requires human approval'):
+            self.derive(new, self.evidence(old, new))
+        self.assertEqual(f.events(), before)
+        held = f.controller().advance(new, advance_mode='ONE_ATTEMPT')
+        self.assertNotEqual(held.get('attempt_status'), 'ACCEPTED')
+        self.assertEqual(len(self.runner.invocations), calls)
+        approved = approve_build_authorization(f.store, f.program, new,
+            human_message_ref='TEST FIXTURE ONLY: explicitly approve changed receiver', **f.kwargs('replacement-approve'))
+        self.assertIn('human_message_ref', approved['payload'])
+        self.assertEqual(set(project_execution_state(f.events(), new)[1]), {'IMPLEMENT-READER'})
+        self.assertEqual(attempt_budget(scope, list(project_budget_attempts(f.events(), new).values()))['attempts_consumed'], 1)
+        # A later ordinary checker correction may inherit this new human grant.
+        f.scope = scope
+        later, evidence = self.new_binding(origin=new, key='later-correction')
+        self.derive(later, evidence)
+        result = f.controller().advance(later, advance_mode='ONE_ATTEMPT')
+        self.assertEqual(result['attempt_status'], 'ACCEPTED', result)
+        self.assertEqual([c['phase'] for c in self.runner.invocations[calls:]], ['VERIFICATION', 'VERIFICATION'])
+        receiver.unlink(); before = deepcopy(f.events()); calls = len(self.runner.invocations)
+        with patch('subprocess.Popen', side_effect=AssertionError('complete reports must not dispatch')):
+            first = read_build(f.store.database_path, f.program)
+            self.assertEqual(read_build(f.store.database_path, f.program), first)
+        self.assertEqual(f.events(), before)
+        self.assertEqual(len(self.runner.invocations), calls)
+        self.assertEqual(f.events()[:len(historical)], historical)
+        self.assertEqual(attempt_budget(scope, list(project_budget_attempts(f.events(), later).values()))['attempts_consumed'], 1)
+
+    def test_explicit_receiver_replacement_same_identity_cannot_auto_inherit(self):
+        receiver = self.receiver(); f = self.f; f.prepare()
+        prepared = prepare_build_authorization(f.store, f.program, f.proposal_id, f.source_id,
+            f.scope, rebind_from=f.prepared_id, replace_codex_receiver=True, **f.kwargs('replacement'))
+        before = f.events()
+        with self.assertRaisesRegex(RequestValidationError, 'explicit Codex receiver replacement requires human approval'):
+            self.derive(prepared['event_id'], self.evidence(f.prepared_id, prepared['event_id']))
+        self.assertEqual(f.events(), before)
+
+    def test_explicit_receiver_replacement_rejects_invalid_target_before_append(self):
+        receiver, scope = self.replacement_fixture(); f = self.f
+        receiver.chmod(0o600); before = f.events()
+        with self.assertRaises(RequestValidationError):
+            prepare_build_authorization(f.store, f.program, f.proposal_id, f.source_id,
+                scope, rebind_from=f.prepared_id, replace_codex_receiver=True, **f.kwargs('replacement'))
+        self.assertEqual(f.events(), before)
+
+    def test_explicit_receiver_replacement_requires_boolean_and_rebind(self):
+        self.receiver(); f = self.f; f.prepare(); before = f.events()
+        for value in (None, 1, 'true'):
+            with self.subTest(value=value), self.assertRaisesRegex(RequestValidationError, 'must be boolean'):
+                prepare_build_authorization(f.store, f.program, f.proposal_id, f.source_id,
+                    f.scope, rebind_from=f.prepared_id, replace_codex_receiver=value, **f.kwargs('invalid'))
+        with self.assertRaisesRegex(RequestValidationError, 'requires an explicit rebind_from'):
+            prepare_build_authorization(f.store, f.program, f.proposal_id, f.source_id,
+                f.scope, replace_codex_receiver=True, **f.kwargs('invalid'))
+        self.assertEqual(f.events(), before)
 
     def test_unaccepted_complete_implementation_is_pending_never_prefaked_accepted(self):
         self.prepare_failure();f=self.f

@@ -7,6 +7,7 @@ Public build/approval CLI exposure and real-model qualification are separate.
 """
 
 from copy import deepcopy
+import os
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -25,7 +26,8 @@ from .build_state import (affected_workpacks, repair_budget_exhaustion, project_
 from .build_artifacts import (relative_path as _relative, file_identity as _file_identity,
                               superseded_artifacts, changed_accepted_files, check_accepted_files)
 from .build_review import validate_build_review, validate_review_sources
-from .local_process import LocalCommand, CodexSandboxRunner, unsupported_isolation_paths
+from .local_process import (LocalCommand, CodexSandboxRunner, unsupported_isolation_paths,
+                            LocalProcessError, bind_codex_receiver, validate_codex_receiver)
 from .build_types import (RequestValidationError, RevisionConflictError, IdempotencyConflictError,
                           canonical_json, BuildAuthorizationError, authorization_reason)
 from .process_observation import CommandObservation
@@ -177,7 +179,6 @@ def _validate_scope(store, plan, scope):
            "dynamic defaults cannot be combined with a fixed model or reasoning effort")
     if "model_service" in scope:
         from .coding_defaults import validate_model_service
-        from .local_process import LocalProcessError
         try:
             validate_model_service(scope["model_service"])
         except LocalProcessError as exc:
@@ -264,6 +265,9 @@ def prepare_build_scope(store, ir, plan, source, scope, *, created_at,
     validate_requirement_source_bindings(ir, source["snapshot"])
     contracts = validate_acceptance_contracts(ir, snapshot=source["snapshot"], required=True)
     scope = deepcopy(scope)
+    old_binding = (prepared_preview or {}).get("codex_receiver_binding")
+    if old_binding is not None and scope.get("codex_executable") == old_binding["executable"]:
+        scope["codex_executable"] = old_binding["declared_executable"]
     scope.setdefault("model", None)
     if implicit_defaults:
         scope["model_policy"] = "CODEX_GLOBAL_DEFAULTS"
@@ -276,7 +280,6 @@ def prepare_build_scope(store, ir, plan, source, scope, *, created_at,
         _check(scope.get("allow_model_service") is True and any(t["executor"] == "CODEX" for t in plan["workpacks"]),
                "follow_codex_defaults requires a declared CODEX task and model service")
         from .coding_defaults import resolve_codex_defaults
-        from .local_process import LocalProcessError
         try:
             selected = (resolve_codex_defaults(scope["codex_executable"], require_explicit=False) if dynamic_defaults
                         else resolve_codex_defaults(scope["codex_executable"]))
@@ -297,7 +300,6 @@ def prepare_build_scope(store, ir, plan, source, scope, *, created_at,
         model_defaults_source = selected["model_defaults_source"]
     elif "model_service" in scope:
         from .coding_defaults import validate_model_service
-        from .local_process import LocalProcessError
         try:
             scope["model_service"] = validate_model_service(scope["model_service"])
         except LocalProcessError as exc:
@@ -324,6 +326,14 @@ def prepare_build_scope(store, ir, plan, source, scope, *, created_at,
         scope["verification_root"] = verifier_source["runtime_root"]
     files = _validate_scope(store, plan, scope)
     _check_native_layout(store, scope, source)
+    try:
+        receiver_binding = bind_codex_receiver(scope["codex_executable"])
+    except LocalProcessError as exc:
+        raise RequestValidationError(str(exc)) from exc
+    if model_defaults_source is not None and "codex_sha256" in model_defaults_source:
+        _check(model_defaults_source["codex_sha256"] == receiver_binding["sha256"],
+               "Codex receiver changed since configuration read")
+    scope["codex_executable"] = receiver_binding["executable"]
     _check(_utc(created_at) < _utc(scope["expires_at"]), "authorization already expired")
     # Persist actual directory bindings, not movable symbolic root aliases.
     scope = deepcopy(scope)
@@ -340,12 +350,20 @@ def prepare_build_scope(store, ir, plan, source, scope, *, created_at,
                "declared requirement source must not be task-writable")
     startup = {}
     if any(task["executor"] == "CODEX" for task in plan["workpacks"]):
-        from .coding_process import instruction_read_preflight
+        from .coding_process import instruction_read_preflight, validate_coding_paths
         source_files = [str(_relative(Path(source["source_root"]), entry["path"]))
                         for entry in source["manifest"]]
+        try:
+            validate_coding_paths(workspace,
+                [workspace, *scope["source_read_roots"], *scope["executables"].values(),
+                 scope["codex_executable"], *source_files],
+                [_relative(workspace, root) for task in plan["workpacks"] if task["executor"] == "CODEX"
+                 for root in scope["task_write_roots"][task["workpack_id"]]])
+        except LocalProcessError as exc:
+            raise RequestValidationError(str(exc)) from exc
         startup["coding_instruction_preflight"] = instruction_read_preflight(
             workspace, [workspace, *scope["source_read_roots"], *source_files])
-    payload = {"scope": deepcopy(scope), "verifier_files": files,
+    payload = {"scope": deepcopy(scope), "verifier_files": files, "codex_receiver_binding": receiver_binding,
                **({"model_defaults_source": model_defaults_source} if model_defaults_source is not None else {}),
                "acceptance_contracts": contracts,
                **({"verifier_source": verifier_source} if verifier_source else {}), **startup}
@@ -361,9 +379,11 @@ def prepare_build_scope(store, ir, plan, source, scope, *, created_at,
 
 def prepare_build_authorization(store, program_id, proposal_event_id, source_event_id, scope, *,
                                 expected_revision, idempotency_key, created_at, rebind_from=None, follow_codex_defaults=False, prepared_preview=None,
-                                budget_extension=None):
+                                budget_extension=None, replace_codex_receiver=False):
     """Save a readable scope challenge, not authority. Creates no target paths."""
     _check(type(follow_codex_defaults) is bool, "follow_codex_defaults must be boolean")
+    _check(type(replace_codex_receiver) is bool, "replace_codex_receiver must be boolean")
+    _check(not replace_codex_receiver or rebind_from is not None, "replace_codex_receiver requires an explicit rebind_from")
     _check(budget_extension is None or rebind_from is not None, "budget_extension requires an explicit rebind_from")
     proposal = _proposal_event(store, program_id, proposal_event_id)
     # Infer only a NEW preparation's selection policy. Persisted scopes retain
@@ -377,6 +397,7 @@ def prepare_build_authorization(store, program_id, proposal_event_id, source_eve
                          "scope": deepcopy(scope), "expected_revision": expected_revision,
                          **({"follow_codex_defaults": True} if follow_codex_defaults else {}),
                          **({"rebind_from": rebind_from} if rebind_from is not None else {}),
+                         **({"replace_codex_receiver": True} if replace_codex_receiver else {}),
                          **({"budget_extension": deepcopy(budget_extension)} if budget_extension is not None else {}),
                          **({"prepared_preview": prepared_preview} if prepared_preview is not None else {})}
                         if "verification_resources" in scope or rebind_from is not None or follow_codex_defaults
@@ -395,12 +416,20 @@ def prepare_build_authorization(store, program_id, proposal_event_id, source_eve
     review = validate_build_review(proposal["payload"].get("document_review"))
     validate_review_sources(review, ir, source_root=source["payload"]["source_root"], snapshot=source["payload"]["snapshot"])
     if rebind_from is not None:
-        validate_rebind(events, rebind_from, proposal["payload"], scope, budget_extension=budget_extension)
+        previous = validate_rebind(events, rebind_from, proposal["payload"], scope, budget_extension=budget_extension)
+        receiver = previous.get("codex_receiver_binding")
+        if not replace_codex_receiver and receiver is not None and scope.get("codex_executable") == receiver["executable"]:
+            # Readback exposes the effective path. Keep its declared entry when
+            # restated, then let prepare_build_scope resolve and hash it afresh.
+            # Never copy old identity bytes or reinterpret a different entry.
+            scope = deepcopy(scope)
+            scope["codex_executable"] = receiver["declared_executable"]
     prepared = prepare_build_scope(store, ir, plan, source["payload"], scope,
         created_at=created_at, follow_codex_defaults=follow_codex_defaults, prepared_preview=prepared_preview)
     return store.append_batch(program_id, [{"event_type": "BUILD_AUTHORIZATION_PREPARED", "payload": {
         "proposal_event_id": proposal_event_id, "source_event_id": source_event_id, **prepared,
         **({"rebind_from": rebind_from} if rebind_from is not None else {}),
+        **({"replace_codex_receiver": True} if replace_codex_receiver else {}),
         **({"budget_extension": deepcopy(budget_extension)} if budget_extension is not None else {}),
         **({"resource_prepare_request": resource_request} if resource_request is not None else {})}}],
         expected_revision=expected_revision, idempotency_key=idempotency_key, created_at=created_at,
@@ -557,12 +586,13 @@ def resolve_build_attempt(store, program_id, prepared_event_id, attempt_id, *, r
 class NativeBuildRunner:
     """Use the existing finite Codex/local receivers; no unsandboxed fallback."""
 
+    def __init__(self):
+        # A one-entry diagnostic cache for this dispatcher only. Not authority,
+        # durable readiness, or a replacement for OS enforcement on every launch.
+        self.startup_evidence = {}
+
     def __call__(self, invocation, before_dispatch):
         scope = invocation["scope"]
-        command = LocalCommand.prepare(argv=invocation["argv"], cwd=invocation["cwd"],
-            read_roots=invocation["read_roots"], write_roots=invocation["write_roots"],
-            timeout_seconds=invocation["timeout_seconds"],
-            environment=invocation.get("environment"), network=invocation.get("network"))
         before_dispatch()
         observation = (CommandObservation(invocation["observation_root"], invocation["command_id"],
                                          invocation["executor"], invocation.get("on_process_started"))
@@ -571,7 +601,37 @@ class NativeBuildRunner:
         if invocation.get("cancellation_reason") is not None:
             hooks["cancellation_reason"] = invocation["cancellation_reason"]
         hooks.update(resource_dispatch_hooks(invocation, observation))
+        receiver_binding = invocation.get("codex_receiver_binding")
+        if receiver_binding is not None:
+            hooks["receiver_binding"] = receiver_binding
         try:
+            # This boundary performs only synchronous validation, before any
+            # receiver/probe Popen. Later failures still use ordinary recovery.
+            try:
+                if receiver_binding is not None:
+                    validate_codex_receiver(receiver_binding)
+                command = LocalCommand.prepare(argv=invocation["argv"], cwd=invocation["cwd"],
+                    read_roots=invocation["read_roots"], write_roots=invocation["write_roots"],
+                    timeout_seconds=invocation["timeout_seconds"],
+                    environment=invocation.get("environment"), network=invocation.get("network"))
+                if invocation["executor"] == "CODEX":
+                    from .coding_process import validate_coding_paths
+                    validate_coding_paths(command.cwd, command.read_roots, command.write_roots)
+            except (LocalProcessError, OSError) as exc:
+                from .coding_defaults import model_service_credential_refs
+                from .resource_credentials import SecretRedactor
+                refs = model_service_credential_refs(scope.get("model_service", {"provider": "openai", "config": {}}))
+                redactor = SecretRedactor([os.environ[r] for r in refs if os.environ.get(r)])
+                result = {"status": "VALIDATION_FAILED", "reason_code": "COMMAND_PREPARATION_REJECTED",
+                          "diagnostic": redactor.text(str(exc)), "failure_domain": "ENVIRONMENT_PREFLIGHT",
+                          "startup_phase": "SYNCHRONOUS_VALIDATION", "process_started": False,
+                          "model_process_started" if invocation["executor"] == "CODEX" else "workload_started": False,
+                          "automatic_retry_allowed": False, "workpack_accepted": False}
+                if receiver_binding is not None:
+                    result["codex_receiver_binding"] = receiver_binding
+                if observation is not None:
+                    observation.finished(result)
+                return result
             if invocation["executor"] == "CODEX":
                 from .coding_process import CodingCommand, CodexCodingRunner
                 result = CodexCodingRunner(scope["codex_executable"]).run(
@@ -580,7 +640,7 @@ class NativeBuildRunner:
                                   model_policy=scope.get("model_policy", "FIXED"),
                                   model_service=scope.get("model_service"),
                                   model_defaults_source=invocation.get("model_defaults_source")),
-                    before_dispatch=before_dispatch, **hooks)
+                    before_dispatch=before_dispatch, startup_evidence=self.startup_evidence, **hooks)
             else:
                 result = CodexSandboxRunner(scope["codex_executable"]).run(command, before_dispatch=before_dispatch, **hooks)
             if invocation["phase"] == "VERIFICATION" and "resource_binding" not in invocation:
@@ -983,6 +1043,7 @@ class BuildController:
                 **({"case_verifier_binding": case_binding,
                     "environment": {"FOUNDRY_VERIFIER_ROOT": case_binding["verifier_root"]}} if case_binding else {}),
                 **({"model_defaults_source": prepared["model_defaults_source"]} if "model_defaults_source" in prepared else {}),
+                **({"codex_receiver_binding": prepared["codex_receiver_binding"]} if "codex_receiver_binding" in prepared else {}),
                 "case_id": case_id, "phase": "VERIFICATION" if verification else "IMPLEMENTATION",
                 **({"resource_profile_ref": next(check["resource_profile_ref"] for check in task["verification"]
                     if check["case_id"] == case_id)} if verification and any(check["case_id"] == case_id

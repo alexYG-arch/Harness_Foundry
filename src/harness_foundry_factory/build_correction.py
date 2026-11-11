@@ -236,6 +236,8 @@ def completed_implementation_candidates(events, previous_id, receipts):
 
 
 def _same_scope(events, previous, prepared, proposal):
+    require(not prepared.get("replace_codex_receiver", False),
+            "explicit Codex receiver replacement requires human approval")
     old_proposal = _event(events, previous["proposal_event_id"], "BUILD_PLAN_PROPOSED")["payload"]
     require(proposal["requirement_ir"] == old_proposal["requirement_ir"]
             and proposal["document_review"] == old_proposal["document_review"]
@@ -250,6 +252,12 @@ def _same_scope(events, previous, prepared, proposal):
             scope["verification_resources"].pop("checker_files", None)
             scope["verification_resources"].pop("case_checker_files", None)
     require(old_scope == new_scope, "same-scope correction cannot change execution, resources, budgets or expiry")
+    # New preparations bind receiver identity outside scope. A checker-only
+    # correction cannot silently replace or drop an already approved binding.
+    # Historical preparations without it retain their original path-based rules.
+    if "codex_receiver_binding" in previous:
+        require(prepared.get("codex_receiver_binding") == previous["codex_receiver_binding"],
+                "same-scope correction cannot change Codex receiver identity")
     old_source = _event(events, previous["source_event_id"], "BUILD_SOURCES_CAPTURED")["payload"]
     new_source = _event(events, prepared["source_event_id"], "BUILD_SOURCES_CAPTURED")["payload"]
     require(all(old_source[k] == new_source[k] for k in ("source_root", "manifest", "snapshot")),

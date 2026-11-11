@@ -11,10 +11,12 @@ import json
 import os
 from pathlib import Path
 import tomllib
+import time
 from uuid import uuid4
 
 from .coding_events import CodingEventObserver, _contract_blocker, _retry_notification
-from .local_process import CodexSandboxRunner, LocalCommand, LocalProcessError, _toml_inline, _within
+from .local_process import (CodexSandboxRunner, LocalCommand, LocalProcessError, _toml_inline, _within,
+                            validate_codex_receiver)
 
 
 DISABLED_FEATURES = (
@@ -101,6 +103,19 @@ def instruction_read_preflight(cwd: Path, read_roots, write_roots=()) -> dict:
             "session_readiness_verified": False, "permissions_added": False}
 
 
+def validate_coding_paths(cwd, read_roots, write_roots):
+    """Pure checks shared by preparation and dispatch; future cwd may be absent."""
+    state = client_state_root().resolve()
+    instruction_files = {state / name for name in ("AGENTS.md", "AGENTS.override.md")}
+    reads = [Path(root).resolve() for root in read_roots]
+    writes = [Path(root).resolve() for root in write_roots]
+    if (any(root == state or state.is_relative_to(root) or root.is_relative_to(state) for root in writes)
+            or any((root == state or state.is_relative_to(root) or root.is_relative_to(state))
+                   and not (root in instruction_files and root.is_file()) for root in reads)):
+        raise LocalProcessError("model tools cannot access the client's authentication/state directory")
+    check_configuration_sources(Path(cwd).resolve())
+
+
 @dataclass(frozen=True)
 class CodingCommand:
     scope: LocalCommand
@@ -129,16 +144,7 @@ class CodingCommand:
             read_roots=self.scope.read_roots, write_roots=self.scope.write_roots, timeout_seconds=self.scope.timeout_seconds)
         if current != self.scope:
             raise LocalProcessError("coding scope changed before dispatch")
-        state = client_state_root().resolve()
-        # Explicit, exact instruction-file reads do not expose credentials or
-        # the whole client directory. Resolved symlinks to auth/state still fail.
-        instruction_files = {state / name for name in ("AGENTS.md", "AGENTS.override.md")}
-        if (any(root == state or state.is_relative_to(root) or root.is_relative_to(state)
-                for root in self.scope.write_roots)
-                or any((root == state or state.is_relative_to(root) or root.is_relative_to(state))
-                       and not (root in instruction_files and root.is_file()) for root in self.scope.read_roots)):
-            raise LocalProcessError("model tools cannot access the client's authentication/state directory")
-        check_configuration_sources(self.scope.cwd)
+        validate_coding_paths(self.scope.cwd, self.scope.read_roots, self.scope.write_roots)
 
     def instruction_preflight(self):
         return instruction_read_preflight(self.scope.cwd, self.scope.read_roots, self.scope.write_roots)
@@ -295,7 +301,7 @@ class _CodingJsonlRedactor:
         return result
 
 
-def _dispatch_configuration(command):
+def _dispatch_configuration(command, *, timeout_seconds=None):
     """Resolve once per new dispatch. Recovery never calls this function."""
     from .coding_defaults import resolve_codex_defaults, validate_model_service, model_service_credential_refs
     from .resource_credentials import SecretRedactor
@@ -303,7 +309,8 @@ def _dispatch_configuration(command):
                                      else {"provider": "openai", "config": {}})
     selected = command
     if command.model_policy == "CODEX_GLOBAL_DEFAULTS":
-        defaults = resolve_codex_defaults(command.scope.argv[0], require_explicit=False)
+        defaults = resolve_codex_defaults(command.scope.argv[0], require_explicit=False,
+            **({"timeout_seconds": timeout_seconds} if timeout_seconds is not None else {}))
         if defaults["model_service"] != service:
             raise LocalProcessError("CODING_MODEL_SERVICE_CHANGED: global service differs from the approved binding; reprepare the scope")
         selected = replace(command, model=defaults["model"], reasoning_effort=defaults["model_reasoning_effort"],
@@ -340,14 +347,31 @@ def _dispatch_configuration(command):
 class CodexCodingRunner(CodexSandboxRunner):
     """No automatic retry, resume, user config rewrite or sandbox fallback."""
 
-    def run(self, command: CodingCommand, *, before_dispatch, observation=None, cancellation_reason=None):
+    def run(self, command: CodingCommand, *, before_dispatch, observation=None, cancellation_reason=None,
+            receiver_binding=None, startup_evidence=None):
+        deadline = time.monotonic() + command.scope.timeout_seconds if receiver_binding is not None else None
+
+        def remaining(maximum):
+            return maximum if deadline is None else max(0, min(maximum, deadline - time.monotonic()))
+
+        def timeout():
+            return {"status": "VALIDATION_FAILED", "reason_code": "CODING_TIMEOUT_BEFORE_DISPATCH",
+                    "model_process_started": False, "automatic_retry_allowed": False, "workpack_accepted": False}
+
+        if receiver_binding is not None:
+            validate_codex_receiver(receiver_binding)
+            if command.scope.argv[0] != receiver_binding["executable"] or str(self.executable) != receiver_binding["executable"]:
+                raise LocalProcessError("CODEX_RECEIVER_CHANGED: command differs from preparation")
         command.validate()
         instruction_check = command.instruction_preflight()
         if instruction_check["missing_read_paths"]:
             return self._instruction_stop(instruction_check)
-        if Path(command.scope.argv[0]).resolve() != self.executable:
+        if Path(command.scope.argv[0]).resolve() != self.executable.resolve():
             raise LocalProcessError("coding command and receiver executable differ")
-        help_result = self._capture([str(self.executable), "exec", "--help"], command.scope.cwd, 15)
+        budget = remaining(15)
+        if budget <= 0:
+            return timeout()
+        help_result = self._capture([str(self.executable), "exec", "--help"], command.scope.cwd, budget)
         required = ("--ignore-user-config", "--strict-config", "--ephemeral", "--json", "--cd", "stdin")
         text = help_result["stdout"] + help_result["stderr"]
         if help_result["exit_code"] != 0 or help_result["timed_out"] or not all(flag in text for flag in required):
@@ -358,9 +382,31 @@ class CodexCodingRunner(CodexSandboxRunner):
         # proves only local command capability, not instruction discovery,
         # real session readiness, a model turn or Workpack success.
         scope = command.scope
-        probe = LocalCommand.prepare(argv=["/usr/bin/true"], cwd=scope.cwd,
-            read_roots=[*scope.read_roots, "/usr/bin/true"], write_roots=scope.write_roots, timeout_seconds=15)
-        capability = CodexSandboxRunner(self.executable).run(probe)
+        probe_argv = (["/usr/bin/true"] if receiver_binding is None else
+                      [str(self.executable), *(
+                          ["exec", "--help"] if receiver_binding["entry_kind"] == "SCRIPT" else ["--version"])])
+        budget = remaining(15)
+        if budget <= 0:
+            return timeout()
+        probe = LocalCommand.prepare(argv=probe_argv, cwd=scope.cwd,
+            read_roots=[*scope.read_roots, probe_argv[0]], write_roots=scope.write_roots, timeout_seconds=budget)
+        probe_hooks = ({"receiver_binding": receiver_binding, "before_dispatch": before_dispatch,
+                        "cancellation_reason": cancellation_reason} if receiver_binding is not None else {})
+        probe_key = (json.dumps({"binding": receiver_binding, "cwd": str(scope.cwd),
+                                "profile": scope.permission_profile()}, sort_keys=True)
+                     if receiver_binding is not None else None)
+        cached = startup_evidence is not None and probe_key is not None and startup_evidence.get("key") == probe_key
+        if cached:
+            capability = {"status": "PASS"}  # Historical diagnostic, never current authority.
+            probe_record = {**startup_evidence["record"], "reused": True}
+        else:
+            capability = CodexSandboxRunner(self.executable).run(probe, **probe_hooks)
+            probe_record = {"argv": probe_argv, "status": capability["status"], "reused": False,
+                            "command_id": observation.binding["command_id"] if observation is not None else None,
+                            "session_readiness_verified": False}
+            if startup_evidence is not None and probe_key is not None and capability["status"] == "PASS":
+                startup_evidence.clear()
+                startup_evidence.update(key=probe_key, record=probe_record)
         if capability["status"] != "PASS":
             return {"status": "VALIDATION_FAILED", "reason_code": "CODING_SANDBOX_UNAVAILABLE",
                     "model_process_started": False, "capture": capability, "workpack_accepted": False,
@@ -370,7 +416,11 @@ class CodexCodingRunner(CodexSandboxRunner):
         if instruction_check["missing_read_paths"]:
             return self._instruction_stop(instruction_check)
         try:
-            selected, configuration, environment, redactor = _dispatch_configuration(command)
+            budget = remaining(15)
+            if budget <= 0:
+                return timeout()
+            selected, configuration, environment, redactor = _dispatch_configuration(command,
+                **({"timeout_seconds": budget} if receiver_binding is not None else {}))
         except LocalProcessError as exc:
             reason = str(exc).split(":", 1)[0]
             if reason not in {"CODING_MODEL_SERVICE_CHANGED", "CODING_MODEL_CREDENTIAL_UNAVAILABLE"}:
@@ -378,12 +428,16 @@ class CodexCodingRunner(CodexSandboxRunner):
             return {"status": "VALIDATION_FAILED", "reason_code": reason,
                     "model_process_started": False, "diagnostic": str(exc), "workpack_accepted": False,
                     "automatic_retry_allowed": False}
+        if receiver_binding is not None:
+            configuration["codex_receiver_binding"] = receiver_binding
         if observation is not None:
             observation.model_configuration(configuration)
         observer = CodingEventObserver()
 
         def captured(value):
             value["model_configuration"] = configuration
+            if receiver_binding is not None:
+                value["startup_probe"] = probe_record
             if observation is not None:
                 observation.captured(value)
 
@@ -395,12 +449,17 @@ class CodexCodingRunner(CodexSandboxRunner):
         argv = selected.argv()
         try:
             before_dispatch()  # Current authority after selection, immediately before launch.
+            if receiver_binding is not None:
+                validate_codex_receiver(receiver_binding)
         except Exception as exc:
             return {"status": "VALIDATION_FAILED", "reason_code": "CODING_DISPATCH_REVALIDATION_FAILED",
                     "model_process_started": False, "diagnostic": redactor.text(str(exc)) if redactor else str(exc),
                     "model_configuration": configuration, "workpack_accepted": False,
                     "automatic_retry_allowed": False}
-        capture = self._capture(argv, scope.cwd, scope.timeout_seconds,
+        budget = remaining(scope.timeout_seconds)
+        if budget <= 0:
+            return {**timeout(), "model_configuration": configuration}
+        capture = self._capture(argv, scope.cwd, budget,
                                 stdin_bytes=command.prompt.encode("utf-8"), on_stdout=observer.feed, **hooks)
         # Popen failures return without on_capture; still report the selection,
         # but never call them a consumed model turn or a completed command.
@@ -427,5 +486,12 @@ def classify_coding_capture(capture, observer):
     if capture.get("process_started") is False:
         return {**observed, "capture": capture, "status": "VALIDATION_FAILED",
                 "reason_code": "CODING_PROCESS_START_FAILED", "model_process_started": False}
-    return {**observed, "capture": capture, "model_process_started": None,
+    # Diagnostic only: never infer zero effects, zero cost or retry authority.
+    startup = {}
+    if (capture.get("exit_code") not in {None, 0} and not observed.get("thread_id")
+            and not capture.get("timed_out") and not capture.get("capture_error")
+            and "fs sandbox helper failed" in capture.get("stderr", "")
+            and "sandbox-exec: execvp()" in capture.get("stderr", "")):
+        startup = {"startup_phase": "SESSION_HELPER_REJECTED", "parent_process_started": True}
+    return {**observed, **startup, "capture": capture, "model_process_started": None,
             "client_network": "CODEX_SERVICE_TRAFFIC", "local_command_network": "DENY"}
