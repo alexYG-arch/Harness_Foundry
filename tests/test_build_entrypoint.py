@@ -80,15 +80,25 @@ class BuildEntrypointTests(unittest.TestCase):
             "prepared_event_id": self.prepared["event_id"], "expected_revision": self.revision if revision is None else revision}, expected=expected)
 
     def test_public_prepare_read_approve_do_not_dispatch_or_create_target(self):
+        # Force a binary alias on every platform: a host's /usr/bin/true may
+        # itself be an alias. Preserve its declaration while binding execution.
+        receiver = self.f.root / "receiver-alias"
+        receiver.symlink_to(self.f.scope["codex_executable"])
+        self.f.scope["codex_executable"] = str(receiver)
         (self.f.workspace / "src").rmdir()
         (self.f.workspace / "outputs").rmdir()
         self.f.workspace.rmdir()
         with patch("subprocess.Popen", side_effect=AssertionError("no dispatch")):
             result = self.prepare()
             self.assertEqual(result["status"], "BUILD_SCOPE_APPROVAL_REQUIRED")
-            normalized = {**self.f.scope, "source_read_roots": [str(Path(root).resolve())
+            normalized = {**self.f.scope, "codex_executable": str(receiver.resolve()),
+                          "source_read_roots": [str(Path(root).resolve())
                           for root in self.f.scope["source_read_roots"]]}
             self.assertEqual(result["readback"]["scope"], normalized)
+            binding = result["readback"]["codex_receiver_binding"]
+            self.assertEqual(binding["declared_executable"], str(receiver))
+            self.assertEqual(binding["executable"], str(receiver.resolve()))
+            self.assertEqual(binding["entry_kind"], "BINARY")
             self.assertEqual(result["readback"]["requirement_ir"], self.f.ir)
             self.assertEqual(result["readback"]["source_binding"]["sources"][0]["line_count"], 3)
             self.assertEqual(result["readback"]["verification_files"], ["check.py"])
