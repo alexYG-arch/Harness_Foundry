@@ -53,6 +53,8 @@ RSI 继续由现有 `tools/prepare_rsi_delivery.py`、`import_rsi_case.py`、`rs
 
 ## 分别选择搭建与目标交付
 
+仅登记给新版请求使用时，在 `connections.py connect` 加上 `--on-demand`。该入口写入独立的 `.foundry/available-connections.json`；使用旧加载器的项目只看到原注册表。停用同一按需记录时使用 `disconnect --on-demand`。旧注册表中已经启用的记录也可被新版点名。两张表中出现相同的完整键时须消除歧义。
+
 在准备或升级配置的 `connections` 中声明 `selection_version: 1`。两份列表均为必填项。下面的配置让搭建时的 `MAKE` 使用已登记的 `review`，目标只继承 `reference` 的正文和登记为公共基础材料的 `guide.md`。
 
 ```json

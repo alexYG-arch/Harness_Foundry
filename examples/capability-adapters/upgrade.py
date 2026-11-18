@@ -85,6 +85,8 @@ def build_upgrade(previous_materials, config, output_root):
              'base_materials must be project materials, not capability-expanded materials')
     before = _packages(previous_materials)
     selection = _prepare._scope.contract(config.get('connections'))
+    if selection is None and 'connection_selection' in base.get('preparation', {}):
+        raise ValueError('scoped materials cannot be reused as a legacy project base')
     skipped = set()
     if selection is not None:
         _prepare._scope.project_base(base)

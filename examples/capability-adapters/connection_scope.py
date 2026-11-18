@@ -83,14 +83,10 @@ def bindings(reader, conf, project, entries):
     found = {}
     for scope, path in [('instance', conf['instance_root']), ('project', project)]:
         root = Path(path).resolve(strict=True)
-        latest = {r['id']: r for r in reader.read_registry(root / reader.REGISTRY)['records'] if r['scope'] == scope}
-        for name, record in latest.items():
-            key = scope + '.' + name
-            if key not in requested:
-                continue
+        for key, (registry, record) in reader.registry_entries(root, scope, requested).items():
             if not record['enabled'] or record['scope_root'] != str(root):
                 raise ValueError('disabled or wrong registry scope: ' + key)
-            found[key] = {**deepcopy(record), 'key': key, 'registry': str(root / reader.REGISTRY)}
+            found[key] = {**deepcopy(record), 'key': key, 'registry': str(registry)}
     if requested != set(found):
         raise ValueError('missing selected connection: ' + ', '.join(sorted(requested - set(found))))
     if len(found) != len({record['catalog']['provider'] for record in found.values()}):

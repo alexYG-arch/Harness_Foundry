@@ -384,6 +384,22 @@ class ScopedConnectionTests(unittest.TestCase):
             load('stack_handoff').public_delivery(m, self.root / 'bad')
 
     def test_L3_legacy_drift_and_scoped_deselection(self):
+        third = self.package('extra')
+        legacy_registry = (self.instance / C.REGISTRY).read_bytes()
+        C.configure(self.instance, 'instance', 'extra', third, on_demand=True)
+        with accesses() as paths:
+            visible = C.load_connections(self.instance, self.project)
+        self.assertUntouched(paths, third, self.instance / C.ON_DEMAND_REGISTRY)
+        self.assertEqual({r['key'] for r in visible['connections']}, {A, B})
+        self.assertEqual((self.instance / C.REGISTRY).read_bytes(), legacy_registry)
+        only = self.write(self.config([{'key': 'instance.extra', 'skills': ['review']}]), 'opt-in')
+        self.assertEqual([r['key'] for r in only['preparation']['external_connections']], ['instance.extra'])
+        C.configure(self.instance, 'instance', 'extra', enabled=False, on_demand=True)
+        self.assertEqual(P.check_selection(only)['status'], 'MATCH')
+        with self.assertRaisesRegex(ValueError, 'disabled'):
+            self.write(self.config([{'key': 'instance.extra'}]), 'disabled-new')
+        with self.assertRaisesRegex(ValueError, 'legacy project base'):
+            P.build_materials({**self.legacy(), 'base_materials': only}, self.root / 'leak')
         old = self.write(self.legacy(), 'old')
         self.assertEqual(U.build_upgrade(old, self.legacy(), self.root / 'healthy')[2]['previous_selection_check']['status'], 'MATCH')
         (self.beta / 'base.md').write_text('Changed after capture')

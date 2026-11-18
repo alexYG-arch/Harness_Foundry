@@ -377,6 +377,8 @@ def build_materials(config, output_root, *, connection_snapshot=None):
     output = Path(output_root).absolute()
     connection_config = config.get('connections')
     connection_selection = _scope.contract(connection_config)
+    if connection_selection is None and 'connection_selection' in config.get('base_materials', {}).get('preparation', {}):
+        raise ValueError('scoped materials cannot be reused as a legacy project base')
     selected_keys = None
     if connection_selection is not None:
         _scope.project_base(config.get('base_materials', {}))

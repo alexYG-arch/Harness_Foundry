@@ -14,6 +14,7 @@ import tempfile
 import zipfile
 
 REGISTRY = '.foundry/connections.json'
+ON_DEMAND_REGISTRY = '.foundry/available-connections.json'
 # Prefer the established descriptor when several ecosystems describe one root.
 DESCRIPTORS = ('.codex-plugin/plugin.json', 'capability.json', '.cursor-plugin/plugin.json',
                '.claude-plugin/plugin.json', 'plugin.json')
@@ -198,13 +199,30 @@ def read_registry(path):
     return data
 
 
-def configure(root, scope, connection_id, source=None, base_materials=(), enabled=True):
+def registry_entries(root, scope, keys=None):
+    registries = (REGISTRY,) if keys is None else (REGISTRY, ON_DEMAND_REGISTRY)
+    found = {}
+    for filename in registries:
+        path = root / filename
+        records = read_registry(path)['records']
+        latest = {row['id']: row for row in records if row['scope'] == scope}
+        for name, row in latest.items():
+            key = scope + '.' + name
+            if keys is not None and key not in keys:
+                continue
+            if key in found:
+                raise ValueError('connection key occurs in both registries: ' + key)
+            found[key] = (path, row)
+    return found
+
+
+def configure(root, scope, connection_id, source=None, base_materials=(), enabled=True, *, on_demand=False):
     """Append a local connection revision. Same binding is idempotent; history stays."""
     root = Path(root).resolve(strict=True)
     identifier(connection_id)
     if scope not in ('instance', 'project') or not root.is_dir():
         raise ValueError('connection requires an existing instance or project directory')
-    path = root / REGISTRY
+    path = root / (ON_DEMAND_REGISTRY if on_demand else REGISTRY)
     path.parent.mkdir(parents=True, exist_ok=True)
     lock = path.with_suffix('.lock')
     fd = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -326,18 +344,13 @@ def load_connections(instance_root, project_root=None, skills=(), *, keys=None):
     roots = [('instance', instance_root)] + ([('project', project_root)] if project_root else [])
     for scope, directory in roots:
         root = Path(directory).resolve(strict=True)
-        path = root / REGISTRY
         try:
-            records = read_registry(path)['records']
-            latest = {row['id']: row for row in records if row['scope'] == scope}
-            for row in latest.values():
-                key = scope + '.' + identifier(row['id'])
-                if keys is not None and key not in keys:
-                    continue
+            for key, (path, row) in registry_entries(root, scope, keys).items():
                 if row['scope'] != scope or row['scope_root'] != str(root):
                     raise ValueError('registry scope does not match its selected root')
                 if not row['enabled']:
                     continue
+                identifier(row['id'])
                 conflict = False
                 try:
                     binding = {**deepcopy(row), 'key': key, 'registry': str(path)}
@@ -408,6 +421,7 @@ def main():
         command.add_argument('--root', required=True, type=Path)
         command.add_argument('--scope', required=True, choices=('instance', 'project'))
         command.add_argument('--id', required=True)
+        command.add_argument('--on-demand', action='store_true', help='use the registry for explicit stage selections only')
         if action == 'connect':
             command.add_argument('--source', required=True, type=Path)
             command.add_argument('--base-material', action='append', default=[])
@@ -421,7 +435,7 @@ def main():
             result = load_connections(args.instance_root, args.project_root, args.skill)
         else:
             result = configure(args.root, args.scope, args.id, getattr(args, 'source', None),
-                               getattr(args, 'base_material', []), args.action == 'connect')
+                               getattr(args, 'base_material', []), args.action == 'connect', on_demand=args.on_demand)
         print(json.dumps(result, ensure_ascii=False))
         return 1 if result.get('status') == 'INCOMPLETE' else 0
     except (ValueError, OSError, KeyError, TypeError, zipfile.BadZipFile) as exc:
