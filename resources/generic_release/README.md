@@ -1,6 +1,6 @@
 # Harness Foundry — generic Codex runtime
 
-Product version **1.3.1**; protocol **2.9**. This patch binds Codex receiver declarations to actual entrypoints, checks deterministic startup errors before dispatch, and preserves receiver identity across Readback and continuation. Binary aliases resolve to their actual entry; script wrappers and ordinary Python virtual-environment invocation keep their semantics. Explicit receiver replacement uses the existing rebind and real-approval route. Default same-scope corrections, cumulative usage and complete-report recovery remain unchanged; no per-step confirmation is added. See docs/GENERIC_BUILD_CLI.md and docs/releases/v1.3.1.md. The eight capability package versions remain unchanged.
+Product version **1.4.0** with protocol **2.9**. Projects can select external materials separately for build tasks and target delivery. Existing configurations keep their previous behavior. See [the connection guide](examples/capability-adapters/CONNECTIONS.md) and [the release notes](docs/releases/v1.4.0.md).
 It preserves declared verification resources, protected product copies, controlled
 repair and single-attempt handoff. It adds on-demand control reads, optional
 revision-body deduplication for new databases and baseline/delta report tools.
@@ -119,8 +119,8 @@ archive checksum or successful CLI command is not evidence that a target Harness
 meets its requirements. Complete release acceptance needs the declared same-package
 new-project and existing-project evidence, plus closure of known in-scope defects.
 PACKAGE_MANIFEST.json describes files and interfaces, not business acceptance.
-The [v1.3.1 release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v1.3.1)
-identifies the selected commit, fixed archive and applicable validation. Preserve the original full run of 2643 PASS + 57 SKIP and the later 42-test affected check; the latter overlaps the original test set and is not added to it. The final scope assertion and release-version changes are not described as a new full green run. The accepted real-model sample belongs to engineering candidate v2; v5's new receiver-continuation/replacement branches remain unverified with a real model. Eleven skipped cases have applicable historical native evidence; the remaining 46 have no applicable native supplement in this repair. All 57 remain SKIP in the original run. Version/package/CI checks are separate. General benefit, other devices and deployment adoption remain unverified. Historical
+The [v1.4.0 release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v1.4.0) records the source checks and portable archive verification for this version.
+The v1.3.1 release records earlier sandbox and receiver checks. Historical
 2436-case coverage is cross-batch evidence for a broader development snapshot,
 not this runtime's test count; benefits and real old-database adoption remain unverified.
 Existing tags and archives remain available from
