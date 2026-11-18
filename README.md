@@ -20,7 +20,20 @@ Foundry 不是另一套模型，也不是固定行业流水线。Codex 负责需
 | 历史稳定版下载 | [v0.5.0 Release](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v0.5.0)，2026-10-15 发布；原 tag 和附件保留 |
 | 协议与许可 | 协议 **2.9**；[MIT](LICENSE) |
 
-**当前稳定版为 1.4.0。** 搭建时交给 Workpack 的外部材料、交付后目标 Harness 可用的方法，现在可以分别选择。已有项目可继续使用旧连接配置。按需登记支持独立维护的外部适配包，pstack 由项目自行选择。详见[连接配置](examples/capability-adapters/CONNECTIONS.md)和[本版下载](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v1.4.0)。
+**当前稳定版为 1.4.0。** 搭建时交给 Workpack 的外部材料、交付后目标 Harness 可用的方法，现在可以分别选择。已有项目可继续使用旧连接配置。详见[连接配置](examples/capability-adapters/CONNECTIONS.md)和[本版下载](https://github.com/alexYG-arch/Harness_Foundry/releases/tag/v1.4.0)。
+
+### 编码项目建议按需接入 pstack
+
+为已有代码库搭建 coding harness 时，建议按任务选用 pstack。读代码时用 `how` 理清现有实现，改动前用 `blast-radius` 追踪可能受影响的调用方；如果希望后续会话也能沿用功能开发流程，可将 `workflow.feature` 交付给目标项目。pstack 是独立可选包，项目可以只选其中一项。[pstack 上游说明（已验证版本 0.15.43）](https://github.com/cursor/plugins/blob/3fa33bb0f927bea2ccacd48a3cfda95145fb6bae/pstack/README.md)
+
+已有本地 pstack 适配 ZIP 时，在 Foundry 根目录运行以下命令。将 `PROJECT` 设为目标项目的绝对路径，`PSTACK_ADAPTER` 设为适配 ZIP 的绝对路径。
+
+```sh
+python3 examples/capability-adapters/connections.py connect \
+  --root "$PROJECT" --scope project --id pstack --on-demand --source "$PSTACK_ADAPTER"
+```
+
+登记后，用 `project.pstack` 指定这份连接。在 `connections.build` 中选择搭建任务要读的 Skill，在 `connections.target` 中选择交付给后续会话的方法。若只在搭建时使用，把 `target` 设为 `[]`。[Foundry 选择配置示例](examples/capability-adapters/CONNECTIONS.md#分别选择搭建与目标交付)
 
 WP07/WP08的本机标准内置范围已补齐：全部／按需搭建及新会话使用、实际PRD交互与检索、DOC导出、Qt/Python原生调用、看板全屏／画中画和报告恢复。原8个Workpack的工程及限定出口均为8/8；这不是所有平台、生产服务或部署均通过，**收益仍未证实**。这些真实执行绑定rc.3；1.2.0只更新版本与说明。1.2.1另含预算增额修复，按逐文件差异复用未变能力证据，修后工程与包内验证另列，不声称重新完成了真实模型增额。1.2.2继续保留这些边界；新增预算／限时提示与目录诊断只取得工程及包内验证，真实模型时间分配和收益仍未验。详见[使用与验证边界](docs/CAPABILITY_ADAPTERS.md)。
 
