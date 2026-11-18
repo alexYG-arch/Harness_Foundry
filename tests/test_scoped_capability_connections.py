@@ -157,6 +157,57 @@ class ScopedConnectionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'disabled'):
             P.build_materials(cfg, self.root / 'output', connection_snapshot=wrong)
 
+    def test_selected_index_change_requires_rebinding(self):
+        key = 'instance.indexed'
+        for kind in ('directory', 'zip'):
+            with self.subTest(kind=kind):
+                source = self.root / ('indexed-' + kind)
+                if kind == 'directory':
+                    source.mkdir()
+                def write_source(required):
+                    asset = {'kind': 'skill', 'name': 'review', 'path': 'review.md',
+                             'description': 'Review', 'requires': [required]}
+                    files = {'capability.json': json.dumps({'name': 'indexed', 'version': '1',
+                                                            'foundry_asset_index': 'assets.json'}),
+                             'assets.json': json.dumps({'version': 1, 'entries': [asset]}),
+                             'review.md': 'Review.', 'old.md': 'First guide.', 'new.md': 'Second guide.'}
+                    if kind == 'zip':
+                        with ZipFile(source, 'w') as package:
+                            for name, content in files.items():
+                                package.writestr(name, content)
+                    else:
+                        for name, content in files.items():
+                            (source / name).write_text(content)
+
+                write_source('old.md')
+                C.configure(self.instance, 'instance', 'indexed', source, on_demand=True)
+                conf = self.config([{'key': key, 'skills': ['review']}],
+                                   [{'key': key, 'mode': 'METHODS', 'skills': ['review']}])
+                old = self.write(conf, 'original-' + kind)
+                snap = C.load_connections(self.instance, self.project, [key + ':review'], keys={key})
+                self.assertEqual(P.check_selection(old)['status'], 'MATCH')
+                write_source('new.md')
+                with accesses() as paths:
+                    for snapshot in (None, snap):
+                        bad, _ = P.build_materials(conf, self.root / 'next', connection_snapshot=snapshot)
+                        self.assertEqual(bad['preparation']['readiness'], 'INCOMPLETE')
+                        self.assertTrue(any(d['id'] == key and 'index changed' in d['message']
+                                            for d in bad['preparation']['diagnostics']))
+                    self.assertEqual(P.check_selection(old)['status'], 'CHANGED')
+                    output = self.root / ('rejected-' + kind)
+                    with self.assertRaisesRegex(ValueError, key):
+                        D.prepare_delivery(old, output)
+                    self.assertFalse((output / 'delivery.json').exists())
+                self.assertUntouched(paths, self.alpha, self.beta)
+                with accesses() as paths:
+                    empty, _ = U.write_upgrade(old, self.config(), self.root / ('empty-' + kind))
+                    D.prepare_delivery(empty, self.root / ('empty-public-' + kind))
+                self.assertUntouched(paths, source, self.root / ('original-' + kind) / 'sources/external')
+                C.configure(self.instance, 'instance', 'indexed', source, on_demand=True)
+                current, _ = U.write_upgrade(old, conf, self.root / ('rebound-' + kind))
+                row = D.prepare_delivery(current, self.root / ('good-' + kind))['external'][0]
+                self.assertEqual(set(row['material_files']), {'review.md', 'new.md'})
+
     def test_P4_same_id_changes_and_immediate_baseline(self):
         cfg = self.config([{'key': A, 'skills': ['spare']}])
         old = self.write(cfg, 'O')

@@ -263,10 +263,11 @@ def configure(root, scope, connection_id, source=None, base_materials=(), enable
 
 def check_binding(binding):
     if 'selected_files' in binding:
-        if str(Path(binding['source']).resolve(strict=True)) != binding['resolved_source']:
+        try:
+            selected_capture(binding, binding['selected_files'], keep_bytes=False)
+        except ValueError:
             return False
-        with source_files(binding['source']) as (read, _):
-            return all(digest(read(name)) == expected for name, expected in binding['selected_files'].items())
+        return True
     catalog, _ = discover(binding['source'], binding.get('base_materials', []))
     return catalog == binding['catalog'] and str(Path(binding['source']).resolve(strict=True)) == binding['resolved_source']
 
@@ -289,14 +290,33 @@ def selection_files(binding, requested):
     return hashes, material
 
 
-def selected_capture(binding, hashes):
-    """Check registered identity and materialize only the chosen public files."""
+def selected_capture(binding, hashes, *, keep_bytes=True):
+    """Verify the descriptor and its index before following a saved selection."""
     if str(Path(binding['source']).resolve(strict=True)) != binding['resolved_source']:
         raise ValueError('selected connection moved: ' + binding['key'])
+    catalog = binding['catalog']
+    descriptor = catalog['descriptor']
+    captured = {}
     with source_files(binding['source']) as (read, _):
-        captured = {name: read(name) for name in sorted(hashes)}
-    if any(digest(raw) != hashes[name] for name, raw in captured.items()):
-        raise ValueError('connected materials changed; explicitly reconnect to bind the new version')
+        raw = read(descriptor)
+        if digest(raw) != hashes.get(descriptor):
+            raise ValueError('connected descriptor changed; explicitly reconnect: ' + binding['key'])
+        index = json.loads(raw).get('foundry_asset_index')
+        if index:
+            index = relative(index)
+            expected = next((r['sha256'] for r in catalog['files'] if r['path'] == index), None)
+            if expected is None or digest(read(index)) != expected:
+                raise ValueError('connected asset index changed; explicitly reconnect: ' + binding['key'])
+        if keep_bytes:
+            captured[descriptor] = raw
+        for name, expected in hashes.items():
+            if name == descriptor:
+                continue
+            raw = read(name)
+            if digest(raw) != expected:
+                raise ValueError('connected materials changed; explicitly reconnect to bind the new version')
+            if keep_bytes:
+                captured[name] = raw
     return captured
 
 
