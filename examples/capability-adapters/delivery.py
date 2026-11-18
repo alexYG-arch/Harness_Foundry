@@ -23,7 +23,7 @@ def module(name):
 N = module('native')
 C = N.C
 HELPERS = ('delivery.py', 'native.py', 'connections.py', 'environment.py', 'prepare.py',
-           'consume.py', 'upgrade.py', 'stack_handoff.py', 'stack_runtime.py', 'native_dependencies.py', 'inventory.py', 'decisions.py', 'feature_connections.py')
+           'consume.py', 'upgrade.py', 'stack_handoff.py', 'stack_runtime.py', 'native_dependencies.py', 'connection_scope.py', 'inventory.py', 'decisions.py', 'feature_connections.py')
 
 
 def layout(root, names):
@@ -108,11 +108,16 @@ def write(root, name, raw):
         stream.write(raw)
 
 
-def prepare_delivery(materials, output, *, rsi_manifest=None, rsi_material_root=None):
+def prepare_delivery(materials, output, *, rsi_manifest=None, rsi_material_root=None, consumer_protocol=1):
     """Host-only selection to new public support. Retain partial output on I/O failure."""
     P = module('prepare')
-    if P.check_selection(materials)['status'] != 'MATCH':
-        raise ValueError('selected materials changed')
+    scoped = 'connection_selection' in materials['preparation']
+    if scoped and consumer_protocol != 1:
+        raise ValueError('target consumer does not support scoped connections')
+    materials = P._scope.target_view(materials, P, module('feature_connections'))
+    initial = P.check_selection(materials)
+    if initial['status'] != 'MATCH':
+        raise ValueError('selected materials changed: ' + str(initial['changes']))
     output = Path(output).absolute()
     if output.exists() or output.is_symlink():
         raise FileExistsError(output)
@@ -172,6 +177,18 @@ def prepare_delivery(materials, output, *, rsi_manifest=None, rsi_material_root=
     for connection in materials['preparation'].get('external_connections', []):
         if connection['key'] in staged:
             continue
+        if 'public_catalog' in connection:
+            key = P._id(connection['key'])
+            with C.source_files(connection['source']) as (read, _):
+                captured = {name: read(name) for name in connection['public_paths']}
+            if any(N.sha(raw) != connection['selected_files'][name] for name, raw in captured.items()):
+                raise ValueError('selected public material changed while copying: ' + key)
+            catalog = connection['public_catalog']
+            public_only.append(({'key': key, 'mode': 'CATALOG_ONLY', 'provider': catalog['provider'],
+                                 'version': catalog['version'], 'catalog': catalog, 'root': 'external/' + key + '/upstream',
+                                 'operations': [], 'runtime_binding_required': True, 'material_directories': [],
+                                 'material_files': {n: N.sha(raw) for n, raw in captured.items()}}, captured))
+            continue
         # Skill/reference-only connections are useful without a runnable binding.
         # Publish their captured public material, not guessed runtime dependencies.
         catalog, captured = C.discover(connection['source'], connection.get('base_materials', []))
@@ -210,6 +227,8 @@ def prepare_delivery(materials, output, *, rsi_manifest=None, rsi_material_root=
                                   'files': [{'path': n, 'sha256': N.sha(raw)} for n, raw in sorted(captured.items())]})
     output.mkdir(parents=True, exist_ok=False)
     for entry, captured in public_only:
+        if not captured and scoped:
+            (output / entry['root']).mkdir(parents=True, exist_ok=True)
         for name in entry['material_directories']:
             (output / entry['root'] / name).mkdir(parents=True, exist_ok=True)
         for name, raw in captured.items():
@@ -256,6 +275,14 @@ def prepare_delivery(materials, output, *, rsi_manifest=None, rsi_material_root=
                    'Load the selected provider Skills from the upstream paths in delivery.json. '
                    'Bind this task\'s local tools before preparing calls; the host owns authorization and execution. '
                    'Preserve provider-managed configuration and disabled selections; delivery does not initialize projects.\n')
+    if scoped:
+        instruction = '# Project capability support\n\nUse the project entry point and its verification instructions.\n'
+        for entry in entries:
+            for method in entry['catalog'].get('skills', []):
+                if entry['mode'] == 'CATALOG_ONLY' and method.get('path'):
+                    instruction += '- ' + method['name'] + ': ' + entry['root'] + '/' + method['path'] + '\n'
+            if entry['mode'] == 'NATIVE':
+                instruction += '- ' + entry['key'] + ': see delivery.json for the selected operations and local rebinding.\n'
     if rsi_manifest is not None:
         instruction += ('\nRead rsi/examples/capability-adapters/RSI_HANDOFF.md and rsi/docs/RSI_DELIVERY.md. '
                         'At existing repair return points use the selected handoff without a new RSI reminder. '
@@ -284,7 +311,9 @@ def prepare_delivery(materials, output, *, rsi_manifest=None, rsi_material_root=
               'builtin': builtin['selections'], 'rsi_selected': rsi_manifest is not None, 'support_files': support,
               'private_checkers_included': False, 'local_bindings_included': False,
               'commands_executed': False, 'runtime_verified': False, 'budget_modified': False}
-    if inventories:
+    if scoped:
+        result['connection_selection_version'] = 1
+    if inventories or scoped:
         inv = module('inventory')
         selections = [{**row, 'root': 'builtin/' + row['root']} for row in builtin['selections']]
         for row in entries:
@@ -304,8 +333,9 @@ def prepare_delivery(materials, output, *, rsi_manifest=None, rsi_material_root=
             for d in i['decision_records']:
                 if d not in records: records.append(d)
         write(output, 'decision-records.json', C.encoded(records))
-    if P.check_selection(materials)['status'] != 'MATCH':
-        raise ValueError('selected materials changed during delivery')
+    final = P.check_selection(materials)
+    if final['status'] != 'MATCH':
+        raise ValueError('selected materials changed during delivery: ' + str(final['changes']))
     write(output, 'delivery.json', C.encoded(result))
     return result
 
@@ -367,6 +397,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     sub = p.add_subparsers(dest='command', required=True)
     d = sub.add_parser('deliver'); d.add_argument('--materials', type=Path, required=True)
+    d.add_argument('--consumer-protocol', type=int, default=1)
     d.add_argument('--output', type=Path, required=True); d.add_argument('--rsi-manifest', type=Path)
     b = sub.add_parser('bind'); b.add_argument('--delivery', type=Path, required=True)
     b.add_argument('--key', required=True); b.add_argument('--environment', type=Path, required=True)
@@ -379,7 +410,7 @@ def main():
     try:
         if a.command == 'deliver':
             result = prepare_delivery(json.loads(a.materials.read_text()), a.output,
-                                      rsi_manifest=json.loads(a.rsi_manifest.read_text()) if a.rsi_manifest else None,
+                                      consumer_protocol=a.consumer_protocol, rsi_manifest=json.loads(a.rsi_manifest.read_text()) if a.rsi_manifest else None,
                                       rsi_material_root=a.rsi_manifest.parent if a.rsi_manifest else None)
         elif a.command == 'bind':
             result = bind_delivery(a.delivery, a.key, json.loads(a.environment.read_text()), project_root=a.project_root)

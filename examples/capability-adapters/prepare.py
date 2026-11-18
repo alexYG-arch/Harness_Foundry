@@ -25,6 +25,9 @@ _spec.loader.exec_module(_connections)
 _spec = importlib.util.spec_from_file_location('capability_native', Path(__file__).with_name('native.py'))
 _native = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_native)
+_spec = importlib.util.spec_from_file_location('capability_connection_scope', Path(__file__).with_name('connection_scope.py'))
+_scope = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_scope)
 _ID = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$')
 _TEXT = {'.md', '.markdown', '.txt', '.json'}
 
@@ -282,6 +285,84 @@ def _prepare_verifier_inputs(scope, protected, production, output):
     return protected
 
 
+def project_only_materials(config, output_root):
+    """Return the explicit project base; do not infer removal from old scope."""
+    def _require(condition, message):
+        if not condition:
+            raise ValueError(message)
+
+    project = Path(config['project_root'])
+    _require(project.is_absolute() and project.is_dir(), 'project_root must be an existing absolute directory')
+    base = deepcopy(config.get('base_materials', {}))
+    output = Path(output_root).absolute()
+    scope = base.get('scope', {})
+    files, manifest, origins, sources = {}, [], [], []
+    production = []
+    request = base.get('request')
+    removed_context = []
+    if base:
+        _require(request is not None, 'project base_materials requires its existing request')
+        source_root = Path(config['source_root'])
+        _require(source_root.is_absolute(), 'source_root must be explicit and absolute')
+        source_root = source_root.resolve(strict=True)
+        originals = {row['source_id']: row for row in request['requirement_ir']['sources']}
+        rows = base['source_manifest']
+        _require(len(originals) == len(request['requirement_ir']['sources'])
+                 and len(rows) == len(originals) and {row['source_id'] for row in rows} == set(originals),
+                 'project source manifest and requirement sources differ')
+        for row in rows:
+            _require(originals[row['source_id']]['path_or_uri'] == row['path'],
+                     'project source path disagrees with requirement: ' + row['source_id'])
+            path = _file(source_root, row['path'])
+            production.append(path)
+            raw = _text(path.read_bytes(), row['path'])
+            _insert_file(files, 'sources/' + row['path'], raw)
+            manifest.append(deepcopy(row))
+            sources.append(deepcopy(originals[row['source_id']]))
+            origins.append({'source_id': row['source_id'], 'origin': str(path)})
+        removed_context = [key for key in request if key not in ('requirement_ir', 'plan')]
+        request = {key: request[key] for key in ('requirement_ir', 'plan')}
+    environment = resolve_environment([], {}, project_root=project)
+    preparation = deepcopy(base.get('preparation', {}))
+    diagnostics = deepcopy(preparation.get('diagnostics', []))
+    bindings = config.get('environment_bindings', {})
+    _require(isinstance(bindings, dict), 'environment_bindings must be an object')
+    project_executables = scope.get('executables', {})
+    for identity, binding in bindings.items():
+        if identity not in project_executables:
+            diagnostics.append({'id': identity, 'code': 'UNSELECTED_ENVIRONMENT_BINDING', 'severity': 'INFO',
+                                'message': 'No selected capability consumes this binding; the explicit project '
+                                'scope and physical dependencies are unchanged.'})
+            continue
+        # Reuse the existing path resolver, then compare invocation paths rather
+        # than final binaries so a different virtual environment is not collapsed.
+        observed = resolve_environment([{'id': identity, 'kind': 'executable'}],
+                                                {identity: binding}, project_root=project)
+        path = observed['bindings'].get(identity, {}).get('absolute_path')
+        if path and _call_path(path) == _call_path(project_executables[identity]):
+            continue
+        diagnostics.append({'id': identity, 'code': 'ENVIRONMENT_BINDINGS_NOT_APPLIED', 'severity': 'ERROR',
+                            'message': 'This binding differs from the explicit project executable and was not applied. '
+                            'Put the intended project environment change in base_materials.scope before preparing again.'})
+    protected = _prepare_verifier_inputs(
+        scope, preparation.get('verifier_inputs', []), production, output)
+    preparation.update(status='MATERIALS_ONLY_NOT_APPROVED',
+                       readiness='INCOMPLETE' if preparation.get('readiness') == 'INCOMPLETE'
+                       or any(row.get('severity') == 'ERROR' for row in diagnostics) else 'READY',
+                       source_root=str(output / 'sources'), source_origins=origins, selections=[],
+                       environment=environment, diagnostics=diagnostics, verifier_inputs=protected,
+                       checker_files_fragment=[row['path'] for row in protected],
+                       removed_request_context=removed_context, commands_executed=False,
+                       runtime_verified=False, protected_copy_created=False)
+    result = {'source_manifest': manifest,
+              'scope_fragment': deepcopy(base.get('scope_fragment', {'executables': {}, 'source_read_roots': []})),
+              'request_fragment': {'sources': sources, 'workpack_inputs': {}},
+              'tool_bindings': {}, 'preparation': preparation}
+    if request is not None:
+        result['request'], result['scope'] = request, deepcopy(scope)
+    return result, files
+
+
 def build_materials(config, output_root, *, connection_snapshot=None):
     """Return (materials, relative-file -> bytes) without writing or executing.
 
@@ -294,6 +375,22 @@ def build_materials(config, output_root, *, connection_snapshot=None):
     if not project.is_dir():
         raise ValueError('project_root must be an existing directory')
     output = Path(output_root).absolute()
+    connection_config = config.get('connections')
+    connection_selection = _scope.contract(connection_config)
+    selected_keys = None
+    if connection_selection is not None:
+        _scope.project_base(config.get('base_materials', {}))
+        selected_keys = {row['key'] for row in connection_selection['build']}
+        build_records = _scope.bindings(_connections, connection_config, project, connection_selection['build'])
+        target_records = _scope.bindings(_connections, connection_config, project, connection_selection['target'])
+        connection_selection.update(target_bindings=target_records, project_root=str(project))
+        connection_selection['feature_context'] = {k: deepcopy(config[k]) for k in
+            ('integration_mode', 'requirement_links', 'capability_conditions', 'decision_records') if k in config}
+        connection_config = _scope.build_config(connection_config, connection_selection)
+        if not selected_keys and not config.get('selections') and not config.get('base_materials', {}).get('preparation', {}).get('selections'):
+            result, files = project_only_materials(config, output_root)
+            result['preparation']['connection_selection'] = connection_selection
+            return result, files
     base = deepcopy(config.get('base_materials', {}))
     request = base.get('request')
     scope = base.get('scope', {})
@@ -334,20 +431,29 @@ def build_materials(config, output_root, *, connection_snapshot=None):
             production.append(source)
 
     external = deepcopy(previous.get('external_connections', []))
-    connection_config = config.get('connections')
     external_features = deepcopy(previous.get('external_features', {}))
     feature_mappings = deepcopy(previous.get('feature_mappings', []))
     if connection_config is not None:
         # Upgrade routing can pass its one read of this exact connection config.
-        loaded = connection_snapshot if connection_snapshot is not None else _connections.load_connections(
-            connection_config['instance_root'], project, connection_config.get('skills', []))
+        loaded = None
+        if connection_selection is None:
+            if connection_snapshot is not None and 'selection_context' not in connection_snapshot:
+                loaded = connection_snapshot
+        elif connection_snapshot is not None and not connection_config.get('feature_selections'):
+            # Feature decisions depend on mapping bytes and project inputs.
+            # Re-expand them afresh rather than trusting a material-only cache.
+            loaded = _connections.reuse_snapshot(connection_snapshot, connection_config['instance_root'],
+                                                 project, build_records, connection_config.get('skills', []))
+        if loaded is None:
+            loaded = _connections.load_connections(connection_config['instance_root'], project,
+                                                   connection_config.get('skills', []), keys=selected_keys)
         if connection_config.get('feature_selections'):
             spec = importlib.util.spec_from_file_location('capability_feature_connections', Path(__file__).with_name('feature_connections.py'))
             feature_connections = importlib.util.module_from_spec(spec); spec.loader.exec_module(feature_connections)
             original_catalogs = {r['key']: r['catalog'] for r in loaded['connections']}
             connection_config, projections, mappings = feature_connections.prepare(connection_config, loaded, config,
                 {r['source_id']: files['sources/' + r['path']] for r in manifest})
-            loaded = _connections.load_connections(connection_config['instance_root'], project, connection_config['skills'])
+            loaded = _connections.load_connections(connection_config['instance_root'], project, connection_config['skills'], keys=selected_keys)
             if original_catalogs != {r['key']: r['catalog'] for r in loaded['connections']}:
                 raise ValueError('external catalog changed during feature selection')
             for key, projection in projections.items():
@@ -363,7 +469,15 @@ def build_materials(config, output_root, *, connection_snapshot=None):
             if existing is None:
                 external.append(binding)
             key = binding['key']
-            entries = [('_connection/catalog.json', _json(binding['catalog']))]
+            catalog = binding['catalog']
+            if connection_selection is not None and any('requires' in row for row in catalog['skills']):
+                # Store the full binding privately. A Workpack needs a routing
+                # index, not each entry's transitive file graph.
+                catalog = {'provider': catalog['provider'], 'version': catalog['version'],
+                           'sha256': _digest(_connections.encoded(catalog)),
+                           'skills': [{k: row[k] for k in ('name', 'kind', 'description') if k in row}
+                                      for row in catalog['skills']]}
+            entries = [('_connection/catalog.json', _json(catalog))]
             if key in external_features:
                 entries.append(('_connection/feature-scope.json', _json(external_features[key])))
             entries.extend(('materials/' + m['path'], m['text'].encode('utf-8')) for m in loaded['materials'] if m['connection'] == key)
@@ -383,7 +497,8 @@ def build_materials(config, output_root, *, connection_snapshot=None):
                 for task in connection_config.get('workpack_ids', []):
                     task_inputs.setdefault(_id(task), []).append({'kind': 'SOURCE', 'id': sid})
             source_path = Path(binding['source']).resolve(strict=True)
-            production.extend([(source_path / f['path']).resolve(strict=True) for f in binding['catalog']['files']]
+            names = binding['selected_files'] if 'selected_files' in binding else [f['path'] for f in binding['catalog']['files']]
+            production.extend([(source_path / name).resolve(strict=True) for name in names]
                               if source_path.is_dir() else [source_path])
         if request and loaded['connections'] and not connection_config.get('workpack_ids'):
             diagnostics.append({'id': 'external', 'code': 'SOURCE_TASK_BINDING_MISSING', 'severity': 'ERROR',
@@ -427,7 +542,7 @@ def build_materials(config, output_root, *, connection_snapshot=None):
             task_inputs.setdefault(_id(task), []).append({'kind': 'SOURCE', 'id': sid})
 
     chosen = config.get('selections', [])
-    if not chosen and not external:
+    if connection_selection is None and not chosen and not external:
         raise ValueError('select at least one explicit capability directory')
     names = {row['name'] for row in selections}
     for selection in chosen:
@@ -630,7 +745,7 @@ def build_materials(config, output_root, *, connection_snapshot=None):
             for value in values:
                 if value not in tasks[task]['inputs']:
                     tasks[task]['inputs'].append(value)
-        if not task_inputs:
+        if not task_inputs and (connection_selection is None or external or chosen):
             diagnostics.append({'id': 'selection', 'code': 'SOURCE_TASK_BINDING_MISSING',
                                 'severity': 'ERROR', 'message': 'choose production Workpack inputs for selected versions'})
     result = {'source_manifest': manifest,
@@ -647,6 +762,11 @@ def build_materials(config, output_root, *, connection_snapshot=None):
                   'verifier_inputs': protected, 'checker_files_fragment': [p['path'] for p in protected],
                   'removed_request_context': review_removed, 'commands_executed': False,
                   'runtime_verified': False, 'protected_copy_created': False}}
+    if connection_selection is not None:
+        result['preparation']['connection_selection'] = connection_selection
+        result['preparation']['source_digests'] = {r['source_id']: _digest(files['sources/' + r['path']]) for r in manifest}
+        if previous.get('readiness') == 'INCOMPLETE':
+            result['preparation']['readiness'] = 'INCOMPLETE'
     if external_features:
         result['preparation']['external_features'] = external_features
         result['preparation']['external_features_sha256'] = _digest(_json(external_features))

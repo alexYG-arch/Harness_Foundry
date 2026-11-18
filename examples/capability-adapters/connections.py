@@ -14,6 +14,10 @@ import tempfile
 import zipfile
 
 REGISTRY = '.foundry/connections.json'
+# Prefer the established descriptor when several ecosystems describe one root.
+DESCRIPTORS = ('.codex-plugin/plugin.json', 'capability.json', '.cursor-plugin/plugin.json',
+               '.claude-plugin/plugin.json', 'plugin.json')
+FORMATS = ('codex-plugin', 'capability', 'cursor-plugin', 'claude-plugin', 'agent-plugin')
 
 
 def identifier(value):
@@ -61,13 +65,20 @@ def source_files(source):
             names = archive.namelist()
             if len(names) != len(set(names)):
                 raise ValueError('ambiguous duplicate ZIP members')
-            descriptors = [n for n in names if n == '.codex-plugin/plugin.json' or n.endswith('/.codex-plugin/plugin.json')]
-            if not descriptors:
-                descriptors = [n for n in names if n == 'capability.json' or n.endswith('/capability.json')]
-            if len(descriptors) != 1:
+            # Keep existing Codex/capability ZIP precedence. A standalone
+            # host descriptor and a root manifest may describe the same package.
+            for group in ((DESCRIPTORS[0],), (DESCRIPTORS[1],), DESCRIPTORS[2:]):
+                roots = set()
+                for name in names:
+                    for marker in group:
+                        if name == marker or name.endswith('/' + marker):
+                            roots.add(name[:-len(marker)])
+                            break
+                if roots:
+                    break
+            if len(roots) != 1:
                 raise ValueError('select a package with one unambiguous descriptor')
-            marker = '.codex-plugin/plugin.json' if descriptors[0].endswith('.codex-plugin/plugin.json') else 'capability.json'
-            prefix = descriptors[0][:-len(marker)]
+            prefix = roots.pop()
             if prefix:
                 relative(prefix)
             def read(name):
@@ -96,12 +107,14 @@ def discover(source, base_materials=()):
             raw = reader(name)
             captured[name] = raw
             return raw
-        try:
-            descriptor = '.codex-plugin/plugin.json'
-            raw = read(descriptor)
-        except (FileNotFoundError, KeyError):
-            descriptor = 'capability.json'
-            raw = read(descriptor)
+        for descriptor in DESCRIPTORS:
+            try:
+                raw = read(descriptor)
+                break
+            except (FileNotFoundError, KeyError):
+                continue
+        else:
+            raise ValueError('no supported capability or plugin descriptor')
         manifest = json.loads(raw)
         provider = identifier(manifest['name'])
         version = manifest['version']
@@ -120,8 +133,22 @@ def discover(source, base_materials=()):
         if private.intersection(materials) or private_alias:
             raise ValueError('private checker material cannot be a public base material')
         catalog_skills = []
-        if native and manifest.get('skills'):
-            for path in list_skills(relative(manifest['skills'])):
+        folders = manifest.get('skills', [])
+        implicit_folder = descriptor in ('.claude-plugin/plugin.json', 'plugin.json') and 'skills' not in manifest
+        if native and (folders or implicit_folder):
+            folders = ['skills'] if implicit_folder else (folders if isinstance(folders, list) else [folders])
+            paths = []
+            for folder in folders:
+                name = relative(folder)
+                if name.endswith('/SKILL.md'):
+                    paths.append(name)
+                    continue
+                try:
+                    paths.extend(list_skills(name))
+                except (FileNotFoundError, ValueError) as exc:
+                    if not implicit_folder or not (isinstance(exc, FileNotFoundError) or 'missing from ZIP' in str(exc)):
+                        raise
+            for path in sorted(set(paths)):
                 text = read(path).decode('utf-8')
                 front = text.split('---', 2)[1] if text.startswith('---\n') and len(text.split('---', 2)) == 3 else ''
                 fields = dict(re.findall(r'^(name|description):[ \t]*(.+)$', front, re.M))
@@ -132,10 +159,32 @@ def discover(source, base_materials=()):
         for path in materials:
             if not read(path).decode('utf-8').strip():
                 raise ValueError('empty base material: ' + path)
-        catalog = {'provider': provider, 'version': version, 'format': 'codex-plugin' if native else 'capability',
+        catalog = {'provider': provider, 'version': version, 'format': FORMATS[DESCRIPTORS.index(descriptor)],
                    'descriptor': descriptor, 'description': manifest.get('description', ''),
                    'skills': catalog_skills, 'base_materials': materials,
                    'tool_bindings_prepared': False, 'native_lifecycle_executed': False}
+        index_name = manifest.get('foundry_asset_index')
+        if index_name:
+            index = json.loads(read(relative(index_name)))
+            if index.get('version') != 1 or not isinstance(index.get('entries'), list):
+                raise ValueError('unsupported public asset index')
+            entries, names = [], {row['name'] for row in catalog_skills}
+            for item in index['entries']:
+                name = identifier(item['name'])
+                if name in names or item['kind'] not in ('skill', 'workflow', 'agent'):
+                    raise ValueError('duplicate or invalid public entry: ' + name)
+                names.add(name)
+                path = relative(item['path'])
+                deps = [relative(value) for value in item.get('requires', [])]
+                for public in [path, *deps]:
+                    if public in private or (source_root.is_dir() and any(
+                            (source_root / public).resolve() == (source_root / hidden).resolve() for hidden in private)):
+                        raise ValueError('private file in public asset index')
+                    if public not in captured:
+                        read(public)
+                entries.append({'name': name, 'kind': item['kind'], 'description': item['description'],
+                                'path': path, 'requires': deps})
+            catalog['skills'].extend(entries)
     catalog['files'] = [{'path': path, 'sha256': digest(raw)} for path, raw in sorted(captured.items())]
     return catalog, captured
 
@@ -195,11 +244,80 @@ def configure(root, scope, connection_id, source=None, base_materials=(), enable
 
 
 def check_binding(binding):
+    if 'selected_files' in binding:
+        if str(Path(binding['source']).resolve(strict=True)) != binding['resolved_source']:
+            return False
+        with source_files(binding['source']) as (read, _):
+            return all(digest(read(name)) == expected for name, expected in binding['selected_files'].items())
     catalog, _ = discover(binding['source'], binding.get('base_materials', []))
     return catalog == binding['catalog'] and str(Path(binding['source']).resolve(strict=True)) == binding['resolved_source']
 
 
-def load_connections(instance_root, project_root=None, skills=()):
+def selection_files(binding, requested):
+    catalog = binding['catalog']
+    all_paths = {catalog['descriptor'], *catalog['base_materials']}
+    material = dict.fromkeys(catalog['base_materials'], 'base')
+    for item in catalog['skills']:
+        if binding['key'] + ':' + item['name'] not in requested:
+            continue
+        all_paths.update([item['path'], *item.get('requires', [])])
+        material[item['path']] = 'skill'
+        for path in item.get('requires', []):
+            if Path(path).suffix.lower() in ('.md', '.markdown', '.txt', '.json'):
+                material.setdefault(path, 'reference')
+    hashes = {r['path']: r['sha256'] for r in catalog['files'] if r['path'] in all_paths}
+    if set(hashes) != all_paths:
+        raise ValueError('selected file missing from registered catalog: ' + binding['key'])
+    return hashes, material
+
+
+def selected_capture(binding, hashes):
+    """Check registered identity and materialize only the chosen public files."""
+    if str(Path(binding['source']).resolve(strict=True)) != binding['resolved_source']:
+        raise ValueError('selected connection moved: ' + binding['key'])
+    with source_files(binding['source']) as (read, _):
+        captured = {name: read(name) for name in sorted(hashes)}
+    if any(digest(raw) != hashes[name] for name, raw in captured.items()):
+        raise ValueError('connected materials changed; explicitly reconnect to bind the new version')
+    return captured
+
+
+def snapshot_context(instance, project, keys, skills):
+    return {'selection_version': 1, 'stage': 'build', 'instance': str(Path(instance).resolve(strict=True)),
+            'project': str(Path(project).resolve(strict=True)) if project else None,
+            'connections': sorted(keys), 'skills': sorted(set(skills))}
+
+
+def reuse_snapshot(snapshot, instance, project, records, skills):
+    """Validate membership before any source access. Old or extra bytes are discarded."""
+    if not isinstance(snapshot, dict) or snapshot.get('selection_context') != snapshot_context(instance, project, records, skills):
+        return None
+    if snapshot.get('status') != 'READY' or snapshot.get('diagnostics') != []:
+        return None
+    expected_bindings, expected_material = [], []
+    for key, binding in records.items():
+        hashes, kinds = selection_files(binding, set(skills))
+        expected_bindings.append({**binding, 'selected_files': hashes})
+        expected_material.extend((key, name, kind, hashes[name]) for name, kind in kinds.items())
+    if snapshot.get('connections') != expected_bindings or not isinstance(snapshot.get('materials'), list):
+        return None
+    rows = snapshot['materials']
+    if len(rows) != len(expected_material):
+        return None
+    for row, expected in zip(rows, expected_material):
+        if (not isinstance(row, dict) or set(row) != {'connection', 'path', 'kind', 'sha256', 'text'} or
+                tuple(row[k] for k in ('connection', 'path', 'kind', 'sha256')) != expected or
+                not isinstance(row['text'], str) or digest(row['text'].encode()) != expected[3]):
+            return None
+    try:
+        if not all(check_binding(binding) for binding in expected_bindings):
+            return None
+    except (ValueError, OSError, KeyError, zipfile.BadZipFile):
+        return None
+    return {'connections': expected_bindings, 'materials': rows, 'diagnostics': [], 'status': 'READY'}
+
+
+def load_connections(instance_root, project_root=None, skills=(), *, keys=None):
     """Automatically load scoped catalogs/base materials; expand selected Skills only."""
     requested = set(skills)
     result = {'connections': [], 'materials': [], 'diagnostics': [], 'commands_executed': False,
@@ -213,26 +331,42 @@ def load_connections(instance_root, project_root=None, skills=()):
             records = read_registry(path)['records']
             latest = {row['id']: row for row in records if row['scope'] == scope}
             for row in latest.values():
+                key = scope + '.' + identifier(row['id'])
+                if keys is not None and key not in keys:
+                    continue
                 if row['scope'] != scope or row['scope_root'] != str(root):
                     raise ValueError('registry scope does not match its selected root')
                 if not row['enabled']:
                     continue
-                key = scope + '.' + identifier(row['id'])
                 conflict = False
                 try:
-                    catalog, captured = discover(row['source'], row.get('base_materials', []))
-                    if catalog != row['catalog'] or str(Path(row['source']).resolve(strict=True)) != row['resolved_source']:
-                        raise ValueError('connected materials changed; explicitly reconnect to bind the new version')
+                    binding = {**deepcopy(row), 'key': key, 'registry': str(path)}
+                    if keys is None:
+                        catalog, captured = discover(row['source'], row.get('base_materials', []))
+                        if catalog != row['catalog'] or str(Path(row['source']).resolve(strict=True)) != row['resolved_source']:
+                            raise ValueError('connected materials changed; explicitly reconnect to bind the new version')
+                    else:
+                        catalog = row['catalog']
+                        hashes, kinds = selection_files(binding, requested)
+                        captured = selected_capture(binding, hashes)
+                        binding['selected_files'] = hashes
                     provider = catalog['provider']
                     if provider in providers:
                         conflict = True
                         raise ValueError('provider already connected by ' + providers[provider] + '; choose one binding')
                     providers[provider] = key
-                    binding = {**deepcopy(row), 'key': key, 'registry': str(path)}
                     result['connections'].append(binding)
+                    if keys is not None:
+                        for name, kind in kinds.items():
+                            result['materials'].append({'connection': key, 'path': name, 'kind': kind,
+                                                        'sha256': hashes[name], 'text': captured[name].decode('utf-8')})
+                        selected.update(key + ':' + item['name'] for item in catalog['skills']
+                                        if key + ':' + item['name'] in requested)
+                        continue
                     for name in catalog['base_materials']:
                         result['materials'].append({'connection': key, 'path': name, 'sha256': digest(captured[name]),
                                                     'text': captured[name].decode('utf-8'), 'kind': 'base'})
+                    included = set(catalog['base_materials'])
                     for skill in catalog['skills']:
                         name = key + ':' + skill['name']
                         if name in requested:
@@ -240,15 +374,28 @@ def load_connections(instance_root, project_root=None, skills=()):
                             raw = captured[skill['path']]
                             result['materials'].append({'connection': key, 'path': skill['path'], 'sha256': digest(raw),
                                                         'text': raw.decode('utf-8'), 'kind': 'skill'})
+                            for path in skill.get('requires', []):
+                                if path in included or Path(path).suffix.lower() not in ('.md', '.markdown', '.txt', '.json'):
+                                    continue
+                                included.add(path)
+                                result['materials'].append({'connection': key, 'path': path, 'sha256': digest(captured[path]),
+                                                            'text': captured[path].decode('utf-8'), 'kind': 'reference'})
                 except (ValueError, OSError, KeyError, TypeError, zipfile.BadZipFile) as exc:
-                    required = conflict or bool(row['catalog']['base_materials']) or any(
+                    required = keys is not None or conflict or bool(row['catalog']['base_materials']) or any(
                         name.startswith(key + ':') for name in requested)
                     result['diagnostics'].append({'id': key, 'severity': 'ERROR' if required else 'WARNING',
                                                   'code': 'CONNECTION_UNAVAILABLE', 'message': str(exc)})
         except (ValueError, OSError, KeyError, TypeError) as exc:
             result['diagnostics'].append({'id': scope, 'severity': 'ERROR', 'code': 'REGISTRY_UNAVAILABLE', 'message': str(exc)})
+    if keys is not None:
+        for key in sorted(set(keys) - {row['key'] for row in result['connections']}
+                          - {row['id'] for row in result['diagnostics']}):
+            result['diagnostics'].append({'id': key, 'severity': 'ERROR', 'code': 'CONNECTION_UNAVAILABLE',
+                                          'message': 'selected connection missing or disabled'})
     for name in sorted(requested - selected):
         result['diagnostics'].append({'id': name, 'severity': 'ERROR', 'code': 'SKILL_UNAVAILABLE', 'message': 'requested Skill not loaded'})
+    if keys is not None:
+        result['selection_context'] = snapshot_context(instance_root, project_root, keys, requested)
     result['status'] = 'INCOMPLETE' if result['diagnostics'] else 'READY'
     return result
 

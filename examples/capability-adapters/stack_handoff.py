@@ -43,6 +43,9 @@ def prepare_call(materials, tool_id, args=()):
 
 def public_delivery(materials, output_root):
     """Write new public files only. Local bindings must be recreated explicitly."""
+    if 'connection_selection' in materials['preparation']:
+        materials = _consume._prepare._scope.target_view(materials, _consume._prepare,
+                                                          _load('stack_handoff_features', 'feature_connections.py'))
     if _consume._prepare.check_selection(materials)['status'] != 'MATCH':
         raise ValueError('selected capability or environment files changed')
     output = Path(output_root)

@@ -35,6 +35,9 @@ def check(target, expected, instructions):
         try:layout.check_layout(target/row['root'],row['layout']);passed=True
         except (OSError,ValueError,RuntimeError):passed=False
         layouts[row['name']]=passed
+        if manifest.get('connection_selection_version') == 1:
+            record('selected-files:'+row['name'], passed and (target/row['root']).is_dir())
+            known.add(row['root'].rstrip('/'))
         for name in row['layout']:known.add(row['root'].rstrip('/')+'/'+name)
     for row in manifest.get('retained_unmanaged',[]):
         path=layout.C.relative(row['path']);known.add(path)

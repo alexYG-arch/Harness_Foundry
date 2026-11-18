@@ -50,3 +50,34 @@
 RSI 继续由现有 `tools/prepare_rsi_delivery.py`、`import_rsi_case.py`、`rsi_wiki.py`、`rsi_review.py`、`report_rsi_tdd.py`、`report_rsi_adoption.py` 负责。连接外包不自动选中 RSI，选择 RSI 不要求外包；所选任务在已有外层修复交回点接入，不新增控制器、预算或验收权威。见 [RSI_HANDOFF.md](RSI_HANDOFF.md)。
 
 原生调用通过显式适配器接入，见 [NATIVE.md](NATIVE.md)。提供方仍负责原鉴权、启停、上报和更新行为；本版不自带任何具体第三方提供方适配器。真实服务与交付验收分别记录。
+
+## 分别选择搭建与目标交付
+
+在准备或升级配置的 `connections` 中声明 `selection_version: 1`。两份列表均为必填项。下面的配置让搭建时的 `MAKE` 使用已登记的 `review`，目标只继承 `reference` 的正文和登记为公共基础材料的 `guide.md`。
+
+```json
+{
+  "selection_version": 1,
+  "instance_root": "/absolute/instance",
+  "workpack_ids": ["MAKE"],
+  "build": [{"key": "instance.vendor", "skills": ["review"]}],
+  "target": [{"key": "instance.vendor", "mode": "METHODS", "skills": ["reference"], "files": ["guide.md"]}]
+}
+```
+
+| 选择 | 实际作用 |
+|---|---|
+| 两份列表都是 `[]` | 使用项目基底及另行选择的目录能力。 |
+| 仅 `build` 有条目 | 准备器读取选中材料并记录任务输入。交付从保存的目标列表恢复，已离线的搭建包也可跳过。 |
+| 仅 `target` 有条目 | 准备时从注册表保存版本和来源身份，首次读取该包发生在交付时。 |
+| 两份列表都有条目 | 搭建和交付分别按自己的键、条目和用途选材。 |
+
+目标条目的 `CATALOG_ONLY` 公开名称、描述、来源目录摘要和可获得的许可。`METHODS` 加入所选条目的原文件与显式声明的引用。`ALL` 包含全部登记的公共条目和基础材料。`NATIVE` 需要同键的 `native` 和 `feature_selection` 对象。前者显式列出 `operations`，后者提供 `mapping_path`、该文件的 `mapping_sha256` 及原功能选择。交付核对功能最终允许的操作集合，接收端使用既有的本机重绑入口。只交资料的项没有原生操作。
+
+`prepare.py --config CONFIG --output HOST` 写入搭建材料和目标选择。`delivery.py deliver --materials HOST/materials.json --output PUBLIC` 生成新目标目录。新会话从 `PUBLIC/AGENTS.md` 打开所选方法，按项目自己的验证入口运行检查；公开包文件核查可用 `check_capability_delivery.py --target PUBLIC --expected PROTECTED --instructions PUBLIC/AGENTS.md --report NEW_REPORT`，其中 `PROTECTED` 是宿主另存的可信交付副本。服务操作和项目行为需要对应检查器验证。向只支持旧协议的接收工具转交前，调用方传 `--consumer-protocol 0` 进行兼容检查。
+
+升级使用纯项目基底，命令为 `upgrade.py --previous HOST/materials.json --config NEXT --output NEXT_HOST`。原样重做时把刚生成的 `NEXT_HOST/materials.json` 用作下一次的 `--previous`。退选项只引用已保存的历史身份；没保存摘要的历史项保留未知。文件变化、任务输入关系变化、受影响的 Workpack 分别记录在 `transition.json` 中。已保存的旧材料继续按原合同复核。
+
+对于没有新版字段的配置，普通准备、功能映射优先级、旧资料交付及原生依赖继续沿用原接口。旧 `skills: []` 仍加载已启用连接的目录与基础材料。新版构建快照仅在项目、实例、阶段、条目、登记绑定和实际选中文件校验一致时使用。有功能映射时重新展开映射并核查所选包。不同协议、不同选择或携带额外正文的快照按本次选择重新读取。
+
+公共插件支持 Codex、Cursor、Claude 的专用清单、根目录 `plugin.json` 和既有 `capability.json`。外部适配包可在描述文件中通过 `foundry_asset_index` 指向版本 1 的 JSON。其 `entries` 每项包含唯一的 `name`、`kind`（`skill`、`workflow` 或 `agent`）、`description`、`path` 和可选的 `requires` 相对路径列表。维护方负责声明方法依赖，登记时核对并记录公开文件的摘要。脚本文件可作为交付引用；执行工具仍须独立选择和绑定。

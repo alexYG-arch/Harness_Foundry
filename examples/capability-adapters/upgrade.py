@@ -45,11 +45,17 @@ def _workpack_sources(materials):
             for key, values in materials.get('request_fragment', {}).get('workpack_inputs', {}).items()}
 
 
-def _sources(materials, files=None):
+def _sources(materials, files=None, *, skipped=()):
     """Observe only explicit source files, without treating absent history as equal."""
     result = {}
     for row in materials.get('source_manifest', []):
         observed = {'path': row['path'], 'sha256': None, 'available': False}
+        parts = row['path'].split('/', 2)
+        if len(parts) == 3 and parts[0] == 'external' and parts[1] in skipped:
+            observed.update(sha256=materials['preparation'].get('source_digests', {}).get(row['source_id']),
+                            available=None)
+            result[row['source_id']] = observed
+            continue
         try:
             raw = files['sources/' + row['path']] if files is not None else _prepare._file(
                 Path(materials['preparation']['source_root']).resolve(strict=True), row['path']).read_bytes()
@@ -58,80 +64,6 @@ def _sources(materials, files=None):
             pass
         result[row['source_id']] = observed
     return result
-
-
-def _without_capabilities(config, output_root):
-    """Return the explicit project base; do not infer removal from old scope."""
-    project = Path(config['project_root'])
-    _require(project.is_absolute() and project.is_dir(), 'project_root must be an existing absolute directory')
-    base = deepcopy(config.get('base_materials', {}))
-    output = Path(output_root).absolute()
-    scope = base.get('scope', {})
-    files, manifest, origins, sources = {}, [], [], []
-    production = []
-    request = base.get('request')
-    removed_context = []
-    if base:
-        _require(request is not None, 'project base_materials requires its existing request')
-        source_root = Path(config['source_root'])
-        _require(source_root.is_absolute(), 'source_root must be explicit and absolute')
-        source_root = source_root.resolve(strict=True)
-        originals = {row['source_id']: row for row in request['requirement_ir']['sources']}
-        rows = base['source_manifest']
-        _require(len(originals) == len(request['requirement_ir']['sources'])
-                 and len(rows) == len(originals) and {row['source_id'] for row in rows} == set(originals),
-                 'project source manifest and requirement sources differ')
-        for row in rows:
-            _require(originals[row['source_id']]['path_or_uri'] == row['path'],
-                     'project source path disagrees with requirement: ' + row['source_id'])
-            path = _prepare._file(source_root, row['path'])
-            production.append(path)
-            raw = _prepare._text(path.read_bytes(), row['path'])
-            _prepare._insert_file(files, 'sources/' + row['path'], raw)
-            manifest.append(deepcopy(row))
-            sources.append(deepcopy(originals[row['source_id']]))
-            origins.append({'source_id': row['source_id'], 'origin': str(path)})
-        removed_context = [key for key in request if key not in ('requirement_ir', 'plan')]
-        request = {key: request[key] for key in ('requirement_ir', 'plan')}
-    environment = _prepare.resolve_environment([], {}, project_root=project)
-    preparation = deepcopy(base.get('preparation', {}))
-    diagnostics = deepcopy(preparation.get('diagnostics', []))
-    bindings = config.get('environment_bindings', {})
-    _require(isinstance(bindings, dict), 'environment_bindings must be an object')
-    project_executables = scope.get('executables', {})
-    for identity, binding in bindings.items():
-        if identity not in project_executables:
-            diagnostics.append({'id': identity, 'code': 'UNSELECTED_ENVIRONMENT_BINDING', 'severity': 'INFO',
-                                'message': 'No selected capability consumes this binding; the explicit project '
-                                'scope and physical dependencies are unchanged.'})
-            continue
-        # Reuse the existing path resolver, then compare invocation paths rather
-        # than final binaries so a different virtual environment is not collapsed.
-        observed = _prepare.resolve_environment([{'id': identity, 'kind': 'executable'}],
-                                                {identity: binding}, project_root=project)
-        path = observed['bindings'].get(identity, {}).get('absolute_path')
-        if path and _prepare._call_path(path) == _prepare._call_path(project_executables[identity]):
-            continue
-        diagnostics.append({'id': identity, 'code': 'ENVIRONMENT_BINDINGS_NOT_APPLIED', 'severity': 'ERROR',
-                            'message': 'This binding differs from the explicit project executable and was not applied. '
-                            'Put the intended project environment change in base_materials.scope before preparing again.'})
-    protected = _prepare._prepare_verifier_inputs(
-        scope, preparation.get('verifier_inputs', []), production, output)
-    preparation.update(status='MATERIALS_ONLY_NOT_APPROVED',
-                       readiness='INCOMPLETE' if preparation.get('readiness') == 'INCOMPLETE'
-                       or any(row.get('severity') == 'ERROR' for row in diagnostics) else 'READY',
-                       source_root=str(output / 'sources'), source_origins=origins, selections=[],
-                       environment=environment, diagnostics=diagnostics, verifier_inputs=protected,
-                       checker_files_fragment=[row['path'] for row in protected],
-                       removed_request_context=removed_context, commands_executed=False,
-                       runtime_verified=False, protected_copy_created=False)
-    result = {'source_manifest': manifest,
-              'scope_fragment': deepcopy(base.get('scope_fragment', {'executables': {}, 'source_read_roots': []})),
-              'request_fragment': {'sources': sources, 'workpack_inputs': {}},
-              'tool_bindings': {}, 'preparation': preparation}
-    if request is not None:
-        result['request'], result['scope'] = request, deepcopy(scope)
-    return result, files
 
 
 def build_upgrade(previous_materials, config, output_root):
@@ -152,24 +84,48 @@ def build_upgrade(previous_materials, config, output_root):
     _require(not base.get('preparation', {}).get('selections') and not base.get('tool_bindings'),
              'base_materials must be project materials, not capability-expanded materials')
     before = _packages(previous_materials)
-    previous_check = _prepare.check_selection(previous_materials)
-    connections = config.get('connections')
-    loaded = _prepare._connections.load_connections(
-        connections['instance_root'], config['project_root'], connections.get('skills', [])) if connections is not None else None
-    # Removing native execution need not remove the connected public materials.
-    # A genuinely empty/disconnected registry still returns the project base.
-    if (config['selections'] or (connections or {}).get('native')
-            or loaded and loaded['connections']):
-        materials, files = _prepare.build_materials(config, output_root, connection_snapshot=loaded)
+    selection = _prepare._scope.contract(config.get('connections'))
+    skipped = set()
+    if selection is not None:
+        _prepare._scope.project_base(base)
+        materials, files = _prepare.build_materials(config, output_root)
+        current = {r['key']: r for r in materials['preparation'].get('external_connections', [])}
+        history = previous_materials['preparation'].get('external_connections', [])
+        same_source = {r['key'] for r in history if r['key'] in current and
+                       r['resolved_source'] == current[r['key']]['resolved_source']}
+        historical_keys = {r['key'] for r in history}
+        for row in previous_materials.get('source_manifest', []):
+            parts = row['path'].split('/', 2)
+            if len(parts) == 3 and parts[0] == 'external':
+                historical_keys.add(parts[1])
+        skipped = historical_keys - same_source
+        # Historical external authority never triggers live native, mapping or
+        # package reads. The new preparation independently checks selected inputs.
+        previous_check = _prepare.check_selection(_prepare._scope.limited(previous_materials, set()))
+        if history:
+            previous_check['external_not_rechecked'] = [
+                {k: r[k] for k in ('key', 'revision', 'source', 'resolved_source')} for r in history]
+            if previous_check['status'] == 'MATCH':
+                previous_check['status'] = 'PARTIALLY_CHECKED'
     else:
-        materials, files = _without_capabilities(config, output_root)
-        if loaded:
-            # No available external materials: retain project facts and the
-            # loader's existing optional/required diagnostic distinction.
-            preparation = materials['preparation']
-            preparation['diagnostics'].extend(loaded['diagnostics'])
-            if any(row.get('severity') == 'ERROR' for row in loaded['diagnostics']):
-                preparation['readiness'] = 'INCOMPLETE'
+        previous_check = _prepare.check_selection(previous_materials)
+        connections = config.get('connections')
+        loaded = _prepare._connections.load_connections(
+            connections['instance_root'], config['project_root'], connections.get('skills', [])) if connections is not None else None
+        # Removing native execution need not remove the connected public materials.
+        # A genuinely empty/disconnected registry still returns the project base.
+        if (config['selections'] or (connections or {}).get('native')
+                or loaded and loaded['connections']):
+            materials, files = _prepare.build_materials(config, output_root, connection_snapshot=loaded)
+        else:
+            materials, files = _prepare.project_only_materials(config, output_root)
+            if loaded:
+                # No available external materials: retain project facts and the
+                # loader's existing optional/required diagnostic distinction.
+                preparation = materials['preparation']
+                preparation['diagnostics'].extend(loaded['diagnostics'])
+                if any(row.get('severity') == 'ERROR' for row in loaded['diagnostics']):
+                    preparation['readiness'] = 'INCOMPLETE'
     after = _packages(materials)
     package_changes = []
     for name in sorted(before.keys() | after.keys()):
@@ -191,7 +147,7 @@ def build_upgrade(previous_materials, config, output_root):
                                 'before': deepcopy(old), 'after': deepcopy(new)})
     old_sources, new_sources = _workpack_sources(previous_materials), _workpack_sources(materials)
     changed_names = {row['name'] for row in package_changes if row['changes'] != ['UNCHANGED']}
-    source_files = _differences(_sources(previous_materials), _sources(materials, files))
+    source_files = _differences(_sources(previous_materials, skipped=skipped), _sources(materials, files))
     affected_source_ids = {row['source_id'] for data in (previous_materials, materials)
                            for row in data.get('source_manifest', [])
                            if any(row['path'].startswith('capabilities/' + name + '/') for name in changed_names)}

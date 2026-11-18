@@ -65,6 +65,7 @@ REQUIRED_MODULES = (
     "test_r3_distribution",
     "test_capability_distribution",
     "test_capability_connections",
+    "test_scoped_capability_connections",
     "test_capability_native",
     "test_capability_rsi_handoff",
     "test_capability_external_delivery",
